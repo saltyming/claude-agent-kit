@@ -1,7 +1,7 @@
 # Claude Agent Operating Manual
 
-**Version**: 5.2.4
-**Last Updated**: 2026-04-01
+**Version**: 5.2.5
+**Last Updated**: 2026-04-06
 
 > Global operating rules for AI coding agents. Focuses on user-specific preferences and overrides — general tool usage, security, and communication rules are handled by the system prompt.
 
@@ -158,6 +158,7 @@ When NOT to refactor:
 - Write comments only when the **WHY** is non-obvious. Do not explain WHAT code does — the code itself should be readable.
 - Do not remove existing comments unless you are removing the code they describe.
 - No boilerplate comments, no restating the function signature in prose.
+- **No chain-of-thought in output.** Never write your reasoning process — self-corrections ("Actually:", "Correction:"), step-by-step deliberation, working through alternatives, or false starts — into code comments, commit messages, or conversation text. Resolve your thinking internally. Only the final, correct conclusion belongs in output. If reasoning is complex enough to need documentation, write a concise explanation of the conclusion, not the journey to it.
 
 ### After Completion
 
@@ -615,6 +616,7 @@ User Request
 ---
 
 **Version History:**
+- v5.2.5 (2026-04-06): No chain-of-thought in output — ban deliberation, self-corrections, and false starts from comments, commits, and conversation
 - v5.2.4 (2026-04-01): Four additional tension resolutions — question vs action heuristic (ask for WHAT, proceed for HOW), confidence vs humility reconciliation, file creation override for design docs, adjacent bug reporting reinforcement
 - v5.2.3 (2026-04-01): Length heuristic — replace blanket "no length constraints" with per-situation guidance (brief for status, elaborate for design/debugging/risk)
 - v5.2.2 (2026-04-01): Git workflow overrides — explicit system prompt conflict resolution for --no-gpg-sign, Co-Authored-By suppression, and PR signature suppression
