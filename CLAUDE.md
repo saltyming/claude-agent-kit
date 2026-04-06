@@ -1,7 +1,7 @@
 # Claude Agent Operating Manual
 
-**Version**: 5.2.5
-**Last Updated**: 2026-04-06
+**Version**: 6.3
+**Last Updated**: 2026-04-07
 
 > Global operating rules for AI coding agents. Focuses on user-specific preferences and overrides — general tool usage, security, and communication rules are handled by the system prompt.
 
@@ -29,7 +29,7 @@
 ### Three-Phase Workflow
 1. **Understand** - Read all relevant files, trace execution flows, identify dependencies
 2. **Plan** - Document the problem, propose solutions, get approval
-3. **Execute** - Implement ALL changes completely, no placeholders
+3. **Execute** - Implement ALL changes completely, no placeholders. Stage code through workslate buffers before applying to files (see [Code Staging](#code-staging)).
 
 ### Humility First
 - You don't know everything
@@ -158,7 +158,51 @@ When NOT to refactor:
 - Write comments only when the **WHY** is non-obvious. Do not explain WHAT code does — the code itself should be readable.
 - Do not remove existing comments unless you are removing the code they describe.
 - No boilerplate comments, no restating the function signature in prose.
-- **No chain-of-thought in output.** Never write your reasoning process — self-corrections ("Actually:", "Correction:"), step-by-step deliberation, working through alternatives, or false starts — into code comments, commit messages, or conversation text. Resolve your thinking internally. Only the final, correct conclusion belongs in output. If reasoning is complex enough to need documentation, write a concise explanation of the conclusion, not the journey to it.
+- **No chain-of-thought in output.** Never write your reasoning process — self-corrections ("Actually:", "Correction:"), step-by-step deliberation, working through alternatives, or false starts — into code comments, commit messages, conversation text, or workslate buffers. Resolve your thinking internally. Only the final, correct conclusion belongs in output. If reasoning is complex enough to need documentation, write a concise explanation of the conclusion, not the journey to it.
+
+### Code Staging
+
+**All code generation goes through workslate first.** The review step before application catches chain-of-thought leaking into comments and unintentional scope reduction, both of which occur frequently with direct edits. **Never call `workslate_apply` without first reviewing the diff** — the diff step is the entire point.
+
+Two staging tools exist — both return the diff in the response so review happens automatically:
+
+| Tool | Use case |
+|------|----------|
+| `workslate_edit(name, file, old, new)` | Partial replacement (like Edit) — diff returned on creation |
+| `workslate_write(name, content, file_path)` | Full file creation/rewrite — diff returned when `file_path` is provided |
+
+**When to use Edit directly (exceptions):**
+- Single-line fixes
+- Import additions/removals
+- String/message literal updates
+- Renaming (use `replace_all`)
+
+**When workslate is mandatory (no exceptions):**
+- `new_string` would be 15+ lines
+- Editing 2+ non-adjacent sections of the same file
+- New function or method definitions
+- Any file creation with more than trivial content
+
+**Partial replacement workflow (preferred):**
+1. `workslate_edit(name, file_path, old_string, new_string)` — stage the edit, review the returned diff
+2. If issues are found, call `workslate_edit` again with corrections
+3. `workslate_apply(name)` — apply (no args needed, buffer knows the target)
+4. `workslate_clear(name)` — clean up the buffer
+
+**Full file workflow:**
+1. `workslate_write(name, content, file_path)` — draft the full content, review the returned diff
+2. If issues are found, call `workslate_write` again with corrections
+3. `workslate_apply(name, file_path)` — apply to file
+4. `workslate_clear(name)` — clean up the buffer
+
+`workslate_diff(name)` remains available for re-checking a buffer against its target file at any time.
+
+**Rules:**
+- **Always pass `file_path` to `workslate_write`** so the diff is returned for review. Omitting it skips the review — only acceptable for scratch buffers not destined for files.
+- Use descriptive buffer names that indicate the target (e.g., `auth-middleware`, `lock-ordering-fix`)
+- Chain-of-thought prohibition applies equally to staged code — no reasoning in comments
+- Clear buffers after applying to avoid stale state across tasks
+- When working in Agent Teams, each teammate should use buffer names prefixed with their scope to avoid collisions
 
 ### After Completion
 
@@ -167,6 +211,7 @@ When NOT to refactor:
 - [ ] Tests pass (if applicable) — **actually verified, not assumed**
 - [ ] No regression in related features
 - [ ] Linting/type checking passes (if applicable)
+- [ ] Workslate buffers cleared (`workslate_clear`) — no stale state left behind
 - [ ] Outcome reported faithfully — failures disclosed, not hidden
 
 ---
@@ -599,7 +644,11 @@ User Request
 │  ├─ Read all relevant files
 │  ├─ Create task document
 │  ├─ Get approval
-│  └─ Implement completely
+│  ├─ Trivial? (single-line, import, string literal, rename)
+│  │  └─ Edit directly
+│  └─ Everything else
+│     ├─ Partial edit? → workslate_edit (diff returned) → workslate_apply
+│     └─ Full file?    → workslate_write(file_path) (diff returned) → workslate_apply
 │
 └─ Complex parallel task?
    ├─ Workers independent, no communication needed?
@@ -616,6 +665,10 @@ User Request
 ---
 
 **Version History:**
+- v6.3 (2026-04-07): workslate_write now accepts optional file_path and returns diff in response — both staging tools show diff automatically, no separate diff step needed; workslate_diff retained for re-checking
+- v6.2 (2026-04-07): workslate_edit — add staged partial replacement tool (edit+diff in one call, apply with no args); split workflows into partial (workslate_edit) and full file (workslate_write); reinforce "diff before apply, always" rule
+- v6.1 (2026-04-07): Code Staging default inversion — workslate is now the default code generation path (not an exception for complex cases); Edit restricted to trivial changes only; objective criteria (15+ lines, 2+ sections, new functions) replace subjective "complex control flow" threshold
+- v6.0 (2026-04-07): Code Staging — workslate buffer workflow for complex changes; architectural enforcement of chain-of-thought prevention via draft→diff→apply cycle; decision tree updated with staging routing; After Completion checklist includes buffer cleanup
 - v5.2.5 (2026-04-06): No chain-of-thought in output — ban deliberation, self-corrections, and false starts from comments, commits, and conversation
 - v5.2.4 (2026-04-01): Four additional tension resolutions — question vs action heuristic (ask for WHAT, proceed for HOW), confidence vs humility reconciliation, file creation override for design docs, adjacent bug reporting reinforcement
 - v5.2.3 (2026-04-01): Length heuristic — replace blanket "no length constraints" with per-situation guidance (brief for status, elaborate for design/debugging/risk)

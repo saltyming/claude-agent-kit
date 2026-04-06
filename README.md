@@ -1,10 +1,12 @@
-# Claude Agent Manual
+# Claude Agent Kit
 
-A battle-tested `CLAUDE.md` for Claude Code that explicitly overrides system prompt directives causing scope reduction, reasoning suppression, and false completion claims.
+A battle-tested `CLAUDE.md` for Claude Code and a custom MCP server (`workslate`) for staged code editing with persistent task tracking.
 
-## Why This Exists
+## What's Inside
 
-Claude Code ships with system prompt directives optimized for casual Q&A — not deep engineering work. These directives conflict with what power users need:
+### CLAUDE.md — System Prompt Override Manual
+
+Claude Code ships with system prompt directives optimized for casual Q&A — not deep engineering work. This manual quotes each problematic directive and provides an explicit `[OVERRIDE]`:
 
 | System Prompt Says | What You Actually Need |
 |---|---|
@@ -13,39 +15,110 @@ Claude Code ships with system prompt directives optimized for casual Q&A — not
 | "Do not create files unless absolutely necessary." | Create every file the spec calls for. |
 | (no verification required) | Verify before claiming completion. Never fake a green result. |
 
-This manual quotes each problematic directive and provides an explicit `[OVERRIDE]` — giving the model a concrete alternative instead of a vague "do better."
+Also includes:
+- **Agent Teams workflow** — self-claim policy, leader intervention patterns, teammate communication triggers
+- **Code Staging via workslate** — staged editing workflow that prevents chain-of-thought leakage and scope reduction
+- **Quality guardrails** — false claims mitigation, comment discipline, verification fallback
 
-## What's Inside
+### Workslate MCP Server
 
-- **System prompt conflict resolution** — 10+ override points with quoted system prompt text
-- **Agent Teams workflow** — self-claim policy, leader intervention patterns, teammate communication triggers, scope reduction prevention
-- **Verification teammate pattern** — dedicated build/test/review role with scaling guidance (single verifier vs split build + semantic review)
-- **Quality guardrails** — false claims mitigation, comment discipline, verification fallback for untestable code
+An MCP server for Claude Code that provides:
 
-## Usage
+- **Staged code editing** — write code to buffers, review the diff, then apply. Catches mistakes before they reach files.
+- **Persistent task tracking** — project-scoped tasks that survive across sessions, stored in `~/.claude/projects/<project>/workslate/tasks.json`.
+- **Auto-footer** — every tool response includes a task progress summary so you never lose sight of what's done and what's next.
 
-Copy `CLAUDE.md` to your global config:
+#### Tools
+
+| Tool | Description |
+|------|-------------|
+| `workslate_write(name, content, file_path?)` | Store content in a buffer. If `file_path` given, returns diff for review. |
+| `workslate_edit(name, file_path, old_string, new_string)` | Stage an old→new replacement. Returns diff immediately. |
+| `workslate_read(name)` | Read buffer contents. |
+| `workslate_list()` | List all buffers with types and sizes. |
+| `workslate_diff(name, file_path?)` | Re-check diff between buffer and file. |
+| `workslate_apply(name, file_path?)` | Apply buffer to file. Edit buffers need no args. |
+| `workslate_clear(name?)` | Clear one or all buffers. |
+| `workslate_task_create(name, description?, depends_on?)` | Create a task with optional dependencies. |
+| `workslate_task_done(id)` | Mark task done. Auto-unblocks dependents. |
+| `workslate_task_update(id, status?, description?)` | Update task status or description. |
+| `workslate_task_list()` | List all tasks with status. |
+| `workslate_task_clear()` | Clear all tasks for a fresh start. |
+
+## Installation
+
+### CLAUDE.md
 
 ```bash
+# Global (applies to all projects)
 cp CLAUDE.md ~/.claude/CLAUDE.md
+
+# Or project-level
+cp CLAUDE.md your-project/CLAUDE.md
 ```
 
-Or use it as a project-level config:
+### Workslate MCP Server
+
+#### From GitHub Releases (recommended)
+
+Download the binary for your platform from [Releases](https://github.com/saltyming/claude-agent-kit/releases), then configure Claude Code:
 
 ```bash
-cp CLAUDE.md .claude/CLAUDE.md
+# Extract
+tar xzf workslate-aarch64-apple-darwin.tar.gz
+
+# Move to a location on your PATH
+mv workslate ~/.local/bin/
 ```
 
-Adapt to your needs. The system prompt overrides and Agent Teams sections are the core value — framework conventions and git workflow are examples you should replace with your own.
+Add to your Claude Code MCP settings (`~/.claude/settings.json`):
+
+```json
+{
+  "mcpServers": {
+    "workslate": {
+      "command": "workslate"
+    }
+  }
+}
+```
+
+#### From source
+
+```bash
+cargo install --git https://github.com/saltyming/claude-agent-kit --bin workslate
+```
+
+#### From a local clone
+
+```bash
+git clone https://github.com/saltyming/claude-agent-kit
+cd claude-agent-kit
+cargo build --release -p workslate
+
+# Binary is at target/release/workslate
+```
+
+For local development, point the MCP config to the binary directly:
+
+```json
+{
+  "mcpServers": {
+    "workslate": {
+      "command": "/path/to/claude-agent-kit/target/release/workslate"
+    }
+  }
+}
+```
 
 ## Background
 
-This manual was developed over 2 months of building [SaltyOS](https://github.com/SaltyOS/saltyos), a capability-based microkernel written from scratch in Rust. The project runs 6 parallel Claude Code agents for kernel development, userland servers, and cross-architecture porting. Every rule in this document exists because something went wrong without it.
+This kit was developed over 2 months of building [SaltyOS](https://github.com/SaltyOS/saltyos), a capability-based microkernel written from scratch in Rust. The project runs 6 parallel Claude Code agents for kernel development, userland servers, and cross-architecture porting. Every rule in the CLAUDE.md exists because something went wrong without it.
 
 Key references that informed the system prompt overrides:
 
 - [Claude Code isn't "stupid now": it's being system prompted to act like that](https://github.com/anthropics/claude-code/issues/30027)
-- [Follow-up: Claude Code's source confirms the system prompt problem](https://github.com/anthropics/claude-code/issues/30027) — leaked `prompts.ts` showing internal (`ant`) vs external prompt differences
+- [Follow-up: Claude Code's source confirms the system prompt problem](https://github.com/anthropics/claude-code/issues/30027)
 
 ## License
 
