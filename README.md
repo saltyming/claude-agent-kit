@@ -25,7 +25,8 @@ Also includes:
 An MCP server for Claude Code that provides:
 
 - **Staged code editing** — write code to buffers, review the diff, then apply. Catches mistakes before they reach files.
-- **Persistent task tracking** — project-scoped tasks that survive across sessions, stored in `~/.claude/projects/<project>/workslate/tasks.json`.
+- **Persistent task tracking** — project-scoped tasks that survive across sessions, stored in `~/.claude/projects/<project>/workslate/`.
+- **Named task sessions** — `workslate_task_init("auth-refactor")` isolates tasks per work context. Multiple sessions coexist, resumable across restarts.
 - **Auto-footer** — every tool response includes a task progress summary so you never lose sight of what's done and what's next.
 
 #### Tools
@@ -44,6 +45,8 @@ An MCP server for Claude Code that provides:
 | `workslate_task_update(id, status?, description?)` | Update task status or description. |
 | `workslate_task_list()` | List all tasks with status. |
 | `workslate_task_clear()` | Clear all tasks for a fresh start. |
+| `workslate_task_init(name)` | Switch to a named task session (`tasks-{name}.json`). |
+| `workslate_task_sessions()` | List all available task sessions in this project. |
 
 ## Installation
 

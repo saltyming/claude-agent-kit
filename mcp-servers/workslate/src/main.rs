@@ -175,23 +175,33 @@ struct TaskUpdateParams {
     description: Option<String>,
 }
 
+// ── Task session param structs ────────────────────────────
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct TaskInitParams {
+    /// Name of the task session (e.g., "auth-refactor"). Creates or loads tasks-{name}.json.
+    name: String,
+}
+
 // ── Workslate server ──────────────────────────────────────
 
 #[derive(Clone)]
 struct Workslate {
     buffers: Arc<RwLock<HashMap<String, BufferContent>>>,
     task_store: Arc<RwLock<TaskStore>>,
-    tasks_path: PathBuf,
+    tasks_dir: PathBuf,
+    active_session: Arc<RwLock<Option<String>>>,
     tool_router: ToolRouter<Self>,
 }
 
 #[tool_router]
 impl Workslate {
-    fn new(tasks_path: PathBuf, task_store: TaskStore) -> Self {
+    fn new(tasks_dir: PathBuf, task_store: TaskStore) -> Self {
         Self {
             buffers: Arc::new(RwLock::new(HashMap::new())),
             task_store: Arc::new(RwLock::new(task_store)),
-            tasks_path,
+            tasks_dir,
+            active_session: Arc::new(RwLock::new(None)),
             tool_router: Self::tool_router(),
         }
     }
@@ -784,7 +794,7 @@ impl Workslate {
         )]))
     }
 
-    #[tool(description = "Clear all tasks. Use when starting a fresh plan.")]
+    #[tool(description = "Clear all tasks in the current session. Use when starting a fresh plan.")]
     async fn workslate_task_clear(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         let mut store = self.task_store.write().await;
         let count = store.tasks.len();
@@ -797,12 +807,99 @@ impl Workslate {
             count
         ))]))
     }
+
+    #[tool(description = "Switch to a named task session. Creates or loads tasks-{name}.json. Use to isolate tasks per work context.")]
+    async fn workslate_task_init(
+        &self,
+        Parameters(params): Parameters<TaskInitParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let new_path = self.tasks_dir.join(format!("tasks-{}.json", params.name));
+        let new_store = match tokio::fs::read_to_string(&new_path).await {
+            Ok(json) => serde_json::from_str::<TaskStore>(&json).unwrap_or_else(|_| TaskStore::empty()),
+            Err(_) => TaskStore::empty(),
+        };
+
+        let task_count = new_store.tasks.len();
+        *self.task_store.write().await = new_store;
+        *self.active_session.write().await = Some(params.name.clone());
+
+        let msg = if task_count > 0 {
+            format!("Switched to session '{}' ({} tasks loaded)", params.name, task_count)
+        } else {
+            format!("Created new session '{}'", params.name)
+        };
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
+    }
+
+    #[tool(description = "List all available task sessions in this project")]
+    async fn workslate_task_sessions(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        let mut entries = match tokio::fs::read_dir(&self.tasks_dir).await {
+            Ok(e) => e,
+            Err(_) => {
+                return Ok(CallToolResult::success(vec![Content::text(
+                    "No sessions",
+                )]));
+            }
+        };
+
+        let active = self.active_session.read().await;
+        let mut lines = Vec::new();
+
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with("tasks") || !name.ends_with(".json") {
+                continue;
+            }
+            let session_name = if name == "tasks.json" {
+                "(default)".to_string()
+            } else {
+                name.strip_prefix("tasks-")
+                    .and_then(|s| s.strip_suffix(".json"))
+                    .unwrap_or(&name)
+                    .to_string()
+            };
+
+            let is_active = match *active {
+                Some(ref a) => *a == session_name,
+                None => session_name == "(default)",
+            };
+            let marker = if is_active { " ← active" } else { "" };
+
+            let task_count = match tokio::fs::read_to_string(entry.path()).await {
+                Ok(json) => serde_json::from_str::<TaskStore>(&json)
+                    .map(|s| s.tasks.len())
+                    .unwrap_or(0),
+                Err(_) => 0,
+            };
+
+            lines.push(format!("  {}{} ({} tasks)", session_name, marker, task_count));
+        }
+
+        if lines.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "No sessions",
+            )]));
+        }
+        lines.sort();
+        Ok(CallToolResult::success(vec![Content::text(
+            lines.join("\n"),
+        )]))
+    }
 }
 
 // ── Task helpers ──────────────────────────────────────────
 
 impl Workslate {
+    fn tasks_path(&self, session: &Option<String>) -> PathBuf {
+        match session {
+            Some(name) => self.tasks_dir.join(format!("tasks-{}.json", name)),
+            None => self.tasks_dir.join("tasks.json"),
+        }
+    }
+
     async fn save_tasks(&self, store: &TaskStore) {
+        let session = self.active_session.read().await;
+        let path = self.tasks_path(&session);
         let json = match serde_json::to_string_pretty(store) {
             Ok(j) => j,
             Err(e) => {
@@ -810,8 +907,8 @@ impl Workslate {
                 return;
             }
         };
-        if let Err(e) = tokio::fs::write(&self.tasks_path, json).await {
-            tracing::error!("Failed to write tasks to {:?}: {}", self.tasks_path, e);
+        if let Err(e) = tokio::fs::write(&path, json).await {
+            tracing::error!("Failed to write tasks to {:?}: {}", path, e);
         }
     }
 
@@ -820,12 +917,13 @@ impl Workslate {
         if store.tasks.is_empty() {
             return;
         }
-        let footer = render_task_footer(&store);
+        let session = self.active_session.read().await;
+        let footer = render_task_footer(&store, &*session);
         result.content.push(Content::text(footer));
     }
 }
 
-fn render_task_footer(store: &TaskStore) -> String {
+fn render_task_footer(store: &TaskStore, session: &Option<String>) -> String {
     let total = store.tasks.len();
     let done_count = store
         .tasks
@@ -834,9 +932,13 @@ fn render_task_footer(store: &TaskStore) -> String {
         .count();
 
     let mut lines = Vec::new();
+    let session_label = match session {
+        Some(name) => format!(" ({}) ", name),
+        None => " ".to_string(),
+    };
     lines.push(format!(
-        "── Tasks [{}/{}] ──────────────────────────",
-        done_count, total
+        "── Tasks{}[{}/{}] ──────────────────────────",
+        session_label, done_count, total
     ));
 
     if done_count >= 3 {
@@ -948,9 +1050,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .join(&project_path)
         .join("workslate");
     tokio::fs::create_dir_all(&tasks_dir).await?;
-    let tasks_path = tasks_dir.join("tasks.json");
+    let default_tasks_path = tasks_dir.join("tasks.json");
 
-    let task_store = match tokio::fs::read_to_string(&tasks_path).await {
+    let task_store = match tokio::fs::read_to_string(&default_tasks_path).await {
         Ok(json) => serde_json::from_str::<TaskStore>(&json).unwrap_or_else(|e| {
             tracing::warn!("Failed to parse tasks.json, starting fresh: {}", e);
             TaskStore::empty()
@@ -958,7 +1060,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(_) => TaskStore::empty(),
     };
 
-    let server = Workslate::new(tasks_path, task_store);
+    let server = Workslate::new(tasks_dir, task_store);
     let transport = rmcp::transport::io::stdio();
     let running = server.serve(transport).await?;
     running.waiting().await?;

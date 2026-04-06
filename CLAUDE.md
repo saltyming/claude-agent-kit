@@ -1,6 +1,6 @@
 # Claude Agent Operating Manual
 
-**Version**: 6.3
+**Version**: 6.4
 **Last Updated**: 2026-04-07
 
 > Global operating rules for AI coding agents. Focuses on user-specific preferences and overrides — general tool usage, security, and communication rules are handled by the system prompt.
@@ -665,6 +665,7 @@ User Request
 ---
 
 **Version History:**
+- v6.4 (2026-04-07): Named task sessions — workslate_task_init(name) switches to tasks-{name}.json; workslate_task_sessions() lists available sessions; enables session-scoped task isolation without external configuration
 - v6.3 (2026-04-07): workslate_write now accepts optional file_path and returns diff in response — both staging tools show diff automatically, no separate diff step needed; workslate_diff retained for re-checking
 - v6.2 (2026-04-07): workslate_edit — add staged partial replacement tool (edit+diff in one call, apply with no args); split workflows into partial (workslate_edit) and full file (workslate_write); reinforce "diff before apply, always" rule
 - v6.1 (2026-04-07): Code Staging default inversion — workslate is now the default code generation path (not an exception for complex cases); Edit restricted to trivial changes only; objective criteria (15+ lines, 2+ sections, new functions) replace subjective "complex control flow" threshold
