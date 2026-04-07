@@ -1,6 +1,6 @@
 # Claude Agent Operating Manual
 
-**Version**: 6.4
+**Version**: 6.5
 **Last Updated**: 2026-04-07
 
 > Global operating rules for AI coding agents. Focuses on user-specific preferences and overrides — general tool usage, security, and communication rules are handled by the system prompt.
@@ -164,23 +164,30 @@ When NOT to refactor:
 
 **All code generation goes through workslate first.** The review step before application catches chain-of-thought leaking into comments and unintentional scope reduction, both of which occur frequently with direct edits. **Never call `workslate_apply` without first reviewing the diff** — the diff step is the entire point.
 
-Two staging tools exist — both return the diff in the response so review happens automatically:
+Three staging modes exist — all return the diff for review:
 
 | Tool | Use case |
 |------|----------|
-| `workslate_edit(name, file, old, new)` | Partial replacement (like Edit) — diff returned on creation |
-| `workslate_write(name, content, file_path)` | Full file creation/rewrite — diff returned when `file_path` is provided |
+| `workslate_edit(name, file, old, new)` | Replace a section of a file |
+| `workslate_edit(name, file, old, new, position)` | Insert after/before anchor, or append to file |
+| `workslate_write(name, content, file_path)` | Full file creation/rewrite |
+
+`position` values for `workslate_edit`:
+- omitted or `"replace"` — find old_string, replace with new_string (default)
+- `"after"` — find old_string as anchor, insert new_string after it (anchor stays)
+- `"before"` — find old_string as anchor, insert new_string before it (anchor stays)
+- `"append"` — append new_string to end of file (old_string not needed)
 
 **When to use Edit directly (exceptions):**
-- Single-line fixes
+- Single contiguous change of any size (single-block replacement)
 - Import additions/removals
 - String/message literal updates
 - Renaming (use `replace_all`)
 
 **When workslate is mandatory (no exceptions):**
-- `new_string` would be 15+ lines
 - Editing 2+ non-adjacent sections of the same file
-- New function or method definitions
+- Inserting code between existing code (`position: "after"` / `"before"`)
+- Appending to a file (`position: "append"`)
 - Any file creation with more than trivial content
 
 **Partial replacement workflow (preferred):**
@@ -203,6 +210,25 @@ Two staging tools exist — both return the diff in the response so review happe
 - Chain-of-thought prohibition applies equally to staged code — no reasoning in comments
 - Clear buffers after applying to avoid stale state across tasks
 - When working in Agent Teams, each teammate should use buffer names prefixed with their scope to avoid collisions
+
+### Task Sessions
+
+`workslate_task_init(name)` switches to a named task session, isolating tasks in `tasks-{name}.json`. The default session (no init needed) uses `tasks.json`. Only tasks are scoped — buffers are shared across sessions.
+
+**When to use:**
+- Multi-phase work where each phase has its own task list
+- Switching between unrelated work contexts within one conversation
+- Resuming a previous task list from a prior conversation (sessions persist on disk)
+
+**Workflow:**
+1. `workslate_task_init("phase-2")` — switch to or create the session
+2. `workslate_task_create` / `workslate_task_done` / etc. — all scoped to this session
+3. `workslate_task_sessions()` — list all sessions with task counts and active marker
+
+**Rules:**
+- Only one session is active at a time
+- Switching sessions does NOT clear the previous session's tasks (they persist on disk)
+- Restarting the MCP server resets to the default session — call `workslate_task_init` again to resume a named session
 
 ### After Completion
 
@@ -665,6 +691,7 @@ User Request
 ---
 
 **Version History:**
+- v6.5 (2026-04-07): workslate_edit position modes (after/before/append) — eliminate old_string overhead for insert/append operations; refine Edit vs workslate boundary from "15+ lines" to "2+ non-adjacent sections"; add Task Sessions documentation to body
 - v6.4 (2026-04-07): Named task sessions — workslate_task_init(name) switches to tasks-{name}.json; workslate_task_sessions() lists available sessions; enables session-scoped task isolation without external configuration
 - v6.3 (2026-04-07): workslate_write now accepts optional file_path and returns diff in response — both staging tools show diff automatically, no separate diff step needed; workslate_diff retained for re-checking
 - v6.2 (2026-04-07): workslate_edit — add staged partial replacement tool (edit+diff in one call, apply with no args); split workflows into partial (workslate_edit) and full file (workslate_write); reinforce "diff before apply, always" rule
