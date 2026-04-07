@@ -877,6 +877,7 @@ impl Workslate {
         &self,
         Parameters(params): Parameters<TaskCreateParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Err(e) = self.require_session().await { return Ok(e); }
         let mut store = self.task_store.write().await;
         let deps = params.depends_on.unwrap_or_default();
 
@@ -921,6 +922,7 @@ impl Workslate {
         &self,
         Parameters(params): Parameters<TaskDoneParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Err(e) = self.require_session().await { return Ok(e); }
         let mut store = self.task_store.write().await;
         let task = match store.tasks.iter_mut().find(|t| t.id == params.id) {
             Some(t) => t,
@@ -948,6 +950,7 @@ impl Workslate {
         &self,
         Parameters(params): Parameters<TaskUpdateParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Err(e) = self.require_session().await { return Ok(e); }
         let mut store = self.task_store.write().await;
         let task = match store.tasks.iter_mut().find(|t| t.id == params.id) {
             Some(t) => t,
@@ -990,6 +993,7 @@ impl Workslate {
 
     #[tool(description = "List all tasks with their status and dependencies")]
     async fn workslate_task_list(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Err(e) = self.require_session().await { return Ok(e); }
         let store = self.task_store.read().await;
         if store.tasks.is_empty() {
             return Ok(CallToolResult::success(vec![Content::text("No tasks")]));
@@ -1024,6 +1028,7 @@ impl Workslate {
 
     #[tool(description = "Clear all tasks in the current session. Use when starting a fresh plan.")]
     async fn workslate_task_clear(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Err(e) = self.require_session().await { return Ok(e); }
         let mut store = self.task_store.write().await;
         let count = store.tasks.len();
         store.tasks.clear();
@@ -1126,6 +1131,16 @@ impl Workslate {
 // ── Task helpers ──────────────────────────────────────────
 
 impl Workslate {
+    async fn require_session(&self) -> Result<(), CallToolResult> {
+        let session = self.active_session.read().await;
+        if session.is_none() {
+            return Err(CallToolResult::error(vec![Content::text(
+                "No active task session. Call workslate_task_init(name) first.".to_string(),
+            )]));
+        }
+        Ok(())
+    }
+
     fn tasks_path(&self, session: &Option<String>) -> PathBuf {
         match session {
             Some(name) => self.tasks_dir.join(format!("tasks-{}.json", name)),
@@ -1224,15 +1239,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .join(&project_path)
         .join("workslate");
     tokio::fs::create_dir_all(&tasks_dir).await?;
-    let default_tasks_path = tasks_dir.join("tasks.json");
 
-    let task_store = match tokio::fs::read_to_string(&default_tasks_path).await {
-        Ok(json) => serde_json::from_str::<TaskStore>(&json).unwrap_or_else(|e| {
-            tracing::warn!("Failed to parse tasks.json, starting fresh: {}", e);
-            TaskStore::empty()
-        }),
-        Err(_) => TaskStore::empty(),
-    };
+    let task_store = TaskStore::empty();
 
     let server = Workslate::new(tasks_dir, task_store);
     let transport = rmcp::transport::io::stdio();

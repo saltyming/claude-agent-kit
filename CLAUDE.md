@@ -1,6 +1,7 @@
+<!-- claude-agent-kit -->
 # Claude Agent Operating Manual
 
-**Version**: 7.0.1
+**Version**: 7.1
 **Last Updated**: 2026-04-07
 
 > Global operating rules for AI coding agents. Focuses on user-specific preferences and overrides — general tool usage, security, and communication rules are handled by the system prompt.
@@ -104,6 +105,7 @@ User Request
 ---
 
 **Version History:**
+- v7.1 (2026-04-07): Mandatory named sessions (task_init required before task operations), install scripts (install.sh, install.ps1, Makefile) with manifest-based uninstall, auto MCP registration, rule file prefix + signature for safe uninstall, PATH detection
 - v7.0.1 (2026-04-07): Split CLAUDE.md into claude-rules/ modules (task-execution, git-workflow, framework-conventions, parallel-work) — main file under 200 lines
 - v7.0 (2026-04-07): workslate_read file mode (line-numbered file reading with range support), workslate_search (pattern search with context and line number summary), workslate_write shows full content for new files; module split (main.rs → buffer.rs, task.rs, file.rs); task system clarification (workslate for solo/leader, built-in for team graph)
 - v6.5.1 (2026-04-07): workslate_edit targeting modes — match_index (Nth occurrence) and line_start/line_end (line range)

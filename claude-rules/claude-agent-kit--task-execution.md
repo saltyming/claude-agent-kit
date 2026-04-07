@@ -1,3 +1,4 @@
+<!-- claude-agent-kit -->
 # Task Execution Protocol
 
 ## Before Starting
@@ -158,22 +159,19 @@ Targeting options (apply to all position modes except append):
 
 ## Task Sessions
 
-`workslate_task_init(name)` switches to a named task session, isolating tasks in `tasks-{name}.json`. The default session (no init needed) uses `tasks.json`. Only tasks are scoped — buffers are shared across sessions.
-
-**When to use:**
-- Multi-phase work where each phase has its own task list
-- Switching between unrelated work contexts within one conversation
-- Resuming a previous task list from a prior conversation (sessions persist on disk)
+**`workslate_task_init(name)` is mandatory before using any task tool.** Task operations are rejected until a named session is initialized. This prevents file conflicts when multiple Claude Code instances work on the same project — each session writes to its own `tasks-{name}.json`.
 
 **Workflow:**
-1. `workslate_task_init("phase-2")` — switch to or create the session
+1. `workslate_task_init("auth-refactor")` — create or resume a named session
 2. `workslate_task_create` / `workslate_task_done` / etc. — all scoped to this session
 3. `workslate_task_sessions()` — list all sessions with task counts and active marker
 
 **Rules:**
-- Only one session is active at a time
+- `workslate_task_init` must be called before `task_create`, `task_done`, `task_update`, `task_list`, or `task_clear`
+- Only one session is active at a time per MCP server instance
 - Switching sessions does NOT clear the previous session's tasks (they persist on disk)
-- Restarting the MCP server resets to the default session — call `workslate_task_init` again to resume a named session
+- Restarting the MCP server clears the active session — call `workslate_task_init` again to resume
+- Buffers are shared across sessions (not scoped)
 
 ## After Completion
 

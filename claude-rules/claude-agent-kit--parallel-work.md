@@ -1,3 +1,4 @@
+<!-- claude-agent-kit -->
 # Parallel Work
 
 Two systems exist for parallel work: **Subagents** and **Agent Teams**. They have different architectures and should not be mixed.

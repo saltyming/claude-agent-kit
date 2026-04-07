@@ -1,3 +1,4 @@
+<!-- claude-agent-kit -->
 # Framework Conventions
 
 ## React / Next.js

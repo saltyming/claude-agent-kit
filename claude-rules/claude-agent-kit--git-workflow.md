@@ -1,3 +1,4 @@
+<!-- claude-agent-kit -->
 # Git Workflow
 
 ## Commit Rules
