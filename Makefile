@@ -25,12 +25,12 @@ install: build
 	@echo $(BIN_DIR)/workslate >> $(MANIFEST)
 	@if command -v claude >/dev/null 2>&1; then \
 		echo "Registering workslate MCP server..."; \
-		claude mcp add workslate --transport stdio -- workslate 2>/dev/null && \
+		claude mcp add workslate -s user --transport stdio -- workslate 2>/dev/null && \
 			echo "  MCP server registered." || \
-			echo "  MCP registration failed. Run manually: claude mcp add workslate --transport stdio -- workslate"; \
+			echo "  MCP registration failed. Run manually: claude mcp add workslate -s user --transport stdio -- workslate"; \
 	else \
 		echo "Claude Code CLI not found. Register MCP server manually:"; \
-		echo "  claude mcp add workslate --transport stdio -- workslate"; \
+		echo "  claude mcp add workslate -s user --transport stdio -- workslate"; \
 	fi
 	@echo "Installed to $(CLAUDE_DIR) and $(BIN_DIR)/workslate"
 	@echo "Manifest: $(MANIFEST)"
@@ -57,4 +57,7 @@ uninstall:
 		fi; \
 	done < $(MANIFEST)
 	rm -f $(MANIFEST)
+	@if command -v claude >/dev/null 2>&1; then \
+		claude mcp remove workslate -s user 2>/dev/null && echo "  MCP server unregistered." || true; \
+	fi
 	@echo "Uninstalled"

@@ -45,6 +45,12 @@ function Do-Uninstall {
         }
     }
     Remove-Item $Manifest -Force
+    if (Get-Command claude -ErrorAction SilentlyContinue) {
+        try {
+            claude mcp remove workslate -s user 2>$null
+            Write-Host "  MCP server unregistered."
+        } catch {}
+    }
     Write-Host "Uninstalled."
 }
 
@@ -117,14 +123,14 @@ if ($userPath -notlike "*$BinDir*") {
 if (Get-Command claude -ErrorAction SilentlyContinue) {
     Write-Host "Registering workslate MCP server..."
     try {
-        claude mcp add workslate --transport stdio -- workslate 2>$null
+        claude mcp add workslate -s user --transport stdio -- workslate 2>$null
         Write-Host "  MCP server registered."
     } catch {
-        Write-Host "  MCP registration failed. Add manually: claude mcp add workslate --transport stdio -- workslate"
+        Write-Host "  MCP registration failed. Add manually: claude mcp add workslate -s user --transport stdio -- workslate"
     }
 } else {
     Write-Host "Claude Code CLI not found. Register MCP server manually:"
-    Write-Host "  claude mcp add workslate --transport stdio -- workslate"
+    Write-Host "  claude mcp add workslate -s user --transport stdio -- workslate"
 }
 
 Write-Host ""
