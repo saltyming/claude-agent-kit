@@ -66,10 +66,16 @@ An MCP server for Claude Code that provides:
 ```bash
 # Global (applies to all projects)
 cp CLAUDE.md ~/.claude/CLAUDE.md
+mkdir -p ~/.claude/rules
+cp claude-rules/*.md ~/.claude/rules/
 
 # Or project-level
 cp CLAUDE.md your-project/CLAUDE.md
+mkdir -p your-project/.claude/rules
+cp claude-rules/*.md your-project/.claude/rules/
 ```
+
+The main `CLAUDE.md` contains core principles and quick reference (~114 lines). Detailed rules live in `claude-rules/` and are auto-loaded by Claude Code from `.claude/rules/`.
 
 ### Workslate MCP Server
 
