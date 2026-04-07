@@ -1,6 +1,6 @@
 # Claude Agent Operating Manual
 
-**Version**: 6.5
+**Version**: 6.5.1
 **Last Updated**: 2026-04-07
 
 > Global operating rules for AI coding agents. Focuses on user-specific preferences and overrides — general tool usage, security, and communication rules are handled by the system prompt.
@@ -177,6 +177,11 @@ Three staging modes exist — all return the diff for review:
 - `"after"` — find old_string as anchor, insert new_string after it (anchor stays)
 - `"before"` — find old_string as anchor, insert new_string before it (anchor stays)
 - `"append"` — append new_string to end of file (old_string not needed)
+
+Targeting options (apply to all position modes except append):
+- **Default** — old_string must appear exactly once in the file
+- `match_index: N` — target the Nth occurrence of old_string (1-based). Use when old_string isn't unique.
+- `line_start: N` (+ optional `line_end: M`) — target by line range instead of old_string. 1-based, inclusive. old_string is not needed.
 
 **When to use Edit directly (exceptions):**
 - Single contiguous change of any size (single-block replacement)
@@ -691,6 +696,7 @@ User Request
 ---
 
 **Version History:**
+- v6.5.1 (2026-04-07): workslate_edit targeting modes — match_index (Nth occurrence) and line_start/line_end (line range) eliminate anchor uniqueness fragility; resolve_target/apply_mode/diff_texts helpers deduplicate targeting logic across edit/diff/apply
 - v6.5 (2026-04-07): workslate_edit position modes (after/before/append) — eliminate old_string overhead for insert/append operations; refine Edit vs workslate boundary from "15+ lines" to "2+ non-adjacent sections"; add Task Sessions documentation to body
 - v6.4 (2026-04-07): Named task sessions — workslate_task_init(name) switches to tasks-{name}.json; workslate_task_sessions() lists available sessions; enables session-scoped task isolation without external configuration
 - v6.3 (2026-04-07): workslate_write now accepts optional file_path and returns diff in response — both staging tools show diff automatically, no separate diff step needed; workslate_diff retained for re-checking

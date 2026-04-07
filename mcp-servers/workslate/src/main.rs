@@ -35,7 +35,150 @@ enum BufferContent {
         old_string: String,
         new_string: String,
         mode: EditMode,
+        match_index: Option<u32>,
+        line_range: Option<(u32, u32)>,
     },
+}
+
+// ── Target resolution ────────────────────────────────────
+
+struct ResolvedTarget {
+    old_text: String,
+    byte_start: usize,
+    byte_end: usize,
+}
+
+fn resolve_target(
+    file_content: &str,
+    old_string: &str,
+    match_index: Option<u32>,
+    line_range: Option<(u32, u32)>,
+) -> Result<ResolvedTarget, String> {
+    if let Some((start, end)) = line_range {
+        let line_offsets: Vec<(usize, usize)> = {
+            let mut offsets = Vec::new();
+            let mut pos = 0;
+            for line in file_content.split('\n') {
+                let end_pos = pos + line.len();
+                offsets.push((pos, end_pos));
+                pos = end_pos + 1;
+            }
+            offsets
+        };
+
+        let s = (start as usize).saturating_sub(1);
+        let e = (end as usize).min(line_offsets.len());
+        if s >= line_offsets.len() || s >= e {
+            return Err(format!(
+                "line range {}-{} out of bounds (file has {} lines)",
+                start,
+                end,
+                line_offsets.len()
+            ));
+        }
+
+        let byte_start = line_offsets[s].0;
+        let byte_end = if e < line_offsets.len() {
+            line_offsets[e - 1].1 + 1
+        } else {
+            line_offsets[e - 1].1
+        };
+        let byte_end = byte_end.min(file_content.len());
+        let old_text = file_content[byte_start..byte_end].to_string();
+
+        Ok(ResolvedTarget {
+            old_text,
+            byte_start,
+            byte_end,
+        })
+    } else {
+        let matches: Vec<usize> = file_content
+            .match_indices(old_string)
+            .map(|(i, _)| i)
+            .collect();
+        if matches.is_empty() {
+            return Err("old_string not found in file".to_string());
+        }
+
+        let idx = if let Some(n) = match_index {
+            if n == 0 || n as usize > matches.len() {
+                return Err(format!(
+                    "match_index {} out of range (found {} occurrences)",
+                    n,
+                    matches.len()
+                ));
+            }
+            n as usize - 1
+        } else {
+            if matches.len() > 1 {
+                return Err(format!(
+                    "old_string appears {} times (must be unique, or use match_index)",
+                    matches.len()
+                ));
+            }
+            0
+        };
+
+        let byte_start = matches[idx];
+        let byte_end = byte_start + old_string.len();
+        Ok(ResolvedTarget {
+            old_text: old_string.to_string(),
+            byte_start,
+            byte_end,
+        })
+    }
+}
+
+fn apply_mode(file_content: &str, target: &ResolvedTarget, new_string: &str, mode: &EditMode) -> String {
+    match mode {
+        EditMode::Replace => format!(
+            "{}{}{}",
+            &file_content[..target.byte_start],
+            new_string,
+            &file_content[target.byte_end..]
+        ),
+        EditMode::After => format!(
+            "{}{}{}",
+            &file_content[..target.byte_end],
+            new_string,
+            &file_content[target.byte_end..]
+        ),
+        EditMode::Before => format!(
+            "{}{}{}",
+            &file_content[..target.byte_start],
+            new_string,
+            &file_content[target.byte_start..]
+        ),
+        EditMode::Append => {
+            if file_content.ends_with('\n') {
+                format!("{}{}", file_content, new_string)
+            } else {
+                format!("{}\n{}", file_content, new_string)
+            }
+        }
+    }
+}
+
+fn diff_texts(target: &ResolvedTarget, new_string: &str, mode: &EditMode, file_content: &str) -> (String, String) {
+    match mode {
+        EditMode::Replace => (target.old_text.clone(), new_string.to_string()),
+        EditMode::After => (
+            target.old_text.clone(),
+            format!("{}{}", target.old_text, new_string),
+        ),
+        EditMode::Before => (
+            target.old_text.clone(),
+            format!("{}{}", new_string, target.old_text),
+        ),
+        EditMode::Append => (
+            file_content.to_string(),
+            if file_content.ends_with('\n') {
+                format!("{}{}", file_content, new_string)
+            } else {
+                format!("{}\n{}", file_content, new_string)
+            },
+        ),
+    }
 }
 
 // ── Buffer param structs ──────────────────────────────────
@@ -56,12 +199,18 @@ struct EditBufferParams {
     name: String,
     /// Path to the file to edit
     file_path: String,
-    /// The exact text to find. Required for replace/after/before. Ignored for append.
+    /// The exact text to find. Required for replace/after/before (unless line_start is used). Ignored for append.
     old_string: Option<String>,
     /// The replacement or insertion text
     new_string: String,
     /// Position mode: "replace" (default), "after" (insert after old_string), "before" (insert before old_string), "append" (append to end of file)
     position: Option<String>,
+    /// Target the Nth occurrence of old_string (1-based). Without this, old_string must appear exactly once.
+    match_index: Option<u32>,
+    /// Target a line range instead of old_string (1-based). When provided, old_string is ignored.
+    line_start: Option<u32>,
+    /// End of line range (1-based, inclusive). Defaults to line_start if omitted.
+    line_end: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -262,7 +411,7 @@ impl Workslate {
     }
 
     #[tool(
-        description = "Stage an edit. Modes: replace (default, old→new), after/before (insert around anchor), append (add to end). Returns unified diff. Use workslate_apply to apply."
+        description = "Stage an edit. Modes: replace (default), after/before (insert around anchor), append. Targeting: old_string (default, unique), match_index (Nth occurrence), line_start/line_end (line range). Returns unified diff."
     )]
     async fn workslate_edit(
         &self,
@@ -281,13 +430,19 @@ impl Workslate {
             }
         };
 
+        let line_range = params.line_start.map(|s| {
+            let e = params.line_end.unwrap_or(s);
+            (s, e)
+        });
+
         let old_string = match mode {
             EditMode::Append => String::new(),
+            _ if line_range.is_some() => String::new(),
             _ => match params.old_string {
                 Some(ref s) if !s.is_empty() => s.clone(),
                 _ => {
                     return Ok(CallToolResult::error(vec![Content::text(
-                        "old_string is required for replace/after/before modes".to_string(),
+                        "old_string is required (unless using line_start or append)".to_string(),
                     )]));
                 }
             },
@@ -303,39 +458,26 @@ impl Workslate {
             }
         };
 
-        if !matches!(mode, EditMode::Append) {
-            let matches: Vec<_> = file_content.match_indices(&old_string).collect();
-            if matches.is_empty() {
-                return Ok(CallToolResult::error(vec![Content::text(
-                    "old_string not found in file".to_string(),
-                )]));
-            }
-            if matches.len() > 1 {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "old_string appears {} times in file (must be unique)",
-                    matches.len()
-                ))]));
-            }
-        }
-
-        let (diff_old, diff_new) = match mode {
-            EditMode::Replace => (old_string.clone(), params.new_string.clone()),
-            EditMode::After => (
-                old_string.clone(),
-                format!("{}{}", old_string, params.new_string),
-            ),
-            EditMode::Before => (
-                old_string.clone(),
-                format!("{}{}", params.new_string, old_string),
-            ),
-            EditMode::Append => (
-                file_content.clone(),
-                if file_content.ends_with('\n') {
-                    format!("{}{}", file_content, params.new_string)
-                } else {
-                    format!("{}\n{}", file_content, params.new_string)
+        let (diff_old, diff_new) = if matches!(mode, EditMode::Append) {
+            diff_texts(
+                &ResolvedTarget {
+                    old_text: String::new(),
+                    byte_start: 0,
+                    byte_end: 0,
                 },
-            ),
+                &params.new_string,
+                &mode,
+                &file_content,
+            )
+        } else {
+            let target =
+                match resolve_target(&file_content, &old_string, params.match_index, line_range) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        return Ok(CallToolResult::error(vec![Content::text(e)]));
+                    }
+                };
+            diff_texts(&target, &params.new_string, &mode, &file_content)
         };
 
         let diff = TextDiff::from_lines(&diff_old, &diff_new);
@@ -348,14 +490,22 @@ impl Workslate {
             )
             .to_string();
 
+        let stored_old = if line_range.is_some() {
+            diff_old.clone()
+        } else {
+            old_string
+        };
+
         let mut buffers = self.buffers.write().await;
         buffers.insert(
             params.name.clone(),
             BufferContent::Edit {
                 file_path: params.file_path,
-                old_string,
+                old_string: stored_old,
                 new_string: params.new_string,
                 mode,
+                match_index: params.match_index,
+                line_range,
             },
         );
 
@@ -382,6 +532,8 @@ impl Workslate {
                 old_string,
                 new_string,
                 mode,
+                match_index,
+                line_range,
             }) => {
                 let mode_label = match mode {
                     EditMode::Replace => "edit",
@@ -389,12 +541,22 @@ impl Workslate {
                     EditMode::Before => "edit:before",
                     EditMode::Append => "edit:append",
                 };
+                let target_label = if let Some((s, e)) = line_range {
+                    format!("@L{}-{}", s, e)
+                } else if let Some(n) = match_index {
+                    format!("#{}", n)
+                } else {
+                    String::new()
+                };
                 let text = if matches!(mode, EditMode::Append) {
-                    format!("[{}] {}\n--- new_string ---\n{}", mode_label, file_path, new_string)
+                    format!(
+                        "[{}] {}\n--- new_string ---\n{}",
+                        mode_label, file_path, new_string
+                    )
                 } else {
                     format!(
-                        "[{}] {}\n--- old_string ---\n{}\n--- new_string ---\n{}",
-                        mode_label, file_path, old_string, new_string
+                        "[{}{}] {}\n--- old_string ---\n{}\n--- new_string ---\n{}",
+                        mode_label, target_label, file_path, old_string, new_string
                     )
                 };
                 Ok(CallToolResult::success(vec![Content::text(text)]))
@@ -419,7 +581,11 @@ impl Workslate {
                     format!("{}: raw, {} lines", name, content.lines().count())
                 }
                 BufferContent::Edit {
-                    file_path, mode, ..
+                    file_path,
+                    mode,
+                    match_index,
+                    line_range,
+                    ..
                 } => {
                     let mode_str = match mode {
                         EditMode::Replace => "edit",
@@ -427,7 +593,14 @@ impl Workslate {
                         EditMode::Before => "edit:before",
                         EditMode::Append => "edit:append",
                     };
-                    format!("{}: {} → {}", name, mode_str, file_path)
+                    let target_str = if let Some((s, e)) = line_range {
+                        format!("@L{}-{}", s, e)
+                    } else if let Some(n) = match_index {
+                        format!("#{}", n)
+                    } else {
+                        String::new()
+                    };
+                    format!("{}: {}{} → {}", name, mode_str, target_str, file_path)
                 }
             })
             .collect();
@@ -462,6 +635,8 @@ impl Workslate {
                 old_string,
                 new_string,
                 mode,
+                match_index,
+                line_range,
             } => {
                 let file_content = match tokio::fs::read_to_string(&file_path).await {
                     Ok(c) => c,
@@ -473,34 +648,33 @@ impl Workslate {
                     }
                 };
 
-                if !matches!(mode, EditMode::Append) {
-                    let matches: Vec<_> = file_content.match_indices(&old_string).collect();
-                    if matches.is_empty() {
-                        return Ok(CallToolResult::error(vec![Content::text(
-                            "old_string no longer found in file (file may have changed)"
-                                .to_string(),
-                        )]));
-                    }
-                }
-
-                let (diff_old, diff_new) = match mode {
-                    EditMode::Replace => (old_string, new_string),
-                    EditMode::After => (
-                        old_string.clone(),
-                        format!("{}{}", old_string, new_string),
-                    ),
-                    EditMode::Before => (
-                        old_string.clone(),
-                        format!("{}{}", new_string, old_string),
-                    ),
-                    EditMode::Append => (
-                        file_content.clone(),
-                        if file_content.ends_with('\n') {
-                            format!("{}{}", file_content, new_string)
-                        } else {
-                            format!("{}\n{}", file_content, new_string)
+                let (diff_old, diff_new) = if matches!(mode, EditMode::Append) {
+                    diff_texts(
+                        &ResolvedTarget {
+                            old_text: String::new(),
+                            byte_start: 0,
+                            byte_end: 0,
                         },
-                    ),
+                        &new_string,
+                        &mode,
+                        &file_content,
+                    )
+                } else {
+                    let target = match resolve_target(
+                        &file_content,
+                        &old_string,
+                        match_index,
+                        line_range,
+                    ) {
+                        Ok(t) => t,
+                        Err(e) => {
+                            return Ok(CallToolResult::error(vec![Content::text(format!(
+                                "{} (file may have changed)",
+                                e
+                            ))]));
+                        }
+                    };
+                    diff_texts(&target, &new_string, &mode, &file_content)
                 };
 
                 let diff = TextDiff::from_lines(&diff_old, &diff_new);
@@ -605,6 +779,8 @@ impl Workslate {
                 old_string,
                 new_string,
                 mode,
+                match_index,
+                line_range,
             } => {
                 let file_content = match tokio::fs::read_to_string(&file_path).await {
                     Ok(c) => c,
@@ -616,46 +792,28 @@ impl Workslate {
                     }
                 };
 
-                let result = match mode {
-                    EditMode::Replace | EditMode::After | EditMode::Before => {
-                        let matches: Vec<_> =
-                            file_content.match_indices(&old_string).collect();
-                        if matches.is_empty() {
-                            return Ok(CallToolResult::error(vec![Content::text(
-                                "old_string no longer found in file (file may have changed)"
-                                    .to_string(),
-                            )]));
-                        }
-                        if matches.len() > 1 {
+                let result = if matches!(mode, EditMode::Append) {
+                    apply_mode(&file_content, &ResolvedTarget {
+                        old_text: String::new(),
+                        byte_start: 0,
+                        byte_end: 0,
+                    }, &new_string, &mode)
+                } else {
+                    let target = match resolve_target(
+                        &file_content,
+                        &old_string,
+                        match_index,
+                        line_range,
+                    ) {
+                        Ok(t) => t,
+                        Err(e) => {
                             return Ok(CallToolResult::error(vec![Content::text(format!(
-                                "old_string appears {} times in file (must be unique)",
-                                matches.len()
+                                "{} (file may have changed)",
+                                e
                             ))]));
                         }
-                        match mode {
-                            EditMode::Replace => {
-                                file_content.replacen(&old_string, &new_string, 1)
-                            }
-                            EditMode::After => file_content.replacen(
-                                &old_string,
-                                &format!("{}{}", old_string, new_string),
-                                1,
-                            ),
-                            EditMode::Before => file_content.replacen(
-                                &old_string,
-                                &format!("{}{}", new_string, old_string),
-                                1,
-                            ),
-                            _ => unreachable!(),
-                        }
-                    }
-                    EditMode::Append => {
-                        if file_content.ends_with('\n') {
-                            format!("{}{}", file_content, new_string)
-                        } else {
-                            format!("{}\n{}", file_content, new_string)
-                        }
-                    }
+                    };
+                    apply_mode(&file_content, &target, &new_string, &mode)
                 };
 
                 if let Err(e) = tokio::fs::write(&file_path, &result).await {

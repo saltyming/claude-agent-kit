@@ -34,7 +34,7 @@ An MCP server for Claude Code that provides:
 | Tool | Description |
 |------|-------------|
 | `workslate_write(name, content, file_path?)` | Store content in a buffer. If `file_path` given, returns diff for review. |
-| `workslate_edit(name, file_path, old_string?, new_string, position?)` | Stage an edit. Position modes: `replace` (default), `after`, `before`, `append`. Returns diff immediately. |
+| `workslate_edit(name, file_path, old_string?, new_string, position?, match_index?, line_start?, line_end?)` | Stage an edit. Position: `replace`/`after`/`before`/`append`. Targeting: unique match (default), `match_index` (Nth occurrence), or `line_start`/`line_end` (line range). |
 | `workslate_read(name)` | Read buffer contents. |
 | `workslate_list()` | List all buffers with types and sizes. |
 | `workslate_diff(name, file_path?)` | Re-check diff between buffer and file. |
