@@ -18,28 +18,39 @@ Claude Code ships with system prompt directives optimized for casual Q&A — not
 Also includes:
 - **Agent Teams workflow** — self-claim policy, leader intervention patterns, teammate communication triggers
 - **Code Staging via workslate** — staged editing workflow that prevents chain-of-thought leakage and scope reduction
+- **Task system clarification** — workslate tasks for solo/leader progress, built-in tasks for team coordination
 - **Quality guardrails** — false claims mitigation, comment discipline, verification fallback
 
 ### Workslate MCP Server
 
 An MCP server for Claude Code that provides:
 
-- **Staged code editing** — write code to buffers, review the diff, then apply. Catches mistakes before they reach files.
+- **Staged code editing** — write code to buffers, review the diff, then apply. Catches mistakes before they reach files. New files show full content with line numbers for review.
+- **File reading with line numbers** — read files from disk with numbered output, feeding directly into line-range editing. Supports range reads (`start_line`/`end_line`).
+- **Pattern search** — find patterns (substring or regex) in files, returns matches with context and a summary of line numbers for precise `workslate_edit` targeting.
 - **Persistent task tracking** — project-scoped tasks that survive across sessions, stored in `~/.claude/projects/<project>/workslate/`.
 - **Named task sessions** — `workslate_task_init("auth-refactor")` isolates tasks per work context. Multiple sessions coexist, resumable across restarts.
 - **Auto-footer** — every tool response includes a task progress summary so you never lose sight of what's done and what's next.
 
 #### Tools
 
+**Buffer operations:**
+
 | Tool | Description |
 |------|-------------|
-| `workslate_write(name, content, file_path?)` | Store content in a buffer. If `file_path` given, returns diff for review. |
+| `workslate_write(name, content, file_path?)` | Store content in a buffer. If `file_path` given, returns diff for review. New files show full content with line numbers. |
 | `workslate_edit(name, file_path, old_string?, new_string, position?, match_index?, line_start?, line_end?)` | Stage an edit. Position: `replace`/`after`/`before`/`append`. Targeting: unique match (default), `match_index` (Nth occurrence), or `line_start`/`line_end` (line range). |
-| `workslate_read(name)` | Read buffer contents. |
+| `workslate_read(name?, file_path?, line_numbers?, start_line?, end_line?)` | Read a buffer by name, or read a file from disk with line numbers. File mode supports range reads. |
+| `workslate_search(file_path, pattern, regex?, context?)` | Search a file for a pattern. Returns matches with context lines and a Summary of line numbers for use with `workslate_edit`. |
 | `workslate_list()` | List all buffers with types and sizes. |
 | `workslate_diff(name, file_path?)` | Re-check diff between buffer and file. |
 | `workslate_apply(name, file_path?)` | Apply buffer to file. Edit buffers need no args. |
 | `workslate_clear(name?)` | Clear one or all buffers. |
+
+**Task tracking:**
+
+| Tool | Description |
+|------|-------------|
 | `workslate_task_create(name, description?, depends_on?)` | Create a task with optional dependencies. |
 | `workslate_task_done(id)` | Mark task done. Auto-unblocks dependents. |
 | `workslate_task_update(id, status?, description?)` | Update task status or description. |

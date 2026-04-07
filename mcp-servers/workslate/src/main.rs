@@ -1,7 +1,12 @@
+mod buffer;
+mod file;
+mod task;
+
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use regex::Regex;
 use rmcp::{
     RoleServer, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, tool::ToolCallContext, wrapper::Parameters},
@@ -12,336 +17,18 @@ use rmcp::{
     service::RequestContext,
     tool, tool_router,
 };
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 use similar::TextDiff;
 use tokio::sync::RwLock;
 
-// ── Buffer types ──────────────────────────────────────────
-
-#[derive(Clone)]
-enum EditMode {
-    Replace,
-    After,
-    Before,
-    Append,
-}
-
-#[derive(Clone)]
-enum BufferContent {
-    Raw(String),
-    Edit {
-        file_path: String,
-        old_string: String,
-        new_string: String,
-        mode: EditMode,
-        match_index: Option<u32>,
-        line_range: Option<(u32, u32)>,
-    },
-}
-
-// ── Target resolution ────────────────────────────────────
-
-struct ResolvedTarget {
-    old_text: String,
-    byte_start: usize,
-    byte_end: usize,
-}
-
-fn resolve_target(
-    file_content: &str,
-    old_string: &str,
-    match_index: Option<u32>,
-    line_range: Option<(u32, u32)>,
-) -> Result<ResolvedTarget, String> {
-    if let Some((start, end)) = line_range {
-        let line_offsets: Vec<(usize, usize)> = {
-            let mut offsets = Vec::new();
-            let mut pos = 0;
-            for line in file_content.split('\n') {
-                let end_pos = pos + line.len();
-                offsets.push((pos, end_pos));
-                pos = end_pos + 1;
-            }
-            offsets
-        };
-
-        let s = (start as usize).saturating_sub(1);
-        let e = (end as usize).min(line_offsets.len());
-        if s >= line_offsets.len() || s >= e {
-            return Err(format!(
-                "line range {}-{} out of bounds (file has {} lines)",
-                start,
-                end,
-                line_offsets.len()
-            ));
-        }
-
-        let byte_start = line_offsets[s].0;
-        let byte_end = if e < line_offsets.len() {
-            line_offsets[e - 1].1 + 1
-        } else {
-            line_offsets[e - 1].1
-        };
-        let byte_end = byte_end.min(file_content.len());
-        let old_text = file_content[byte_start..byte_end].to_string();
-
-        Ok(ResolvedTarget {
-            old_text,
-            byte_start,
-            byte_end,
-        })
-    } else {
-        let matches: Vec<usize> = file_content
-            .match_indices(old_string)
-            .map(|(i, _)| i)
-            .collect();
-        if matches.is_empty() {
-            return Err("old_string not found in file".to_string());
-        }
-
-        let idx = if let Some(n) = match_index {
-            if n == 0 || n as usize > matches.len() {
-                return Err(format!(
-                    "match_index {} out of range (found {} occurrences)",
-                    n,
-                    matches.len()
-                ));
-            }
-            n as usize - 1
-        } else {
-            if matches.len() > 1 {
-                return Err(format!(
-                    "old_string appears {} times (must be unique, or use match_index)",
-                    matches.len()
-                ));
-            }
-            0
-        };
-
-        let byte_start = matches[idx];
-        let byte_end = byte_start + old_string.len();
-        Ok(ResolvedTarget {
-            old_text: old_string.to_string(),
-            byte_start,
-            byte_end,
-        })
-    }
-}
-
-fn apply_mode(file_content: &str, target: &ResolvedTarget, new_string: &str, mode: &EditMode) -> String {
-    match mode {
-        EditMode::Replace => format!(
-            "{}{}{}",
-            &file_content[..target.byte_start],
-            new_string,
-            &file_content[target.byte_end..]
-        ),
-        EditMode::After => format!(
-            "{}{}{}",
-            &file_content[..target.byte_end],
-            new_string,
-            &file_content[target.byte_end..]
-        ),
-        EditMode::Before => format!(
-            "{}{}{}",
-            &file_content[..target.byte_start],
-            new_string,
-            &file_content[target.byte_start..]
-        ),
-        EditMode::Append => {
-            if file_content.ends_with('\n') {
-                format!("{}{}", file_content, new_string)
-            } else {
-                format!("{}\n{}", file_content, new_string)
-            }
-        }
-    }
-}
-
-fn diff_texts(target: &ResolvedTarget, new_string: &str, mode: &EditMode, file_content: &str) -> (String, String) {
-    match mode {
-        EditMode::Replace => (target.old_text.clone(), new_string.to_string()),
-        EditMode::After => (
-            target.old_text.clone(),
-            format!("{}{}", target.old_text, new_string),
-        ),
-        EditMode::Before => (
-            target.old_text.clone(),
-            format!("{}{}", new_string, target.old_text),
-        ),
-        EditMode::Append => (
-            file_content.to_string(),
-            if file_content.ends_with('\n') {
-                format!("{}{}", file_content, new_string)
-            } else {
-                format!("{}\n{}", file_content, new_string)
-            },
-        ),
-    }
-}
-
-// ── Buffer param structs ──────────────────────────────────
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct WriteParams {
-    /// Name of the buffer
-    name: String,
-    /// Content to store in the buffer
-    content: String,
-    /// If provided, show unified diff against this file in the response
-    file_path: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct EditBufferParams {
-    /// Name of the buffer
-    name: String,
-    /// Path to the file to edit
-    file_path: String,
-    /// The exact text to find. Required for replace/after/before (unless line_start is used). Ignored for append.
-    old_string: Option<String>,
-    /// The replacement or insertion text
-    new_string: String,
-    /// Position mode: "replace" (default), "after" (insert after old_string), "before" (insert before old_string), "append" (append to end of file)
-    position: Option<String>,
-    /// Target the Nth occurrence of old_string (1-based). Without this, old_string must appear exactly once.
-    match_index: Option<u32>,
-    /// Target a line range instead of old_string (1-based). When provided, old_string is ignored.
-    line_start: Option<u32>,
-    /// End of line range (1-based, inclusive). Defaults to line_start if omitted.
-    line_end: Option<u32>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct ReadParams {
-    /// Name of the buffer to read
-    name: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct DiffParams {
-    /// Name of the buffer
-    name: String,
-    /// Path to the file to diff against. Required for raw buffers, ignored for edit buffers.
-    file_path: Option<String>,
-    /// If provided, diff only this section of the file against the buffer. Only used with raw buffers.
-    old_string: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct ApplyParams {
-    /// Name of the buffer to apply
-    name: String,
-    /// Path to the target file. Required for raw buffers, ignored for edit buffers.
-    file_path: Option<String>,
-    /// If provided, replace only this section. Only used with raw buffers.
-    old_string: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct ClearParams {
-    /// Name of the buffer to clear. If omitted, all buffers are cleared.
-    name: Option<String>,
-}
-
-// ── Task data structures ──────────────────────────────────
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-enum TaskStatus {
-    Pending,
-    InProgress,
-    Done,
-    Blocked,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Task {
-    id: u32,
-    name: String,
-    description: Option<String>,
-    status: TaskStatus,
-    depends_on: Vec<u32>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct TaskStore {
-    next_id: u32,
-    tasks: Vec<Task>,
-}
-
-impl TaskStore {
-    fn empty() -> Self {
-        Self {
-            next_id: 1,
-            tasks: vec![],
-        }
-    }
-
-    fn recompute_blocked_status(&mut self) {
-        let done_ids: HashSet<u32> = self
-            .tasks
-            .iter()
-            .filter(|t| t.status == TaskStatus::Done)
-            .map(|t| t.id)
-            .collect();
-
-        for task in &mut self.tasks {
-            if task.status == TaskStatus::Done || task.status == TaskStatus::InProgress {
-                continue;
-            }
-            if task.depends_on.is_empty() {
-                if task.status == TaskStatus::Blocked {
-                    task.status = TaskStatus::Pending;
-                }
-                continue;
-            }
-            let all_deps_done = task.depends_on.iter().all(|dep| done_ids.contains(dep));
-            if all_deps_done {
-                task.status = TaskStatus::Pending;
-            } else {
-                task.status = TaskStatus::Blocked;
-            }
-        }
-    }
-}
-
-// ── Task param structs ────────────────────────────────────
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct TaskCreateParams {
-    /// Name/title of the task
-    name: String,
-    /// Optional description with more detail
-    description: Option<String>,
-    /// Optional list of task IDs this task depends on
-    depends_on: Option<Vec<u32>>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct TaskDoneParams {
-    /// ID of the task to mark as done
-    id: u32,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct TaskUpdateParams {
-    /// ID of the task to update
-    id: u32,
-    /// New status: pending, in_progress, done, blocked
-    status: Option<String>,
-    /// New description
-    description: Option<String>,
-}
-
-// ── Task session param structs ────────────────────────────
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct TaskInitParams {
-    /// Name of the task session (e.g., "auth-refactor"). Creates or loads tasks-{name}.json.
-    name: String,
-}
+use buffer::{
+    ApplyParams, BufferContent, ClearParams, DiffParams, EditBufferParams, EditMode, ReadParams,
+    ResolvedTarget, SearchParams, WriteParams, apply_mode, diff_texts, resolve_target,
+};
+use file::{MAX_FILE_SIZE, format_numbered_line, is_binary};
+use task::{
+    Task, TaskCreateParams, TaskDoneParams, TaskInitParams, TaskStatus, TaskStore,
+    TaskUpdateParams, render_task_footer,
+};
 
 // ── Workslate server ──────────────────────────────────────
 
@@ -394,7 +81,16 @@ impl Workslate {
                         Some(unified)
                     }
                 }
-                Err(_) => Some(format!("(new file: {})", file_path)),
+                Err(_) => {
+                    let width = line_count.max(1).to_string().len();
+                    let numbered: Vec<String> = params
+                        .content
+                        .lines()
+                        .enumerate()
+                        .map(|(i, line)| format_numbered_line(i + 1, width, line, false))
+                        .collect();
+                    Some(format!("(new file: {})\n{}", file_path, numbered.join("\n")))
+                }
             }
         } else {
             None
@@ -517,54 +213,149 @@ impl Workslate {
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
-    #[tool(description = "Read and return the content of a named buffer")]
+    #[tool(description = "Read a buffer by name, or read a file from disk with line numbers. Provide either name (buffer) or file_path (file), not both.")]
     async fn workslate_read(
         &self,
         Parameters(params): Parameters<ReadParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let buffers = self.buffers.read().await;
-        match buffers.get(&params.name) {
-            Some(BufferContent::Raw(content)) => {
-                Ok(CallToolResult::success(vec![Content::text(content.clone())]))
+        match (&params.name, &params.file_path) {
+            (Some(name), None) => {
+                let buffers = self.buffers.read().await;
+                match buffers.get(name) {
+                    Some(BufferContent::Raw(content)) => {
+                        Ok(CallToolResult::success(vec![Content::text(content.clone())]))
+                    }
+                    Some(BufferContent::Edit {
+                        file_path,
+                        old_string,
+                        new_string,
+                        mode,
+                        match_index,
+                        line_range,
+                    }) => {
+                        let mode_label = match mode {
+                            EditMode::Replace => "edit",
+                            EditMode::After => "edit:after",
+                            EditMode::Before => "edit:before",
+                            EditMode::Append => "edit:append",
+                        };
+                        let target_label = if let Some((s, e)) = line_range {
+                            format!("@L{}-{}", s, e)
+                        } else if let Some(n) = match_index {
+                            format!("#{}", n)
+                        } else {
+                            String::new()
+                        };
+                        let text = if matches!(mode, EditMode::Append) {
+                            format!(
+                                "[{}] {}\n--- new_string ---\n{}",
+                                mode_label, file_path, new_string
+                            )
+                        } else {
+                            format!(
+                                "[{}{}] {}\n--- old_string ---\n{}\n--- new_string ---\n{}",
+                                mode_label, target_label, file_path, old_string, new_string
+                            )
+                        };
+                        Ok(CallToolResult::success(vec![Content::text(text)]))
+                    }
+                    None => Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Buffer '{}' not found",
+                        name
+                    ))])),
+                }
             }
-            Some(BufferContent::Edit {
-                file_path,
-                old_string,
-                new_string,
-                mode,
-                match_index,
-                line_range,
-            }) => {
-                let mode_label = match mode {
-                    EditMode::Replace => "edit",
-                    EditMode::After => "edit:after",
-                    EditMode::Before => "edit:before",
-                    EditMode::Append => "edit:append",
+            (None, Some(file_path)) => {
+                let metadata = match tokio::fs::metadata(file_path).await {
+                    Ok(m) => m,
+                    Err(e) => {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Failed to read '{}': {}",
+                            file_path, e
+                        ))]));
+                    }
                 };
-                let target_label = if let Some((s, e)) = line_range {
-                    format!("@L{}-{}", s, e)
-                } else if let Some(n) = match_index {
-                    format!("#{}", n)
-                } else {
-                    String::new()
+                if metadata.len() > MAX_FILE_SIZE {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "File too large ({} bytes, max {}). Use start_line/end_line to read a portion.",
+                        metadata.len(),
+                        MAX_FILE_SIZE
+                    ))]));
+                }
+
+                let content_bytes = match tokio::fs::read(file_path).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Failed to read '{}': {}",
+                            file_path, e
+                        ))]));
+                    }
                 };
-                let text = if matches!(mode, EditMode::Append) {
-                    format!(
-                        "[{}] {}\n--- new_string ---\n{}",
-                        mode_label, file_path, new_string
-                    )
-                } else {
-                    format!(
-                        "[{}{}] {}\n--- old_string ---\n{}\n--- new_string ---\n{}",
-                        mode_label, target_label, file_path, old_string, new_string
-                    )
-                };
-                Ok(CallToolResult::success(vec![Content::text(text)]))
+
+                if is_binary(&content_bytes) {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "File appears to be binary: {}",
+                        file_path
+                    ))]));
+                }
+
+                let text = String::from_utf8_lossy(&content_bytes);
+                let all_lines: Vec<&str> = text.lines().collect();
+                let total_lines = all_lines.len();
+
+                if total_lines == 0 {
+                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                        "{} (0 lines)",
+                        file_path
+                    ))]));
+                }
+
+                let start = params.start_line.map(|s| s as usize).unwrap_or(1);
+                let end = params.end_line.map(|e| e as usize).unwrap_or(total_lines);
+
+                if start == 0 || start > total_lines {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "start_line {} out of range (file has {} lines)",
+                        start, total_lines
+                    ))]));
+                }
+                if end < start {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "end_line {} is before start_line {}",
+                        end, start
+                    ))]));
+                }
+                let end = end.min(total_lines);
+
+                let show_numbers = params.line_numbers.unwrap_or(true);
+                let width = end.to_string().len();
+
+                let mut output = Vec::with_capacity(end - start + 2);
+                output.push(format!(
+                    "{} ({} lines total, showing {}-{})",
+                    file_path, total_lines, start, end
+                ));
+
+                for (i, line) in all_lines[(start - 1)..end].iter().enumerate() {
+                    let line_num = start + i;
+                    if show_numbers {
+                        output.push(format_numbered_line(line_num, width, line, false));
+                    } else {
+                        output.push(line.to_string());
+                    }
+                }
+
+                Ok(CallToolResult::success(vec![Content::text(
+                    output.join("\n"),
+                )]))
             }
-            None => Ok(CallToolResult::error(vec![Content::text(format!(
-                "Buffer '{}' not found",
-                params.name
-            ))])),
+            (Some(_), Some(_)) => Ok(CallToolResult::error(vec![Content::text(
+                "Provide either name (buffer) or file_path (file), not both".to_string(),
+            )])),
+            (None, None) => Ok(CallToolResult::error(vec![Content::text(
+                "Provide either name (buffer read) or file_path (file read)".to_string(),
+            )])),
         }
     }
 
@@ -793,11 +584,16 @@ impl Workslate {
                 };
 
                 let result = if matches!(mode, EditMode::Append) {
-                    apply_mode(&file_content, &ResolvedTarget {
-                        old_text: String::new(),
-                        byte_start: 0,
-                        byte_end: 0,
-                    }, &new_string, &mode)
+                    apply_mode(
+                        &file_content,
+                        &ResolvedTarget {
+                            old_text: String::new(),
+                            byte_start: 0,
+                            byte_end: 0,
+                        },
+                        &new_string,
+                        &mode,
+                    )
                 } else {
                     let target = match resolve_target(
                         &file_content,
@@ -849,7 +645,8 @@ impl Workslate {
                         }
                     };
 
-                    let matches: Vec<_> = file_content.match_indices(old_string.as_str()).collect();
+                    let matches: Vec<_> =
+                        file_content.match_indices(old_string.as_str()).collect();
                     if matches.is_empty() {
                         return Ok(CallToolResult::error(vec![Content::text(
                             "old_string not found in file".to_string(),
@@ -929,6 +726,148 @@ impl Workslate {
                 count
             ))]))
         }
+    }
+
+    // ── Search tool ──────────────────────────────────────
+
+    #[tool(description = "Search a file for a pattern and return matches with line numbers. Use the Summary line numbers with workslate_edit's line_start/line_end for precise edits.")]
+    async fn workslate_search(
+        &self,
+        Parameters(params): Parameters<SearchParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        const MAX_MATCHES: usize = 50;
+
+        let metadata = match tokio::fs::metadata(&params.file_path).await {
+            Ok(m) => m,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to read '{}': {}",
+                    params.file_path, e
+                ))]));
+            }
+        };
+        if metadata.len() > MAX_FILE_SIZE {
+            return Ok(CallToolResult::error(vec![Content::text(format!(
+                "File too large ({} bytes, max {})",
+                metadata.len(),
+                MAX_FILE_SIZE
+            ))]));
+        }
+
+        let content_bytes = match tokio::fs::read(&params.file_path).await {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to read '{}': {}",
+                    params.file_path, e
+                ))]));
+            }
+        };
+
+        if is_binary(&content_bytes) {
+            return Ok(CallToolResult::error(vec![Content::text(format!(
+                "File appears to be binary: {}",
+                params.file_path
+            ))]));
+        }
+
+        let text = String::from_utf8_lossy(&content_bytes);
+        let lines: Vec<&str> = text.lines().collect();
+        let ctx = params.context.unwrap_or(2) as usize;
+        let use_regex = params.regex.unwrap_or(false);
+
+        let matching_indices: Vec<usize> = if use_regex {
+            let re = match Regex::new(&params.pattern) {
+                Ok(r) => r,
+                Err(e) => {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Invalid regex '{}': {}",
+                        params.pattern, e
+                    ))]));
+                }
+            };
+            lines
+                .iter()
+                .enumerate()
+                .filter(|(_, line)| re.is_match(line))
+                .map(|(i, _)| i)
+                .collect()
+        } else {
+            lines
+                .iter()
+                .enumerate()
+                .filter(|(_, line)| line.contains(params.pattern.as_str()))
+                .map(|(i, _)| i)
+                .collect()
+        };
+
+        if matching_indices.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "No matches for '{}' in {}",
+                params.pattern, params.file_path
+            ))]));
+        }
+
+        let total_matches = matching_indices.len();
+        let truncated = total_matches > MAX_MATCHES;
+        let shown_indices = &matching_indices[..matching_indices.len().min(MAX_MATCHES)];
+
+        let max_display_line = shown_indices
+            .iter()
+            .map(|&i| (i + ctx + 1).min(lines.len()))
+            .max()
+            .unwrap_or(1);
+        let width = max_display_line.to_string().len();
+
+        let mut output = Vec::new();
+        if truncated {
+            output.push(format!(
+                "Found {} matches in {} (showing first {})\n",
+                total_matches, params.file_path, MAX_MATCHES
+            ));
+        } else {
+            output.push(format!(
+                "Found {} match{} in {}\n",
+                total_matches,
+                if total_matches == 1 { "" } else { "es" },
+                params.file_path
+            ));
+        }
+
+        for (match_num, &idx) in shown_indices.iter().enumerate() {
+            let line_1based = idx + 1;
+            let ctx_start = idx.saturating_sub(ctx);
+            let ctx_end = (idx + ctx + 1).min(lines.len());
+
+            output.push(format!("Match {} (line {}):", match_num + 1, line_1based));
+            for i in ctx_start..ctx_end {
+                let is_match_line = i == idx;
+                output.push(format_numbered_line(i + 1, width, lines[i], is_match_line));
+            }
+            output.push(String::new());
+        }
+
+        let summary_lines: Vec<String> =
+            shown_indices.iter().map(|&i| (i + 1).to_string()).collect();
+        if summary_lines.len() <= 20 {
+            output.push(format!("Summary: lines {}", summary_lines.join(", ")));
+        } else {
+            let first_10: Vec<&str> = summary_lines[..10].iter().map(|s| s.as_str()).collect();
+            let last_3: Vec<&str> = summary_lines[summary_lines.len() - 3..]
+                .iter()
+                .map(|s| s.as_str())
+                .collect();
+            output.push(format!(
+                "Summary: lines {}, ..., {} ({} matches shown)",
+                first_10.join(", "),
+                last_3.join(", "),
+                shown_indices.len()
+            ));
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(
+            output.join("\n"),
+        )]))
     }
 
     // ── Task tools ────────────────────────────────────────
@@ -1104,7 +1043,9 @@ impl Workslate {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let new_path = self.tasks_dir.join(format!("tasks-{}.json", params.name));
         let new_store = match tokio::fs::read_to_string(&new_path).await {
-            Ok(json) => serde_json::from_str::<TaskStore>(&json).unwrap_or_else(|_| TaskStore::empty()),
+            Ok(json) => {
+                serde_json::from_str::<TaskStore>(&json).unwrap_or_else(|_| TaskStore::empty())
+            }
             Err(_) => TaskStore::empty(),
         };
 
@@ -1113,7 +1054,10 @@ impl Workslate {
         *self.active_session.write().await = Some(params.name.clone());
 
         let msg = if task_count > 0 {
-            format!("Switched to session '{}' ({} tasks loaded)", params.name, task_count)
+            format!(
+                "Switched to session '{}' ({} tasks loaded)",
+                params.name, task_count
+            )
         } else {
             format!("Created new session '{}'", params.name)
         };
@@ -1161,7 +1105,10 @@ impl Workslate {
                 Err(_) => 0,
             };
 
-            lines.push(format!("  {}{} ({} tasks)", session_name, marker, task_count));
+            lines.push(format!(
+                "  {}{}  ({} tasks)",
+                session_name, marker, task_count
+            ));
         }
 
         if lines.is_empty() {
@@ -1212,70 +1159,6 @@ impl Workslate {
     }
 }
 
-fn render_task_footer(store: &TaskStore, session: &Option<String>) -> String {
-    let total = store.tasks.len();
-    let done_count = store
-        .tasks
-        .iter()
-        .filter(|t| t.status == TaskStatus::Done)
-        .count();
-
-    let mut lines = Vec::new();
-    let session_label = match session {
-        Some(name) => format!(" ({}) ", name),
-        None => " ".to_string(),
-    };
-    lines.push(format!(
-        "── Tasks{}[{}/{}] ──────────────────────────",
-        session_label, done_count, total
-    ));
-
-    if done_count >= 3 {
-        lines.push(format!("  ✓ {} done", done_count));
-    } else {
-        for task in store.tasks.iter().filter(|t| t.status == TaskStatus::Done) {
-            lines.push(format!("  ✓ {}. {}", task.id, task.name));
-        }
-    }
-
-    let mut remaining_slots = 3;
-    for task in store
-        .tasks
-        .iter()
-        .filter(|t| t.status == TaskStatus::InProgress)
-    {
-        lines.push(format!("  → {}. {}  ← in_progress", task.id, task.name));
-        remaining_slots -= 1;
-        if remaining_slots == 0 {
-            break;
-        }
-    }
-
-    let non_done_non_progress: Vec<&Task> = store
-        .tasks
-        .iter()
-        .filter(|t| t.status == TaskStatus::Pending || t.status == TaskStatus::Blocked)
-        .collect();
-
-    let show_count = remaining_slots.min(non_done_non_progress.len());
-    for task in non_done_non_progress.iter().take(show_count) {
-        let mut line = format!("    {}. {}", task.id, task.name);
-        if task.status == TaskStatus::Blocked && !task.depends_on.is_empty() {
-            let dep_ids: Vec<String> = task.depends_on.iter().map(|d| d.to_string()).collect();
-            line.push_str(&format!("  (blocked by: {})", dep_ids.join(", ")));
-        }
-        lines.push(line);
-    }
-
-    let hidden = non_done_non_progress.len().saturating_sub(show_count);
-    if hidden > 0 {
-        lines.push(format!("    ... and {} more", hidden));
-    }
-
-    lines.push("──────────────────────────────────────────".to_string());
-    lines.join("\n")
-}
-
 // ── ServerHandler (manual, replaces #[tool_handler]) ──────
 
 impl ServerHandler for Workslate {
@@ -1283,6 +1166,8 @@ impl ServerHandler for Workslate {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
             "In-memory named buffers for drafting code before applying to files. \
              Use workslate_edit for staged old→new replacements, workslate_write for raw content. \
+             Use workslate_read with file_path to view files with line numbers. \
+             Use workslate_search to find patterns and get line numbers for workslate_edit. \
              Persistent project-scoped task tracking across sessions. \
              Task status is shown automatically in all tool responses.",
         )

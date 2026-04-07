@@ -1,6 +1,6 @@
 # Claude Agent Operating Manual
 
-**Version**: 6.5.1
+**Version**: 7.0
 **Last Updated**: 2026-04-07
 
 > Global operating rules for AI coding agents. Focuses on user-specific preferences and overrides — general tool usage, security, and communication rules are handled by the system prompt.
@@ -134,7 +134,13 @@ When asked to investigate, **ONLY investigate** — do NOT make code changes.
 - **NO** shortcuts like "... similar for other files"
 - Implement ALL necessary changes (files, functions, tests, config)
 - Break large tasks into phases, complete each fully
-- Use `TaskCreate`/`TaskUpdate` for tracking multi-step tasks
+- Track progress with the appropriate task system:
+
+| Context | Task tool | Why |
+|---------|-----------|-----|
+| Solo work | `workslate_task_*` | Footer auto-display, named sessions, disk persistence |
+| Team leader | `workslate_task_*` (own phases) + built-in `TaskCreate` (team graph) | Leader tracks personal progress in workslate, designs team task graph with built-in |
+| Teammate | Built-in `TaskCreate`/`TaskUpdate` only | Owner, auto-delivery, self-claiming, file locking |
 
 **[OVERRIDE]** `"Avoid over-engineering. Only make changes that are directly requested or clearly necessary."` / `"Don't add features, refactor code, or make 'improvements' beyond what was asked."`
 In this project: when a design document or implementation plan is provided, implement the **entire specified scope**. Do not shrink it. Do not substitute a "simpler approach." Do not produce stubs, placeholders, TODOs, or "for now" implementations. The design document IS the specification — follow it completely. If you believe part of the spec is wrong, say so explicitly and wait for a decision. Do not silently reduce scope.
@@ -170,7 +176,20 @@ Three staging modes exist — all return the diff for review:
 |------|----------|
 | `workslate_edit(name, file, old, new)` | Replace a section of a file |
 | `workslate_edit(name, file, old, new, position)` | Insert after/before anchor, or append to file |
-| `workslate_write(name, content, file_path)` | Full file creation/rewrite |
+| `workslate_write(name, content, file_path)` | Full file creation/rewrite (new files show full content with line numbers) |
+
+Two read tools support the staging workflow:
+
+| Tool | Use case |
+|------|----------|
+| `workslate_read(file_path)` | Read a file from disk with line numbers — use to get precise line coordinates before editing |
+| `workslate_search(file_path, pattern)` | Find patterns (substring or regex) and return matches with line numbers and context |
+
+**Typical precision-edit workflow:**
+1. `workslate_search(file_path, "fn target_function")` — find the function, get line numbers from Summary
+2. `workslate_read(file_path, start_line, end_line)` — read the exact range with line numbers to confirm
+3. `workslate_edit(name, file_path, line_start, line_end, new_string)` — edit by line range, review diff
+4. `workslate_apply(name)` — apply
 
 `position` values for `workslate_edit`:
 - omitted or `"replace"` — find old_string, replace with new_string (default)
@@ -428,16 +447,19 @@ A coordination system for multiple Claude Code instances that work together via 
 
 The leader's role is **task graph architect + build/integration owner**, not task dispatcher.
 
+The leader uses **workslate tasks** to track their own phases and **built-in TaskCreate** to build the team's task graph. These do not conflict — workslate is the leader's personal view, built-in is the team coordination layer.
+
 ```
-1. TeamCreate       → Team + teammates created
-                       (teammates explore codebase while waiting — see Creation Prompt below)
-2. TaskCreate       → Design task graph: scope, blockedBy, leader-reserved flags
-3. Teammates work   → Self-claim eligible tasks (see Task Claiming Policy)
-4. Monitor          → Receive completion reports; intervene only when stuck
-5. Build & verify   → After all teammates complete
-6. Fix integration  → Missing imports, visibility, mod declarations
-7. Shutdown         → shutdown_request to each teammate
-8. TeamDelete       → Clean up team resources
+1. workslate_task_init → Create a named session for this team effort
+2. TeamCreate          → Team + teammates created
+                          (teammates explore codebase while waiting — see Creation Prompt below)
+3. TaskCreate          → Design task graph: scope, blockedBy, leader-reserved flags
+4. Teammates work      → Self-claim eligible tasks (see Task Claiming Policy)
+5. Monitor             → Receive completion reports; intervene only when stuck
+6. Build & verify      → After all teammates complete
+7. Fix integration     → Missing imports, visibility, mod declarations
+8. Shutdown            → shutdown_request to each teammate
+9. TeamDelete          → Clean up team resources
 ```
 
 **Creation prompt rules:**
@@ -673,6 +695,8 @@ User Request
 │
 ├─ Code change requested?
 │  ├─ Read all relevant files
+│  │  ├─ Need line numbers? → workslate_read(file_path) or workslate_read(file_path, start_line, end_line)
+│  │  └─ Need to find a symbol? → workslate_search(file_path, pattern) → get line numbers from Summary
 │  ├─ Create task document
 │  ├─ Get approval
 │  ├─ Trivial? (single-line, import, string literal, rename)
@@ -696,6 +720,7 @@ User Request
 ---
 
 **Version History:**
+- v7.0 (2026-04-07): workslate_read file mode (line-numbered file reading with range support), workslate_search (pattern search with context and line number summary), workslate_write shows full content for new files; module split (main.rs → buffer.rs, task.rs, file.rs); task system clarification (workslate for solo/leader, built-in for team graph)
 - v6.5.1 (2026-04-07): workslate_edit targeting modes — match_index (Nth occurrence) and line_start/line_end (line range) eliminate anchor uniqueness fragility; resolve_target/apply_mode/diff_texts helpers deduplicate targeting logic across edit/diff/apply
 - v6.5 (2026-04-07): workslate_edit position modes (after/before/append) — eliminate old_string overhead for insert/append operations; refine Edit vs workslate boundary from "15+ lines" to "2+ non-adjacent sections"; add Task Sessions documentation to body
 - v6.4 (2026-04-07): Named task sessions — workslate_task_init(name) switches to tasks-{name}.json; workslate_task_sessions() lists available sessions; enables session-scoped task isolation without external configuration
