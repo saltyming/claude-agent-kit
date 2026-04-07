@@ -1,7 +1,7 @@
 <!-- claude-agent-kit -->
 # Claude Agent Operating Manual
 
-**Version**: 7.1
+**Version**: 7.2
 **Last Updated**: 2026-04-07
 
 > Global operating rules for AI coding agents. Focuses on user-specific preferences and overrides — general tool usage, security, and communication rules are handled by the system prompt.
@@ -79,6 +79,8 @@ User Request
 ├─ Investigation? → Read only, report findings
 │
 ├─ Code change requested?
+│  ├─ Multi-step (2+ files / 2+ deliverables)?
+│  │  └─ workslate_task_init + create tasks (FIRST)
 │  ├─ Read all relevant files
 │  │  ├─ Need line numbers? → workslate_read(file_path) or workslate_read(file_path, start_line, end_line)
 │  │  └─ Need to find a symbol? → workslate_search(file_path, pattern) → get line numbers from Summary
@@ -87,8 +89,9 @@ User Request
 │  ├─ Trivial? (single-line, import, string literal, rename)
 │  │  └─ Edit directly
 │  └─ Everything else
-│     ├─ Partial edit? → workslate_edit (diff returned) → workslate_apply
-│     └─ Full file?    → workslate_write(file_path) (diff returned) → workslate_apply
+│     ├─ Existing file? → workslate_edit(name, file_path, old, new) → workslate_apply
+│     └─ New file?      → workslate_write(name, content, file_path) → workslate_apply
+│     └─ Fix staged content? → workslate_edit(name, old, new) (no file_path = buffer mode)
 │
 └─ Complex parallel task?
    ├─ Workers independent, no communication needed?
@@ -105,6 +108,7 @@ User Request
 ---
 
 **Version History:**
+- v7.2 (2026-04-07): Buffer-first editing (workslate_edit: file_path=load from disk, no file_path=edit buffer), BufferContent enum→struct, workslate_apply/diff simplified to single path, task tracking trigger rule, server-side task session nudge
 - v7.1 (2026-04-07): Mandatory named sessions (task_init required before task operations), install scripts (install.sh, install.ps1, Makefile) with manifest-based uninstall, auto MCP registration, rule file prefix + signature for safe uninstall, PATH detection
 - v7.0.1 (2026-04-07): Split CLAUDE.md into claude-rules/ modules (task-execution, git-workflow, framework-conventions, parallel-work) — main file under 200 lines
 - v7.0 (2026-04-07): workslate_read file mode (line-numbered file reading with range support), workslate_search (pattern search with context and line number summary), workslate_write shows full content for new files; module split (main.rs → buffer.rs, task.rs, file.rs); task system clarification (workslate for solo/leader, built-in for team graph)

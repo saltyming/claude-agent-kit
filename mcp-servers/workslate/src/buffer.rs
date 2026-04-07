@@ -12,16 +12,9 @@ pub enum EditMode {
 }
 
 #[derive(Clone)]
-pub enum BufferContent {
-    Raw(String),
-    Edit {
-        file_path: String,
-        old_string: String,
-        new_string: String,
-        mode: EditMode,
-        match_index: Option<u32>,
-        line_range: Option<(u32, u32)>,
-    },
+pub struct BufferContent {
+    pub content: String,
+    pub file_path: Option<String>,
 }
 
 // ── Target resolution ────────────────────────────────────
@@ -181,8 +174,8 @@ pub struct WriteParams {
 pub struct EditBufferParams {
     /// Name of the buffer
     pub name: String,
-    /// Path to the file to edit
-    pub file_path: String,
+    /// Path to file. With file_path: loads from disk and edits. Without: edits existing buffer content.
+    pub file_path: Option<String>,
     /// The exact text to find. Required for replace/after/before (unless line_start is used). Ignored for append.
     pub old_string: Option<String>,
     /// The replacement or insertion text
@@ -227,9 +220,9 @@ pub struct SearchParams {
 pub struct DiffParams {
     /// Name of the buffer
     pub name: String,
-    /// Path to the file to diff against. Required for raw buffers, ignored for edit buffers.
+    /// Path to the file to diff against. Falls back to stored file_path in the buffer.
     pub file_path: Option<String>,
-    /// If provided, diff only this section of the file against the buffer. Only used with raw buffers.
+    /// If provided, diff only this section of the file against the buffer.
     pub old_string: Option<String>,
 }
 
@@ -237,9 +230,9 @@ pub struct DiffParams {
 pub struct ApplyParams {
     /// Name of the buffer to apply
     pub name: String,
-    /// Path to the target file. Required for raw buffers, ignored for edit buffers.
+    /// Path to the target file. Falls back to stored file_path in the buffer.
     pub file_path: Option<String>,
-    /// If provided, replace only this section. Only used with raw buffers.
+    /// If provided, replace only this section of the file with buffer content.
     pub old_string: Option<String>,
 }
 

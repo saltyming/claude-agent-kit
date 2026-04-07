@@ -51,6 +51,8 @@ When asked to investigate, **ONLY investigate** — do NOT make code changes.
 5. **Implementation Plan** - Step-by-step breakdown
 6. **Risk Assessment** - What could go wrong?
 
+**Task tracking trigger (solo work):** When implementing changes that touch 2+ files or produce 2+ distinct deliverables, call `workslate_task_init` and create tasks BEFORE writing any code. This is the first implementation action. If you realize mid-work that you skipped this, stop and initialize immediately.
+
 **Execution Requirements:**
 - Complete task **ENTIRELY** - no partial solutions
 - **NO** shortcuts like "... similar for other files"
@@ -96,9 +98,11 @@ Three staging modes exist — all return the diff for review:
 
 | Tool | Use case |
 |------|----------|
-| `workslate_edit(name, file, old, new)` | Replace a section of a file |
-| `workslate_edit(name, file, old, new, position)` | Insert after/before anchor, or append to file |
+| `workslate_edit(name, file_path, old, new)` | Load file from disk + edit (creates/overwrites buffer) |
+| `workslate_edit(name, old, new)` | Edit existing buffer content (no file_path = buffer mode) |
 | `workslate_write(name, content, file_path)` | Full file creation/rewrite (new files show full content with line numbers) |
+
+`file_path` is the disambiguator: present = load from disk, absent = edit buffer.
 
 Two read tools support the staging workflow:
 
@@ -136,16 +140,16 @@ Targeting options (apply to all position modes except append):
 - Appending to a file (`position: "append"`)
 - Any file creation with more than trivial content
 
-**Partial replacement workflow (preferred):**
-1. `workslate_edit(name, file_path, old_string, new_string)` — stage the edit, review the returned diff
-2. If issues are found, call `workslate_edit` again with corrections
-3. `workslate_apply(name)` — apply (no args needed, buffer knows the target)
+**Partial replacement workflow (existing file):**
+1. `workslate_edit(name, file_path, old_string, new_string)` — load file from disk, apply edit, review diff
+2. If more edits needed: `workslate_edit(name, old_string, new_string)` — edits buffer (no file_path = chains with previous)
+3. `workslate_apply(name)` — uses stored file_path
 4. `workslate_clear(name)` — clean up the buffer
 
-**Full file workflow:**
+**Full file workflow (new file):**
 1. `workslate_write(name, content, file_path)` — draft the full content, review the returned diff
-2. If issues are found, call `workslate_write` again with corrections
-3. `workslate_apply(name, file_path)` — apply to file
+2. If issues found: `workslate_edit(name, old_string, new_string)` — edits buffer directly (no file_path = buffer mode)
+3. `workslate_apply(name)` — uses stored file_path
 4. `workslate_clear(name)` — clean up the buffer
 
 `workslate_diff(name)` remains available for re-checking a buffer against its target file at any time.

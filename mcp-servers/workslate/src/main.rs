@@ -97,7 +97,10 @@ impl Workslate {
         };
 
         let mut buffers = self.buffers.write().await;
-        buffers.insert(params.name.clone(), BufferContent::Raw(params.content));
+        buffers.insert(params.name.clone(), BufferContent {
+            content: params.content,
+            file_path: params.file_path.clone(),
+        });
 
         let output = match diff_output {
             Some(diff) => format!("{}\n{}", header, diff),
@@ -107,7 +110,7 @@ impl Workslate {
     }
 
     #[tool(
-        description = "Stage an edit. Modes: replace (default), after/before (insert around anchor), append. Targeting: old_string (default, unique), match_index (Nth occurrence), line_start/line_end (line range). Returns unified diff."
+        description = "Stage an edit. With file_path: loads file from disk and edits. Without file_path: edits existing buffer content. Modes: replace (default), after/before (insert around anchor), append. Targeting: old_string (unique), match_index (Nth occurrence), line_start/line_end (line range). Returns unified diff."
     )]
     async fn workslate_edit(
         &self,
@@ -144,64 +147,68 @@ impl Workslate {
             },
         };
 
-        let file_content = match tokio::fs::read_to_string(&params.file_path).await {
-            Ok(c) => c,
-            Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read '{}': {}",
-                    params.file_path, e
-                ))]));
+        let (base_content, stored_file_path) = if let Some(ref file_path) = params.file_path {
+            match tokio::fs::read_to_string(file_path).await {
+                Ok(c) => (c, Some(file_path.clone())),
+                Err(e) => {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Failed to read '{}': {}",
+                        file_path, e
+                    ))]));
+                }
+            }
+        } else {
+            let buffers = self.buffers.read().await;
+            match buffers.get(&params.name) {
+                Some(buf) => (buf.content.clone(), buf.file_path.clone()),
+                None => {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "No buffer '{}' and no file_path provided",
+                        params.name
+                    ))]));
+                }
             }
         };
 
-        let (diff_old, diff_new) = if matches!(mode, EditMode::Append) {
-            diff_texts(
-                &ResolvedTarget {
-                    old_text: String::new(),
-                    byte_start: 0,
-                    byte_end: 0,
-                },
-                &params.new_string,
-                &mode,
-                &file_content,
-            )
+        let diff_header_path = stored_file_path.as_deref().unwrap_or(&params.name);
+
+        let target = if matches!(mode, EditMode::Append) {
+            None
         } else {
-            let target =
-                match resolve_target(&file_content, &old_string, params.match_index, line_range) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        return Ok(CallToolResult::error(vec![Content::text(e)]));
-                    }
-                };
-            diff_texts(&target, &params.new_string, &mode, &file_content)
+            match resolve_target(&base_content, &old_string, params.match_index, line_range) {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    return Ok(CallToolResult::error(vec![Content::text(e)]));
+                }
+            }
         };
+
+        let empty_target = ResolvedTarget {
+            old_text: String::new(),
+            byte_start: 0,
+            byte_end: 0,
+        };
+        let target_ref = target.as_ref().unwrap_or(&empty_target);
+
+        let (diff_old, diff_new) = diff_texts(target_ref, &params.new_string, &mode, &base_content);
+        let result_content = apply_mode(&base_content, target_ref, &params.new_string, &mode);
 
         let diff = TextDiff::from_lines(&diff_old, &diff_new);
         let unified = diff
             .unified_diff()
             .context_radius(3)
             .header(
-                &format!("a/{}", params.file_path),
-                &format!("b/{}", params.file_path),
+                &format!("a/{}", diff_header_path),
+                &format!("b/{}", diff_header_path),
             )
             .to_string();
-
-        let stored_old = if line_range.is_some() {
-            diff_old.clone()
-        } else {
-            old_string
-        };
 
         let mut buffers = self.buffers.write().await;
         buffers.insert(
             params.name.clone(),
-            BufferContent::Edit {
-                file_path: params.file_path,
-                old_string: stored_old,
-                new_string: params.new_string,
-                mode,
-                match_index: params.match_index,
-                line_range,
+            BufferContent {
+                content: result_content,
+                file_path: stored_file_path,
             },
         );
 
@@ -222,42 +229,14 @@ impl Workslate {
             (Some(name), None) => {
                 let buffers = self.buffers.read().await;
                 match buffers.get(name) {
-                    Some(BufferContent::Raw(content)) => {
-                        Ok(CallToolResult::success(vec![Content::text(content.clone())]))
-                    }
-                    Some(BufferContent::Edit {
-                        file_path,
-                        old_string,
-                        new_string,
-                        mode,
-                        match_index,
-                        line_range,
-                    }) => {
-                        let mode_label = match mode {
-                            EditMode::Replace => "edit",
-                            EditMode::After => "edit:after",
-                            EditMode::Before => "edit:before",
-                            EditMode::Append => "edit:append",
+                    Some(buf) => {
+                        let header = match &buf.file_path {
+                            Some(fp) => format!("[target: {}] {} lines", fp, buf.content.lines().count()),
+                            None => format!("{} lines", buf.content.lines().count()),
                         };
-                        let target_label = if let Some((s, e)) = line_range {
-                            format!("@L{}-{}", s, e)
-                        } else if let Some(n) = match_index {
-                            format!("#{}", n)
-                        } else {
-                            String::new()
-                        };
-                        let text = if matches!(mode, EditMode::Append) {
-                            format!(
-                                "[{}] {}\n--- new_string ---\n{}",
-                                mode_label, file_path, new_string
-                            )
-                        } else {
-                            format!(
-                                "[{}{}] {}\n--- old_string ---\n{}\n--- new_string ---\n{}",
-                                mode_label, target_label, file_path, old_string, new_string
-                            )
-                        };
-                        Ok(CallToolResult::success(vec![Content::text(text)]))
+                        Ok(CallToolResult::success(vec![Content::text(
+                            format!("{}\n{}", header, buf.content),
+                        )]))
                     }
                     None => Ok(CallToolResult::error(vec![Content::text(format!(
                         "Buffer '{}' not found",
@@ -368,30 +347,9 @@ impl Workslate {
         let mut lines: Vec<String> = buffers
             .iter()
             .map(|(name, buf)| match buf {
-                BufferContent::Raw(content) => {
-                    format!("{}: raw, {} lines", name, content.lines().count())
-                }
-                BufferContent::Edit {
-                    file_path,
-                    mode,
-                    match_index,
-                    line_range,
-                    ..
-                } => {
-                    let mode_str = match mode {
-                        EditMode::Replace => "edit",
-                        EditMode::After => "edit:after",
-                        EditMode::Before => "edit:before",
-                        EditMode::Append => "edit:append",
-                    };
-                    let target_str = if let Some((s, e)) = line_range {
-                        format!("@L{}-{}", s, e)
-                    } else if let Some(n) = match_index {
-                        format!("#{}", n)
-                    } else {
-                        String::new()
-                    };
-                    format!("{}: {}{} → {}", name, mode_str, target_str, file_path)
+                buf => {
+                    let fp = buf.file_path.as_deref().unwrap_or("(no target)");
+                    format!("{}: {} lines → {}", name, buf.content.lines().count(), fp)
                 }
             })
             .collect();
@@ -402,7 +360,7 @@ impl Workslate {
     }
 
     #[tool(
-        description = "Show unified diff. For edit buffers, no additional args needed. For raw buffers, file_path is required and old_string is optional."
+        description = "Show unified diff of buffer content against file on disk. file_path falls back to stored target. old_string for partial diff."
     )]
     async fn workslate_diff(
         &self,
@@ -420,94 +378,19 @@ impl Workslate {
         };
         drop(buffers);
 
-        match buffer {
-            BufferContent::Edit {
-                file_path,
-                old_string,
-                new_string,
-                mode,
-                match_index,
-                line_range,
-            } => {
-                let file_content = match tokio::fs::read_to_string(&file_path).await {
-                    Ok(c) => c,
-                    Err(e) => {
-                        return Ok(CallToolResult::error(vec![Content::text(format!(
-                            "Failed to read '{}': {}",
-                            file_path, e
-                        ))]));
-                    }
-                };
-
-                let (diff_old, diff_new) = if matches!(mode, EditMode::Append) {
-                    diff_texts(
-                        &ResolvedTarget {
-                            old_text: String::new(),
-                            byte_start: 0,
-                            byte_end: 0,
-                        },
-                        &new_string,
-                        &mode,
-                        &file_content,
-                    )
-                } else {
-                    let target = match resolve_target(
-                        &file_content,
-                        &old_string,
-                        match_index,
-                        line_range,
-                    ) {
-                        Ok(t) => t,
-                        Err(e) => {
-                            return Ok(CallToolResult::error(vec![Content::text(format!(
-                                "{} (file may have changed)",
-                                e
-                            ))]));
-                        }
-                    };
-                    diff_texts(&target, &new_string, &mode, &file_content)
-                };
-
-                let diff = TextDiff::from_lines(&diff_old, &diff_new);
-                let unified = diff
-                    .unified_diff()
-                    .context_radius(3)
-                    .header(
-                        &format!("a/{}", file_path),
-                        &format!("b/{}", file_path),
-                    )
-                    .to_string();
-
-                if unified.is_empty() {
-                    Ok(CallToolResult::success(vec![Content::text(
-                        "No differences",
-                    )]))
-                } else {
-                    Ok(CallToolResult::success(vec![Content::text(unified)]))
-                }
+        let file_path = match params.file_path.or(buffer.file_path) {
+            Some(fp) => fp,
+            None => {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "file_path required (buffer has no stored target)".to_string(),
+                )]));
             }
-            BufferContent::Raw(content) => {
-                let file_path = match params.file_path {
-                    Some(fp) => fp,
-                    None => {
-                        return Ok(CallToolResult::error(vec![Content::text(
-                            "file_path is required for raw buffers".to_string(),
-                        )]));
-                    }
-                };
+        };
 
-                let file_content = match tokio::fs::read_to_string(&file_path).await {
-                    Ok(c) => c,
-                    Err(e) => {
-                        return Ok(CallToolResult::error(vec![Content::text(format!(
-                            "Failed to read '{}': {}",
-                            file_path, e
-                        ))]));
-                    }
-                };
-
+        match tokio::fs::read_to_string(&file_path).await {
+            Ok(file_content) => {
                 let old_text = if let Some(ref old_string) = params.old_string {
-                    let matches: Vec<_> = file_content.match_indices(old_string).collect();
+                    let matches: Vec<_> = file_content.match_indices(old_string.as_str()).collect();
                     if matches.is_empty() {
                         return Ok(CallToolResult::error(vec![Content::text(
                             "old_string not found in file".to_string(),
@@ -524,7 +407,7 @@ impl Workslate {
                     file_content.clone()
                 };
 
-                let diff = TextDiff::from_lines(&old_text, &content);
+                let diff = TextDiff::from_lines(&old_text, &buffer.content);
                 let unified = diff
                     .unified_diff()
                     .context_radius(3)
@@ -542,11 +425,30 @@ impl Workslate {
                     Ok(CallToolResult::success(vec![Content::text(unified)]))
                 }
             }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let line_count = buffer.content.lines().count();
+                let width = line_count.max(1).to_string().len();
+                let numbered: Vec<String> = buffer
+                    .content
+                    .lines()
+                    .enumerate()
+                    .map(|(i, line)| format_numbered_line(i + 1, width, line, false))
+                    .collect();
+                Ok(CallToolResult::success(vec![Content::text(format!(
+                    "(new file: {})\n{}",
+                    file_path,
+                    numbered.join("\n")
+                ))]))
+            }
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Failed to read '{}': {}",
+                file_path, e
+            ))])),
         }
     }
 
     #[tool(
-        description = "Apply a buffer to a file. Edit buffers need no additional args. Raw buffers require file_path; old_string is optional for partial replacement."
+        description = "Apply buffer content to file. file_path falls back to stored target. old_string for partial replacement."
     )]
     async fn workslate_apply(
         &self,
@@ -564,139 +466,76 @@ impl Workslate {
         };
         drop(buffers);
 
-        match buffer {
-            BufferContent::Edit {
-                file_path,
-                old_string,
-                new_string,
-                mode,
-                match_index,
-                line_range,
-            } => {
-                let file_content = match tokio::fs::read_to_string(&file_path).await {
-                    Ok(c) => c,
-                    Err(e) => {
-                        return Ok(CallToolResult::error(vec![Content::text(format!(
-                            "Failed to read '{}': {}",
-                            file_path, e
-                        ))]));
-                    }
-                };
+        let file_path = match params.file_path.or(buffer.file_path) {
+            Some(fp) => fp,
+            None => {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "file_path required (buffer has no stored target)".to_string(),
+                )]));
+            }
+        };
 
-                let result = if matches!(mode, EditMode::Append) {
-                    apply_mode(
-                        &file_content,
-                        &ResolvedTarget {
-                            old_text: String::new(),
-                            byte_start: 0,
-                            byte_end: 0,
-                        },
-                        &new_string,
-                        &mode,
-                    )
-                } else {
-                    let target = match resolve_target(
-                        &file_content,
-                        &old_string,
-                        match_index,
-                        line_range,
-                    ) {
-                        Ok(t) => t,
-                        Err(e) => {
-                            return Ok(CallToolResult::error(vec![Content::text(format!(
-                                "{} (file may have changed)",
-                                e
-                            ))]));
-                        }
-                    };
-                    apply_mode(&file_content, &target, &new_string, &mode)
-                };
-
-                if let Err(e) = tokio::fs::write(&file_path, &result).await {
+        if let Some(ref old_string) = params.old_string {
+            let file_content = match tokio::fs::read_to_string(&file_path).await {
+                Ok(c) => c,
+                Err(e) => {
                     return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "Failed to write '{}': {}",
+                        "Failed to read '{}': {}",
                         file_path, e
                     ))]));
                 }
+            };
 
-                Ok(CallToolResult::success(vec![Content::text(format!(
-                    "Applied edit '{}' to '{}'",
-                    params.name, file_path
-                ))]))
+            let matches: Vec<_> =
+                file_content.match_indices(old_string.as_str()).collect();
+            if matches.is_empty() {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "old_string not found in file".to_string(),
+                )]));
             }
-            BufferContent::Raw(content) => {
-                let file_path = match params.file_path {
-                    Some(fp) => fp,
-                    None => {
-                        return Ok(CallToolResult::error(vec![Content::text(
-                            "file_path is required for raw buffers".to_string(),
-                        )]));
-                    }
-                };
+            if matches.len() > 1 {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "old_string appears {} times in file (must be unique)",
+                    matches.len()
+                ))]));
+            }
 
-                if let Some(ref old_string) = params.old_string {
-                    let file_content = match tokio::fs::read_to_string(&file_path).await {
-                        Ok(c) => c,
-                        Err(e) => {
-                            return Ok(CallToolResult::error(vec![Content::text(format!(
-                                "Failed to read '{}': {}",
-                                file_path, e
-                            ))]));
-                        }
-                    };
+            let new_content = file_content.replacen(old_string.as_str(), &buffer.content, 1);
+            if let Err(e) = tokio::fs::write(&file_path, &new_content).await {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to write '{}': {}",
+                    file_path, e
+                ))]));
+            }
 
-                    let matches: Vec<_> =
-                        file_content.match_indices(old_string.as_str()).collect();
-                    if matches.is_empty() {
-                        return Ok(CallToolResult::error(vec![Content::text(
-                            "old_string not found in file".to_string(),
-                        )]));
-                    }
-                    if matches.len() > 1 {
+            Ok(CallToolResult::success(vec![Content::text(format!(
+                "Applied buffer '{}' to section in '{}'",
+                params.name, file_path
+            ))]))
+        } else {
+            if let Some(parent) = std::path::Path::new(&file_path).parent() {
+                if !parent.exists() {
+                    if let Err(e) = tokio::fs::create_dir_all(parent).await {
                         return Ok(CallToolResult::error(vec![Content::text(format!(
-                            "old_string appears {} times in file (must be unique)",
-                            matches.len()
+                            "Failed to create directory '{}': {}",
+                            parent.display(),
+                            e
                         ))]));
                     }
-
-                    let new_content = file_content.replacen(old_string.as_str(), &content, 1);
-                    if let Err(e) = tokio::fs::write(&file_path, &new_content).await {
-                        return Ok(CallToolResult::error(vec![Content::text(format!(
-                            "Failed to write '{}': {}",
-                            file_path, e
-                        ))]));
-                    }
-
-                    Ok(CallToolResult::success(vec![Content::text(format!(
-                        "Applied buffer '{}' to section in '{}'",
-                        params.name, file_path
-                    ))]))
-                } else {
-                    if let Some(parent) = std::path::Path::new(&file_path).parent() {
-                        if !parent.exists() {
-                            if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                                return Ok(CallToolResult::error(vec![Content::text(format!(
-                                    "Failed to create directory '{}': {}",
-                                    parent.display(),
-                                    e
-                                ))]));
-                            }
-                        }
-                    }
-
-                    if let Err(e) = tokio::fs::write(&file_path, &content).await {
-                        return Ok(CallToolResult::error(vec![Content::text(format!(
-                            "Failed to write '{}': {}",
-                            file_path, e
-                        ))]));
-                    }
-
-                    Ok(CallToolResult::success(vec![Content::text(format!(
-                        "Wrote buffer '{}' to '{}'",
-                        params.name, file_path
-                    ))]))
                 }
             }
+
+            if let Err(e) = tokio::fs::write(&file_path, &buffer.content).await {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to write '{}': {}",
+                    file_path, e
+                ))]));
+            }
+
+            Ok(CallToolResult::success(vec![Content::text(format!(
+                "Wrote buffer '{}' to '{}'",
+                params.name, file_path
+            ))]))
         }
     }
 
@@ -1180,7 +1019,8 @@ impl ServerHandler for Workslate {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
             "In-memory named buffers for drafting code before applying to files. \
-             Use workslate_edit for staged old→new replacements, workslate_write for raw content. \
+             workslate_edit with file_path loads from disk and edits; without file_path edits buffer content. \
+             workslate_write stores raw content. workslate_apply writes buffer to disk. \
              Use workslate_read with file_path to view files with line numbers. \
              Use workslate_search to find patterns and get line numbers for workslate_edit. \
              Persistent project-scoped task tracking across sessions. \
@@ -1193,8 +1033,20 @@ impl ServerHandler for Workslate {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let tool_name = request.name.to_string();
         let tcc = ToolCallContext::new(self, request, context);
         let mut result = self.tool_router.call(tcc).await?;
+
+        if matches!(tool_name.as_str(), "workslate_write" | "workslate_edit") {
+            let session = self.active_session.read().await;
+            if session.is_none() {
+                result.content.push(Content::text(
+                    "\n⚠ No task session active. For multi-step work, call workslate_task_init first."
+                        .to_string(),
+                ));
+            }
+        }
+
         self.append_task_footer(&mut result).await;
         Ok(result)
     }
