@@ -22,6 +22,10 @@ install: build
 		echo $$dest >> $(MANIFEST); \
 	done
 	cp target/release/workslate $(BIN_DIR)/workslate
+	@if [ "$$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then \
+		codesign --force --sign - $(BIN_DIR)/workslate 2>/dev/null && \
+			echo "  Code signed (ad-hoc) for macOS compatibility." || true; \
+	fi
 	@echo $(BIN_DIR)/workslate >> $(MANIFEST)
 	@if command -v claude >/dev/null 2>&1; then \
 		echo "Registering workslate MCP server..."; \

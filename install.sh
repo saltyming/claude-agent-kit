@@ -98,6 +98,10 @@ download "$RELEASE_URL" "$TMP/workslate.tar.gz"
 tar xzf "$TMP/workslate.tar.gz" -C "$TMP"
 cp "$TMP/workslate" "$BIN_DIR/workslate"
 chmod +x "$BIN_DIR/workslate"
+if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
+    codesign --force --sign - "$BIN_DIR/workslate" 2>/dev/null && \
+        echo "  Code signed (ad-hoc) for macOS compatibility." || true
+fi
 echo "$BIN_DIR/workslate" >> "$MANIFEST"
 rm -rf "$TMP"
 

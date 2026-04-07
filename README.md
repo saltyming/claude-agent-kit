@@ -83,7 +83,7 @@ irm https://raw.githubusercontent.com/saltyming/claude-agent-kit/main/install.ps
 irm https://raw.githubusercontent.com/saltyming/claude-agent-kit/main/install.ps1 -OutFile install.ps1; .\install.ps1 -Uninstall
 ```
 
-Downloads the pre-built workslate binary from GitHub Releases, `CLAUDE.md`, and rule files. No Rust toolchain required. The installer automatically registers the workslate MCP server with Claude Code (if `claude` CLI is available). If `~/.local/bin` is not in your PATH, the installer will print instructions to add it.
+Downloads the pre-built workslate binary from GitHub Releases, `CLAUDE.md`, and rule files. No Rust toolchain required. On macOS, the installer automatically re-signs the binary with `codesign` to prevent endpoint security software (e.g. Kaspersky) from blocking it. The installer also registers the workslate MCP server with Claude Code (if `claude` CLI is available). If `~/.local/bin` is not in your PATH, the installer will print instructions to add it.
 
 ### From source (requires Rust)
 
@@ -93,7 +93,7 @@ cd claude-agent-kit
 make install
 ```
 
-This builds the workslate binary, copies `CLAUDE.md` to `~/.claude/`, rule files to `~/.claude/rules/`, and the binary to `~/.local/bin/`. A manifest is written to `~/.claude/.claude-agent-kit-manifest` for safe uninstall.
+This builds the workslate binary, copies `CLAUDE.md` to `~/.claude/`, rule files to `~/.claude/rules/`, and the binary to `~/.local/bin/`. On macOS, the binary is re-signed with `codesign` for endpoint security compatibility. A manifest is written to `~/.claude/.claude-agent-kit-manifest` for safe uninstall.
 
 ```bash
 make uninstall    # only removes files it installed (verified by signature)
@@ -117,6 +117,8 @@ cp claude-rules/*.md your-project/.claude/rules/
 # Workslate binary
 cargo build --release -p workslate
 cp target/release/workslate ~/.local/bin/
+# macOS: re-sign to avoid endpoint security (Kaspersky, etc.) blocking
+codesign --force --sign - ~/.local/bin/workslate
 ```
 
 ## Background
