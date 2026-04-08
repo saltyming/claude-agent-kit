@@ -63,7 +63,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools
           if [[ "${{ matrix.target }}" == "aarch64"* ]]; then
-            sudo apt-get install -y gcc-aarch64-linux-gnu musl-dev
+            wget -qO- https://musl.cc/aarch64-linux-musl-cross.tgz | sudo tar xz -C /opt
+            echo "/opt/aarch64-linux-musl-cross/bin" >> "$GITHUB_PATH"
           fi
 
       - name: Configure linker (Linux cross)
@@ -77,11 +78,12 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-musl'
         run: |
           mkdir -p .cargo
-          echo '[target.aarch64-unknown-linux-musl]' >> .cargo/config.toml
-          echo 'linker = "aarch64-linux-gnu-gcc"' >> .cargo/config.toml
+          printf '[target.aarch64-unknown-linux-musl]\nlinker = "aarch64-linux-musl-gcc"\n' >> .cargo/config.toml
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }} -p workslate
+        env:
+          CC_aarch64_unknown_linux_musl: ${{ matrix.target == 'aarch64-unknown-linux-musl' && 'aarch64-linux-musl-gcc' || '' }}
 
       - name: Package (unix)
         if: runner.os != 'Windows'
