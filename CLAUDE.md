@@ -1,7 +1,7 @@
 <!-- claude-agent-kit -->
 # Claude Agent Operating Manual
 
-**Version**: 8.1.1
+**Version**: 8.2
 **Last Updated**: 2026-04-08
 
 > Global operating rules for AI coding agents. Focuses on user-specific preferences and overrides — general tool usage, security, and communication rules are handled by the system prompt.
@@ -108,6 +108,7 @@ User Request
 ---
 
 **Version History:**
+- v8.2 (2026-04-09): SQLite buffer persistence (survives restarts), same-file collision guard (one buffer per file enforced), edit tool signatures in docs, search regex? clarification
 - v8.1.1 (2026-04-08): Clarify regex option in workslate_search — tool description, task-execution rules, and decision tree now include `regex?` parameter
 - v8.1 (2026-04-08): Security + stability — project root path guard (file ops restricted to cwd), mutex poison safety (no more panics), task_create transaction (fixes next_id race), is_binary/resolve_target edge cases, owner empty→None reset, recompute error logging, Windows HOME fallback
 - v8.0.1 (2026-04-08): Unify task tools — teammates use `workslate_task_*` (team: namespace) instead of built-in TaskCreate/TaskUpdate, consistent with SQLite WAL concurrency model

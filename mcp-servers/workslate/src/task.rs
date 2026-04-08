@@ -400,4 +400,12 @@ CREATE TABLE IF NOT EXISTS task_counters (
     next_id   INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (session, namespace)
 );
+
+CREATE TABLE IF NOT EXISTS buffers (
+    name       TEXT PRIMARY KEY,
+    content    TEXT    NOT NULL,
+    file_path  TEXT,
+    depends_on TEXT    NOT NULL DEFAULT '[]',
+    updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
+);
 ";

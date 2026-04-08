@@ -17,6 +17,7 @@ use rmcp::{
     service::RequestContext,
     tool, tool_router,
 };
+use serde_json;
 use similar::{DiffOp, TextDiff};
 use tokio::sync::RwLock;
 
@@ -60,7 +61,7 @@ impl Workslate {
 
     // ── Buffer tools ──────────────────────────────────────
 
-    #[tool(description = "Store content in a named raw buffer. If file_path is provided, returns the unified diff against that file for review.")]
+    #[tool(description = "Store content in a named raw buffer. If file_path is provided, returns the unified diff against that file for review. One buffer per file enforced — use a single buffer and chain edits. Buffers persist across server restarts.")]
     async fn workslate_write(
         &self,
         Parameters(params): Parameters<WriteParams>,
@@ -71,6 +72,9 @@ impl Workslate {
         let diff_output = if let Some(ref file_path) = params.file_path {
             if let Err(e) = validate_path(file_path, &self.project_root) {
                 return Ok(CallToolResult::error(vec![Content::text(e)]));
+            }
+            if let Some(err) = self.check_file_collision(&params.name, file_path).await {
+                return Ok(err);
             }
             match tokio::fs::read_to_string(file_path).await {
                 Ok(file_content) => {
@@ -105,11 +109,13 @@ impl Workslate {
         };
 
         let mut buffers = self.buffers.write().await;
-        buffers.insert(params.name.clone(), BufferContent {
+        let buf = BufferContent {
             content: params.content,
             file_path: params.file_path.clone(),
             depends_on: params.depends_on.unwrap_or_default(),
-        });
+        };
+        self.save_buffer(&params.name, &buf);
+        buffers.insert(params.name.clone(), buf);
 
         let output = match diff_output {
             Some(diff) => format!("{}\n{}", header, diff),
@@ -119,7 +125,7 @@ impl Workslate {
     }
 
     #[tool(
-        description = "Stage an edit. With file_path: loads file from disk and edits. Without file_path: edits existing buffer content. Modes: replace (default), after/before (insert around anchor), append. Targeting: old_string (unique), match_index (Nth occurrence), line_start/line_end (line range). Returns unified diff."
+        description = "Stage an edit. With file_path: loads file from disk and edits (one buffer per file enforced). Without file_path: edits existing buffer content. Modes: replace (default), after/before (insert around anchor), append. Targeting: old_string (unique), match_index (Nth occurrence), line_start/line_end (line range). Returns unified diff."
     )]
     async fn workslate_edit(
         &self,
@@ -159,6 +165,9 @@ impl Workslate {
         let (base_content, stored_file_path, stored_depends_on) = if let Some(ref file_path) = params.file_path {
             if let Err(e) = validate_path(file_path, &self.project_root) {
                 return Ok(CallToolResult::error(vec![Content::text(e)]));
+            }
+            if let Some(err) = self.check_file_collision(&params.name, file_path).await {
+                return Ok(err);
             }
             match tokio::fs::read_to_string(file_path).await {
                 Ok(c) => (c, Some(file_path.clone()), vec![]),
@@ -216,14 +225,13 @@ impl Workslate {
             .to_string();
 
         let mut buffers = self.buffers.write().await;
-        buffers.insert(
-            params.name.clone(),
-            BufferContent {
-                content: result_content,
-                file_path: stored_file_path,
-                depends_on: stored_depends_on,
-            },
-        );
+        let buf = BufferContent {
+            content: result_content,
+            file_path: stored_file_path,
+            depends_on: stored_depends_on,
+        };
+        self.save_buffer(&params.name, &buf);
+        buffers.insert(params.name.clone(), buf);
 
         let output = if unified.is_empty() {
             format!("Edit '{}' staged (no differences)", params.name)
@@ -589,6 +597,7 @@ impl Workslate {
             }
 
             self.applied_buffers.write().await.insert(params.name.clone());
+            self.delete_buffer(&params.name);
 
             Ok(CallToolResult::success(vec![Content::text(format!(
                 "Applied buffer '{}' to section in '{}'",
@@ -628,6 +637,7 @@ impl Workslate {
             }
 
             self.applied_buffers.write().await.insert(params.name.clone());
+            self.delete_buffer(&params.name);
 
             Ok(CallToolResult::success(vec![Content::text(format!(
                 "Wrote buffer '{}' to '{}'",
@@ -645,6 +655,7 @@ impl Workslate {
         if let Some(ref name) = params.name {
             if buffers.remove(name).is_some() {
                 self.applied_buffers.write().await.remove(name);
+                self.delete_buffer(name);
                 Ok(CallToolResult::success(vec![Content::text(format!(
                     "Buffer '{}' cleared",
                     name
@@ -659,6 +670,7 @@ impl Workslate {
             let count = buffers.len();
             buffers.clear();
             self.applied_buffers.write().await.clear();
+            self.delete_all_buffers();
             Ok(CallToolResult::success(vec![Content::text(format!(
                 "Cleared {} buffer(s)",
                 count
@@ -1182,6 +1194,72 @@ impl Workslate {
 // ── Task helpers ──────────────────────────────────────────
 
 impl Workslate {
+    async fn check_file_collision(&self, name: &str, file_path: &str) -> Option<CallToolResult> {
+        let buffers = self.buffers.read().await;
+        for (existing_name, buf) in buffers.iter() {
+            if existing_name != name {
+                if let Some(ref fp) = buf.file_path {
+                    if fp == file_path {
+                        return Some(CallToolResult::error(vec![Content::text(format!(
+                            "File '{}' is already targeted by buffer '{}'. Use that buffer or clear it first.",
+                            file_path, existing_name
+                        ))]));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn save_buffer(&self, name: &str, buf: &BufferContent) {
+        if let Ok(conn) = self.db.lock() {
+            let deps_json = serde_json::to_string(&buf.depends_on).unwrap_or_else(|_| "[]".to_string());
+            conn.execute(
+                "INSERT OR REPLACE INTO buffers (name, content, file_path, depends_on, updated_at) VALUES (?, ?, ?, ?, datetime('now'))",
+                rusqlite::params![name, buf.content, buf.file_path, deps_json],
+            ).ok();
+        }
+    }
+
+    fn delete_buffer(&self, name: &str) {
+        if let Ok(conn) = self.db.lock() {
+            conn.execute("DELETE FROM buffers WHERE name = ?", rusqlite::params![name]).ok();
+        }
+    }
+
+    fn delete_all_buffers(&self) {
+        if let Ok(conn) = self.db.lock() {
+            conn.execute("DELETE FROM buffers", []).ok();
+        }
+    }
+
+    fn load_buffers_from_db(&self) -> HashMap<String, BufferContent> {
+        let mut map = HashMap::new();
+        let conn = match self.db.lock() {
+            Ok(c) => c,
+            Err(_) => return map,
+        };
+        let mut stmt = match conn.prepare("SELECT name, content, file_path, depends_on FROM buffers") {
+            Ok(s) => s,
+            Err(_) => return map,
+        };
+        let rows = match stmt.query_map([], |row| {
+            let name: String = row.get(0)?;
+            let content: String = row.get(1)?;
+            let file_path: Option<String> = row.get(2)?;
+            let deps_json: String = row.get(3)?;
+            let depends_on: Vec<String> = serde_json::from_str(&deps_json).unwrap_or_default();
+            Ok((name, BufferContent { content, file_path, depends_on }))
+        }) {
+            Ok(r) => r,
+            Err(_) => return map,
+        };
+        for row in rows.flatten() {
+            map.insert(row.0, row.1);
+        }
+        map
+    }
+
     fn lock_db(&self) -> Result<std::sync::MutexGuard<'_, rusqlite::Connection>, CallToolResult> {
         self.db.lock().map_err(|e| {
             CallToolResult::error(vec![Content::text(format!("Database lock poisoned: {}", e))])
@@ -1312,6 +1390,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let project_root = cwd.canonicalize()?;
     let server = Workslate::new(conn, tasks_dir, project_root);
+    {
+        let restored = server.load_buffers_from_db();
+        if !restored.is_empty() {
+            tracing::info!("Restored {} buffer(s) from SQLite", restored.len());
+            let mut buffers = server.buffers.blocking_write();
+            *buffers = restored;
+        }
+    }
     let transport = rmcp::transport::io::stdio();
     let running = server.serve(transport).await?;
     running.waiting().await?;

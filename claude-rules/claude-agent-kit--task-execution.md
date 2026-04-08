@@ -98,11 +98,13 @@ Three staging modes exist — all return the diff for review:
 
 | Tool | Use case |
 |------|----------|
-| `workslate_edit(name, file_path, old, new)` | Load file from disk + edit (creates/overwrites buffer) |
+| `workslate_edit(name, file_path, old, new, position?, match_index?, line_start?, line_end?)` | Load file from disk + edit (creates/overwrites buffer) |
 | `workslate_edit(name, old, new)` | Edit existing buffer content (no file_path = buffer mode) |
-| `workslate_write(name, content, file_path)` | Full file creation/rewrite (new files show full content with line numbers) |
+| `workslate_write(name, content, file_path, depends_on?)` | Full file creation/rewrite (new files show full content with line numbers) |
 
 `file_path` is the disambiguator: present = load from disk, absent = edit buffer.
+
+**One buffer per file.** The server enforces this: creating a second buffer targeting the same file returns an error. Use a single buffer and chain edits, or clear the old buffer first. Buffers persist in SQLite and survive server restarts.
 
 Two read tools support the staging workflow:
 
