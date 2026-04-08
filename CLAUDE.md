@@ -83,7 +83,7 @@ User Request
 │  │  └─ workslate_task_init + create tasks (FIRST)
 │  ├─ Read all relevant files
 │  │  ├─ Need line numbers? → workslate_read(file_path) or workslate_read(file_path, start_line, end_line)
-│  │  └─ Need to find a symbol? → workslate_search(file_path, pattern) → get line numbers from Summary
+│  │  └─ Need to find a symbol? → workslate_search(file_path, pattern, regex?) → get line numbers from Summary
 │  ├─ Create task document
 │  ├─ Get approval
 │  ├─ Trivial? (single-line, import, string literal, rename)

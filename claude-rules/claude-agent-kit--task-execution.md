@@ -109,7 +109,7 @@ Two read tools support the staging workflow:
 | Tool | Use case |
 |------|----------|
 | `workslate_read(file_path)` | Read a file from disk with line numbers — use to get precise line coordinates before editing |
-| `workslate_search(file_path, pattern)` | Find patterns (substring or regex) and return matches with line numbers and context |
+| `workslate_search(file_path, pattern, regex?, context?)` | Find patterns and return matches with line numbers. Plain substring by default; use `regex=true` for regex (e.g. `FOO\|BAR`) |
 
 **Typical precision-edit workflow:**
 1. `workslate_search(file_path, "fn target_function")` — find the function, get line numbers from Summary

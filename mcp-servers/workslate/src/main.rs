@@ -668,7 +668,7 @@ impl Workslate {
 
     // ── Search tool ──────────────────────────────────────
 
-    #[tool(description = "Search a file for a pattern and return matches with line numbers. Use the Summary line numbers with workslate_edit's line_start/line_end for precise edits.")]
+    #[tool(description = "Search a file for a pattern and return matches with line numbers. Plain substring match by default; set regex=true for regex (e.g. 'FOO|BAR', 'fn\\s+\\w+'). Use the Summary line numbers with workslate_edit's line_start/line_end for precise edits.")]
     async fn workslate_search(
         &self,
         Parameters(params): Parameters<SearchParams>,
