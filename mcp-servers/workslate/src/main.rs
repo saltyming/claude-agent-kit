@@ -1383,7 +1383,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .join("workslate");
     tokio::fs::create_dir_all(&tasks_dir).await?;
 
-    let db_path = tasks_dir.join("workslate-tasks.db");
+    let old_db_path = tasks_dir.join("workslate-tasks.db");
+    let db_path = tasks_dir.join("workslate.db");
+    if old_db_path.exists() && !db_path.exists() {
+        std::fs::rename(&old_db_path, &db_path).ok();
+    }
     let conn = rusqlite::Connection::open(&db_path)?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")?;
     conn.execute_batch(SCHEMA_SQL)?;
