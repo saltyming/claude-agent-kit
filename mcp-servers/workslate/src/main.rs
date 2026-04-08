@@ -24,7 +24,7 @@ use buffer::{
     ApplyParams, BufferContent, ClearParams, DiffParams, EditBufferParams, EditMode, ReadParams,
     ResolvedTarget, SearchParams, WriteParams, apply_mode, diff_texts, resolve_target,
 };
-use file::{MAX_FILE_SIZE, format_numbered_line, is_binary};
+use file::{MAX_FILE_SIZE, format_numbered_line, is_binary, validate_path};
 use task::{
     Namespace, TaskClearParams, TaskCreateParams, TaskDoneParams, TaskId, TaskInitParams,
     TaskListParams, TaskStatus, TaskUpdateParams, load_tasks,
@@ -39,18 +39,20 @@ struct Workslate {
     applied_buffers: Arc<RwLock<HashSet<String>>>,
     db: Arc<StdMutex<rusqlite::Connection>>,
     tasks_dir: PathBuf,
+    project_root: PathBuf,
     active_session: Arc<RwLock<Option<String>>>,
     tool_router: ToolRouter<Self>,
 }
 
 #[tool_router]
 impl Workslate {
-    fn new(db: rusqlite::Connection, tasks_dir: PathBuf) -> Self {
+    fn new(db: rusqlite::Connection, tasks_dir: PathBuf, project_root: PathBuf) -> Self {
         Self {
             buffers: Arc::new(RwLock::new(HashMap::new())),
             applied_buffers: Arc::new(RwLock::new(HashSet::new())),
             db: Arc::new(StdMutex::new(db)),
             tasks_dir,
+            project_root,
             active_session: Arc::new(RwLock::new(None)),
             tool_router: Self::tool_router(),
         }
@@ -67,6 +69,9 @@ impl Workslate {
         let header = format!("Buffer '{}' written ({} lines)", params.name, line_count);
 
         let diff_output = if let Some(ref file_path) = params.file_path {
+            if let Err(e) = validate_path(file_path, &self.project_root) {
+                return Ok(CallToolResult::error(vec![Content::text(e)]));
+            }
             match tokio::fs::read_to_string(file_path).await {
                 Ok(file_content) => {
                     let diff = TextDiff::from_lines(&file_content, &params.content);
@@ -152,6 +157,9 @@ impl Workslate {
         };
 
         let (base_content, stored_file_path, stored_depends_on) = if let Some(ref file_path) = params.file_path {
+            if let Err(e) = validate_path(file_path, &self.project_root) {
+                return Ok(CallToolResult::error(vec![Content::text(e)]));
+            }
             match tokio::fs::read_to_string(file_path).await {
                 Ok(c) => (c, Some(file_path.clone()), vec![]),
                 Err(e) => {
@@ -250,6 +258,9 @@ impl Workslate {
                 }
             }
             (None, Some(file_path)) => {
+                if let Err(e) = validate_path(file_path, &self.project_root) {
+                    return Ok(CallToolResult::error(vec![Content::text(e)]));
+                }
                 let metadata = match tokio::fs::metadata(file_path).await {
                     Ok(m) => m,
                     Err(e) => {
@@ -351,11 +362,9 @@ impl Workslate {
         }
         let mut lines: Vec<String> = buffers
             .iter()
-            .map(|(name, buf)| match buf {
-                buf => {
-                    let fp = buf.file_path.as_deref().unwrap_or("(no target)");
-                    format!("{}: {} lines → {}", name, buf.content.lines().count(), fp)
-                }
+            .map(|(name, buf)| {
+                let fp = buf.file_path.as_deref().unwrap_or("(no target)");
+                format!("{}: {} lines → {}", name, buf.content.lines().count(), fp)
             })
             .collect();
         lines.sort();
@@ -392,6 +401,9 @@ impl Workslate {
             }
         };
 
+        if let Err(e) = validate_path(&file_path, &self.project_root) {
+            return Ok(CallToolResult::error(vec![Content::text(e)]));
+        }
         match tokio::fs::read_to_string(&file_path).await {
             Ok(file_content) => {
                 let old_text = if let Some(ref old_string) = params.old_string {
@@ -501,6 +513,13 @@ impl Workslate {
             }
         };
         drop(buffers);
+
+        let apply_file_path = params.file_path.as_deref().or(buffer.file_path.as_deref());
+        if let Some(fp) = apply_file_path {
+            if let Err(e) = validate_path(fp, &self.project_root) {
+                return Ok(CallToolResult::error(vec![Content::text(e)]));
+            }
+        }
 
         if !buffer.depends_on.is_empty() {
             let applied = self.applied_buffers.read().await;
@@ -656,6 +675,9 @@ impl Workslate {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         const MAX_MATCHES: usize = 50;
 
+        if let Err(e) = validate_path(&params.file_path, &self.project_root) {
+            return Ok(CallToolResult::error(vec![Content::text(e)]));
+        }
         let metadata = match tokio::fs::metadata(&params.file_path).await {
             Ok(m) => m,
             Err(e) => {
@@ -817,7 +839,9 @@ impl Workslate {
             vec![]
         };
 
-        let conn = self.db.lock().unwrap();
+        let conn = match self.lock_db() { Ok(c) => c, Err(e) => return Ok(e) };
+
+        conn.execute_batch("BEGIN").ok();
 
         for dep in &deps {
             let exists: bool = conn.query_row(
@@ -855,7 +879,11 @@ impl Workslate {
             rusqlite::params![id + 1, session, ns.as_str()],
         ).ok();
 
-        recompute_blocked_status(&conn, &session).ok();
+        conn.execute_batch("COMMIT").ok();
+
+        if let Err(e) = recompute_blocked_status(&conn, &session) {
+            tracing::warn!("Failed to recompute blocked status: {}", e);
+        }
 
         let task_id = TaskId { namespace: ns, id };
         Ok(CallToolResult::success(vec![Content::text(format!(
@@ -875,7 +903,7 @@ impl Workslate {
             Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
         };
 
-        let conn = self.db.lock().unwrap();
+        let conn = match self.lock_db() { Ok(c) => c, Err(e) => return Ok(e) };
         let affected = conn.execute(
             "UPDATE tasks SET status = 'done', updated_at = datetime('now') WHERE session = ? AND namespace = ? AND id = ?",
             rusqlite::params![session, tid.namespace.as_str(), tid.id],
@@ -893,7 +921,9 @@ impl Workslate {
             |row| row.get(0),
         ).unwrap_or_default();
 
-        recompute_blocked_status(&conn, &session).ok();
+        if let Err(e) = recompute_blocked_status(&conn, &session) {
+            tracing::warn!("Failed to recompute blocked status: {}", e);
+        }
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Task {} done: {}", tid, name
@@ -920,7 +950,7 @@ impl Workslate {
             }
         }
 
-        let conn = self.db.lock().unwrap();
+        let conn = match self.lock_db() { Ok(c) => c, Err(e) => return Ok(e) };
 
         let (cur_status, cur_desc, cur_owner): (String, Option<String>, Option<String>) = match conn.query_row(
             "SELECT status, description, owner FROM tasks WHERE session = ? AND namespace = ? AND id = ?",
@@ -940,14 +970,20 @@ impl Workslate {
 
         let new_status = params.status.unwrap_or(cur_status);
         let new_desc = params.description.or(cur_desc);
-        let new_owner = params.owner.or(cur_owner);
+        let new_owner = match params.owner {
+            Some(ref o) if o.is_empty() => None,
+            Some(o) => Some(o),
+            None => cur_owner,
+        };
 
         conn.execute(
             "UPDATE tasks SET status = ?, description = ?, owner = ?, updated_at = datetime('now') WHERE session = ? AND namespace = ? AND id = ?",
             rusqlite::params![new_status, new_desc, new_owner, session, tid.namespace.as_str(), tid.id],
         ).map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
-        recompute_blocked_status(&conn, &session).ok();
+        if let Err(e) = recompute_blocked_status(&conn, &session) {
+            tracing::warn!("Failed to recompute blocked status: {}", e);
+        }
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Task {} updated", tid
@@ -962,7 +998,7 @@ impl Workslate {
         if let Err(e) = self.require_session().await { return Ok(e); }
         let session = self.active_session.read().await.clone().unwrap();
 
-        let conn = self.db.lock().unwrap();
+        let conn = match self.lock_db() { Ok(c) => c, Err(e) => return Ok(e) };
         let tasks = load_tasks(&conn, &session, params.namespace.as_deref())
             .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
@@ -1005,7 +1041,7 @@ impl Workslate {
         if let Err(e) = self.require_session().await { return Ok(e); }
         let session = self.active_session.read().await.clone().unwrap();
 
-        let conn = self.db.lock().unwrap();
+        let conn = match self.lock_db() { Ok(c) => c, Err(e) => return Ok(e) };
         let count: u32 = if let Some(ref ns) = params.namespace {
             let c = conn.query_row(
                 "SELECT COUNT(*) FROM tasks WHERE session = ? AND namespace = ?",
@@ -1043,7 +1079,7 @@ impl Workslate {
         let json_path = self.tasks_dir.join(format!("tasks-{}.json", params.name));
 
         let task_count = {
-            let conn = self.db.lock().unwrap();
+            let conn = match self.lock_db() { Ok(c) => c, Err(e) => return Ok(e) };
 
             let existing_count: u32 = conn.query_row(
                 "SELECT COUNT(*) FROM tasks WHERE session = ?",
@@ -1107,7 +1143,9 @@ impl Workslate {
     #[tool(description = "List all available task sessions")]
     async fn workslate_task_sessions(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         let active = self.active_session.read().await.clone();
-        let conn = self.db.lock().unwrap();
+        let conn = self.db.lock().map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("Database lock poisoned: {}", e), None)
+        })?;
 
         let mut stmt = conn.prepare(
             "SELECT session, namespace, COUNT(*), SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) \
@@ -1144,6 +1182,12 @@ impl Workslate {
 // ── Task helpers ──────────────────────────────────────────
 
 impl Workslate {
+    fn lock_db(&self) -> Result<std::sync::MutexGuard<'_, rusqlite::Connection>, CallToolResult> {
+        self.db.lock().map_err(|e| {
+            CallToolResult::error(vec![Content::text(format!("Database lock poisoned: {}", e))])
+        })
+    }
+
     async fn require_session(&self) -> Result<(), CallToolResult> {
         let session = self.active_session.read().await;
         if session.is_none() {
@@ -1162,7 +1206,10 @@ impl Workslate {
         };
         drop(session);
 
-        let conn = self.db.lock().unwrap();
+        let conn = match self.db.lock() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
         let tasks = match load_tasks(&conn, &session_name, None) {
             Ok(t) => t,
             Err(_) => return,
@@ -1248,8 +1295,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cwd = std::env::current_dir()?;
     let project_path = cwd.to_string_lossy().replace('/', "-");
     let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"));
+        .unwrap_or_else(|_| std::env::temp_dir());
     let tasks_dir = home
         .join(".claude")
         .join("projects")
@@ -1262,7 +1310,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")?;
     conn.execute_batch(SCHEMA_SQL)?;
 
-    let server = Workslate::new(conn, tasks_dir);
+    let project_root = cwd.canonicalize()?;
+    let server = Workslate::new(conn, tasks_dir, project_root);
     let transport = rmcp::transport::io::stdio();
     let running = server.serve(transport).await?;
     running.waiting().await?;

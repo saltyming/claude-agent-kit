@@ -36,10 +36,13 @@ pub fn resolve_target(
         let line_offsets: Vec<(usize, usize)> = {
             let mut offsets = Vec::new();
             let mut pos = 0;
-            for line in file_content.split('\n') {
+            for line in file_content.lines() {
                 let end_pos = pos + line.len();
                 offsets.push((pos, end_pos));
-                pos = end_pos + 1;
+                pos = end_pos + 1; // skip \n
+            }
+            if offsets.is_empty() {
+                offsets.push((0, 0));
             }
             offsets
         };
