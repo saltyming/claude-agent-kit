@@ -75,15 +75,19 @@ A coordination system for multiple Claude Code instances that work together via 
 
 The leader's role is **task graph architect + build/integration owner**, not task dispatcher.
 
-The leader uses **workslate tasks** to track their own phases and **built-in TaskCreate** to build the team's task graph. These do not conflict — workslate is the leader's personal view, built-in is the team coordination layer.
+The leader uses **workslate tasks with namespaces** for unified tracking:
+- `ws:` namespace — leader's personal phases (understand, plan, integrate, verify)
+- `team:` namespace — team work assignments with owner and dependencies
+
+Both namespaces appear in the footer. The leader sees `ws:[2/4] team:[8/12]` at a glance.
 
 ```
 1. workslate_task_init → Create a named session for this team effort
 2. TeamCreate          → Team + teammates created
                           (teammates explore codebase while waiting — see Creation Prompt below)
-3. TaskCreate          → Design task graph: scope, blockedBy, leader-reserved flags
-4. Teammates work      → Self-claim eligible tasks (see Task Claiming Policy)
-5. Monitor             → Receive completion reports; intervene only when stuck
+3. workslate_task_create(namespace="team") → Design task graph with depends_on and owner
+4. Teammates work      → Self-claim eligible tasks via workslate_task_update(owner=self)
+5. Monitor             → Footer shows team progress; intervene only when stuck
 6. Build & verify      → After all teammates complete
 7. Fix integration     → Missing imports, visibility, mod declarations
 8. Shutdown            → shutdown_request to each teammate

@@ -4,7 +4,7 @@ mod task;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use regex::Regex;
 use rmcp::{
@@ -17,7 +17,7 @@ use rmcp::{
     service::RequestContext,
     tool, tool_router,
 };
-use similar::TextDiff;
+use similar::{DiffOp, TextDiff};
 use tokio::sync::RwLock;
 
 use buffer::{
@@ -26,8 +26,9 @@ use buffer::{
 };
 use file::{MAX_FILE_SIZE, format_numbered_line, is_binary};
 use task::{
-    Task, TaskCreateParams, TaskDoneParams, TaskInitParams, TaskStatus, TaskStore,
-    TaskUpdateParams, render_task_footer,
+    Namespace, TaskClearParams, TaskCreateParams, TaskDoneParams, TaskId, TaskInitParams,
+    TaskListParams, TaskStatus, TaskUpdateParams, load_tasks,
+    recompute_blocked_status, render_task_footer, serialize_depends_on, SCHEMA_SQL,
 };
 
 // ── Workslate server ──────────────────────────────────────
@@ -35,7 +36,8 @@ use task::{
 #[derive(Clone)]
 struct Workslate {
     buffers: Arc<RwLock<HashMap<String, BufferContent>>>,
-    task_store: Arc<RwLock<TaskStore>>,
+    applied_buffers: Arc<RwLock<HashSet<String>>>,
+    db: Arc<StdMutex<rusqlite::Connection>>,
     tasks_dir: PathBuf,
     active_session: Arc<RwLock<Option<String>>>,
     tool_router: ToolRouter<Self>,
@@ -43,10 +45,11 @@ struct Workslate {
 
 #[tool_router]
 impl Workslate {
-    fn new(tasks_dir: PathBuf, task_store: TaskStore) -> Self {
+    fn new(db: rusqlite::Connection, tasks_dir: PathBuf) -> Self {
         Self {
             buffers: Arc::new(RwLock::new(HashMap::new())),
-            task_store: Arc::new(RwLock::new(task_store)),
+            applied_buffers: Arc::new(RwLock::new(HashSet::new())),
+            db: Arc::new(StdMutex::new(db)),
             tasks_dir,
             active_session: Arc::new(RwLock::new(None)),
             tool_router: Self::tool_router(),
@@ -100,6 +103,7 @@ impl Workslate {
         buffers.insert(params.name.clone(), BufferContent {
             content: params.content,
             file_path: params.file_path.clone(),
+            depends_on: params.depends_on.unwrap_or_default(),
         });
 
         let output = match diff_output {
@@ -147,9 +151,9 @@ impl Workslate {
             },
         };
 
-        let (base_content, stored_file_path) = if let Some(ref file_path) = params.file_path {
+        let (base_content, stored_file_path, stored_depends_on) = if let Some(ref file_path) = params.file_path {
             match tokio::fs::read_to_string(file_path).await {
-                Ok(c) => (c, Some(file_path.clone())),
+                Ok(c) => (c, Some(file_path.clone()), vec![]),
                 Err(e) => {
                     return Ok(CallToolResult::error(vec![Content::text(format!(
                         "Failed to read '{}': {}",
@@ -160,7 +164,7 @@ impl Workslate {
         } else {
             let buffers = self.buffers.read().await;
             match buffers.get(&params.name) {
-                Some(buf) => (buf.content.clone(), buf.file_path.clone()),
+                Some(buf) => (buf.content.clone(), buf.file_path.clone(), buf.depends_on.clone()),
                 None => {
                     return Ok(CallToolResult::error(vec![Content::text(format!(
                         "No buffer '{}' and no file_path provided",
@@ -209,6 +213,7 @@ impl Workslate {
             BufferContent {
                 content: result_content,
                 file_path: stored_file_path,
+                depends_on: stored_depends_on,
             },
         );
 
@@ -360,7 +365,7 @@ impl Workslate {
     }
 
     #[tool(
-        description = "Show unified diff of buffer content against file on disk. file_path falls back to stored target. old_string for partial diff."
+        description = "Show unified diff of buffer content against file on disk. file_path falls back to stored target. old_string for partial diff. summary=true for one-line stats."
     )]
     async fn workslate_diff(
         &self,
@@ -407,6 +412,30 @@ impl Workslate {
                     file_content.clone()
                 };
 
+                if params.summary.unwrap_or(false) {
+                    let diff = TextDiff::from_lines(&old_text, &buffer.content);
+                    let mut hunks = 0u32;
+                    let mut adds = 0usize;
+                    let mut dels = 0usize;
+                    for group in diff.grouped_ops(3) {
+                        hunks += 1;
+                        for op in &group {
+                            match op {
+                                DiffOp::Insert { new_index: _, new_len, .. } => adds += new_len,
+                                DiffOp::Delete { old_index: _, old_len, .. } => dels += old_len,
+                                DiffOp::Replace { old_index: _, old_len, new_index: _, new_len, .. } => {
+                                    dels += old_len;
+                                    adds += new_len;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        format!("{} hunk(s), +{}/-{} lines (target: {})", hunks, adds, dels, file_path)
+                    )]));
+                }
+
                 let diff = TextDiff::from_lines(&old_text, &buffer.content);
                 let unified = diff
                     .unified_diff()
@@ -426,6 +455,13 @@ impl Workslate {
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if params.summary.unwrap_or(false) {
+                    let line_count = buffer.content.lines().count();
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        format!("new file, {} lines (target: {})", line_count, file_path)
+                    )]));
+                }
+
                 let line_count = buffer.content.lines().count();
                 let width = line_count.max(1).to_string().len();
                 let numbered: Vec<String> = buffer
@@ -448,7 +484,7 @@ impl Workslate {
     }
 
     #[tool(
-        description = "Apply buffer content to file. file_path falls back to stored target. old_string for partial replacement."
+        description = "Apply buffer content to file. file_path falls back to stored target. old_string for partial replacement. dry_run=true to preview. Respects buffer depends_on ordering."
     )]
     async fn workslate_apply(
         &self,
@@ -465,6 +501,19 @@ impl Workslate {
             }
         };
         drop(buffers);
+
+        if !buffer.depends_on.is_empty() {
+            let applied = self.applied_buffers.read().await;
+            let unapplied: Vec<&String> = buffer.depends_on.iter()
+                .filter(|dep| !applied.contains(*dep))
+                .collect();
+            if !unapplied.is_empty() {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Cannot apply '{}': unapplied dependencies: {}",
+                    params.name, unapplied.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                ))]));
+            }
+        }
 
         let file_path = match params.file_path.or(buffer.file_path) {
             Some(fp) => fp,
@@ -500,19 +549,46 @@ impl Workslate {
                 ))]));
             }
 
-            let new_content = file_content.replacen(old_string.as_str(), &buffer.content, 1);
-            if let Err(e) = tokio::fs::write(&file_path, &new_content).await {
+            let final_content = file_content.replacen(old_string.as_str(), &buffer.content, 1);
+
+            if params.dry_run.unwrap_or(false) {
+                let line_count = final_content.lines().count();
+                let width = line_count.max(1).to_string().len();
+                let numbered: Vec<String> = final_content.lines().enumerate()
+                    .map(|(i, line)| format_numbered_line(i + 1, width, line, false))
+                    .collect();
+                return Ok(CallToolResult::success(vec![Content::text(
+                    format!("Dry run: would write to '{}' ({} lines)\n{}", file_path, line_count, numbered.join("\n"))
+                )]));
+            }
+
+            if let Err(e) = tokio::fs::write(&file_path, &final_content).await {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Failed to write '{}': {}",
                     file_path, e
                 ))]));
             }
 
+            self.applied_buffers.write().await.insert(params.name.clone());
+
             Ok(CallToolResult::success(vec![Content::text(format!(
                 "Applied buffer '{}' to section in '{}'",
                 params.name, file_path
             ))]))
         } else {
+            let final_content = buffer.content.clone();
+
+            if params.dry_run.unwrap_or(false) {
+                let line_count = final_content.lines().count();
+                let width = line_count.max(1).to_string().len();
+                let numbered: Vec<String> = final_content.lines().enumerate()
+                    .map(|(i, line)| format_numbered_line(i + 1, width, line, false))
+                    .collect();
+                return Ok(CallToolResult::success(vec![Content::text(
+                    format!("Dry run: would write to '{}' ({} lines)\n{}", file_path, line_count, numbered.join("\n"))
+                )]));
+            }
+
             if let Some(parent) = std::path::Path::new(&file_path).parent() {
                 if !parent.exists() {
                     if let Err(e) = tokio::fs::create_dir_all(parent).await {
@@ -525,12 +601,14 @@ impl Workslate {
                 }
             }
 
-            if let Err(e) = tokio::fs::write(&file_path, &buffer.content).await {
+            if let Err(e) = tokio::fs::write(&file_path, &final_content).await {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Failed to write '{}': {}",
                     file_path, e
                 ))]));
             }
+
+            self.applied_buffers.write().await.insert(params.name.clone());
 
             Ok(CallToolResult::success(vec![Content::text(format!(
                 "Wrote buffer '{}' to '{}'",
@@ -547,6 +625,7 @@ impl Workslate {
         let mut buffers = self.buffers.write().await;
         if let Some(ref name) = params.name {
             if buffers.remove(name).is_some() {
+                self.applied_buffers.write().await.remove(name);
                 Ok(CallToolResult::success(vec![Content::text(format!(
                     "Buffer '{}' cleared",
                     name
@@ -560,6 +639,7 @@ impl Workslate {
         } else {
             let count = buffers.len();
             buffers.clear();
+            self.applied_buffers.write().await.clear();
             Ok(CallToolResult::success(vec![Content::text(format!(
                 "Cleared {} buffer(s)",
                 count
@@ -711,147 +791,201 @@ impl Workslate {
 
     // ── Task tools ────────────────────────────────────────
 
-    #[tool(description = "Create a new task. Returns the task ID. Use depends_on to declare dependencies on other task IDs.")]
+    #[tool(description = "Create a task. namespace: 'ws' (default) or 'team'. Returns namespaced ID like ws:1 or team:3.")]
     async fn workslate_task_create(
         &self,
         Parameters(params): Parameters<TaskCreateParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         if let Err(e) = self.require_session().await { return Ok(e); }
-        let mut store = self.task_store.write().await;
-        let deps = params.depends_on.unwrap_or_default();
+        let session = self.active_session.read().await.clone().unwrap();
+        let ns_str = params.namespace.as_deref().unwrap_or("ws");
+        let ns = match Namespace::parse(ns_str) {
+            Ok(n) => n,
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+        };
 
-        let existing_ids: HashSet<u32> = store.tasks.iter().map(|t| t.id).collect();
-        for dep_id in &deps {
-            if !existing_ids.contains(dep_id) {
+        let deps: Vec<TaskId> = if let Some(ref dep_strs) = params.depends_on {
+            let mut parsed = Vec::new();
+            for s in dep_strs {
+                match TaskId::parse(s) {
+                    Ok(tid) => parsed.push(tid),
+                    Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+                }
+            }
+            parsed
+        } else {
+            vec![]
+        };
+
+        let conn = self.db.lock().unwrap();
+
+        for dep in &deps {
+            let exists: bool = conn.query_row(
+                "SELECT COUNT(*) > 0 FROM tasks WHERE session = ? AND namespace = ? AND id = ?",
+                rusqlite::params![session, dep.namespace.as_str(), dep.id],
+                |row| row.get(0),
+            ).unwrap_or(false);
+            if !exists {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "depends_on references non-existent task ID: {}",
-                    dep_id
+                    "depends_on references non-existent task: {}", dep
                 ))]));
             }
         }
 
-        let id = store.next_id;
-        store.next_id += 1;
+        conn.execute(
+            "INSERT OR IGNORE INTO task_counters (session, namespace, next_id) VALUES (?, ?, 1)",
+            rusqlite::params![session, ns.as_str()],
+        ).ok();
+        let id: u32 = conn.query_row(
+            "SELECT next_id FROM task_counters WHERE session = ? AND namespace = ?",
+            rusqlite::params![session, ns.as_str()],
+            |row| row.get(0),
+        ).map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
-        let status = if deps.is_empty() {
-            TaskStatus::Pending
-        } else {
-            TaskStatus::Blocked
-        };
+        let status = if deps.is_empty() { "pending" } else { "blocked" };
+        let deps_json = serialize_depends_on(&deps);
 
-        store.tasks.push(Task {
-            id,
-            name: params.name.clone(),
-            description: params.description,
-            status,
-            depends_on: deps,
-        });
+        conn.execute(
+            "INSERT INTO tasks (session, namespace, id, name, description, status, owner, depends_on) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            rusqlite::params![session, ns.as_str(), id, params.name, params.description, status, params.owner, deps_json],
+        ).map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
-        store.recompute_blocked_status();
-        self.save_tasks(&store).await;
+        conn.execute(
+            "UPDATE task_counters SET next_id = ? WHERE session = ? AND namespace = ?",
+            rusqlite::params![id + 1, session, ns.as_str()],
+        ).ok();
 
+        recompute_blocked_status(&conn, &session).ok();
+
+        let task_id = TaskId { namespace: ns, id };
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Task {} created: {}",
-            id, params.name
+            "Task {} created: {}", task_id, params.name
         ))]))
     }
 
-    #[tool(description = "Mark a task as done. Automatically unblocks dependent tasks.")]
+    #[tool(description = "Mark a task as done. ID format: 3, ws:3, or team:3. Automatically unblocks dependent tasks.")]
     async fn workslate_task_done(
         &self,
         Parameters(params): Parameters<TaskDoneParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         if let Err(e) = self.require_session().await { return Ok(e); }
-        let mut store = self.task_store.write().await;
-        let task = match store.tasks.iter_mut().find(|t| t.id == params.id) {
-            Some(t) => t,
-            None => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Task {} not found",
-                    params.id
-                ))]));
-            }
+        let session = self.active_session.read().await.clone().unwrap();
+        let tid = match TaskId::parse(&params.id) {
+            Ok(t) => t,
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
         };
-        task.status = TaskStatus::Done;
-        let name = task.name.clone();
 
-        store.recompute_blocked_status();
-        self.save_tasks(&store).await;
+        let conn = self.db.lock().unwrap();
+        let affected = conn.execute(
+            "UPDATE tasks SET status = 'done', updated_at = datetime('now') WHERE session = ? AND namespace = ? AND id = ?",
+            rusqlite::params![session, tid.namespace.as_str(), tid.id],
+        ).unwrap_or(0);
+
+        if affected == 0 {
+            return Ok(CallToolResult::error(vec![Content::text(format!(
+                "Task {} not found", tid
+            ))]));
+        }
+
+        let name: String = conn.query_row(
+            "SELECT name FROM tasks WHERE session = ? AND namespace = ? AND id = ?",
+            rusqlite::params![session, tid.namespace.as_str(), tid.id],
+            |row| row.get(0),
+        ).unwrap_or_default();
+
+        recompute_blocked_status(&conn, &session).ok();
 
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Task {} done: {}",
-            params.id, name
+            "Task {} done: {}", tid, name
         ))]))
     }
 
-    #[tool(description = "Update a task's status and/or description. Status must be one of: pending, in_progress, done, blocked.")]
+    #[tool(description = "Update a task's status, description, or owner. ID format: 3, ws:3, or team:3.")]
     async fn workslate_task_update(
         &self,
         Parameters(params): Parameters<TaskUpdateParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         if let Err(e) = self.require_session().await { return Ok(e); }
-        let mut store = self.task_store.write().await;
-        let task = match store.tasks.iter_mut().find(|t| t.id == params.id) {
-            Some(t) => t,
-            None => {
+        let session = self.active_session.read().await.clone().unwrap();
+        let tid = match TaskId::parse(&params.id) {
+            Ok(t) => t,
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+        };
+
+        if let Some(ref s) = params.status {
+            if TaskStatus::parse(s).is_err() {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Task {} not found",
-                    params.id
+                    "Invalid status '{}'. Must be: pending, in_progress, done, blocked", s
                 ))]));
+            }
+        }
+
+        let conn = self.db.lock().unwrap();
+
+        let (cur_status, cur_desc, cur_owner): (String, Option<String>, Option<String>) = match conn.query_row(
+            "SELECT status, description, owner FROM tasks WHERE session = ? AND namespace = ? AND id = ?",
+            rusqlite::params![session, tid.namespace.as_str(), tid.id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ) {
+            Ok(vals) => vals,
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Task {} not found", tid
+                ))]));
+            }
+            Err(e) => {
+                return Err(rmcp::ErrorData::internal_error(e.to_string(), None));
             }
         };
 
-        if let Some(ref status_str) = params.status {
-            let status = match status_str.as_str() {
-                "pending" => TaskStatus::Pending,
-                "in_progress" => TaskStatus::InProgress,
-                "done" => TaskStatus::Done,
-                "blocked" => TaskStatus::Blocked,
-                _ => {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "Invalid status '{}'. Must be: pending, in_progress, done, blocked",
-                        status_str
-                    ))]));
-                }
-            };
-            task.status = status;
-        }
-        if let Some(desc) = params.description {
-            task.description = Some(desc);
-        }
-        let name = task.name.clone();
+        let new_status = params.status.unwrap_or(cur_status);
+        let new_desc = params.description.or(cur_desc);
+        let new_owner = params.owner.or(cur_owner);
 
-        store.recompute_blocked_status();
-        self.save_tasks(&store).await;
+        conn.execute(
+            "UPDATE tasks SET status = ?, description = ?, owner = ?, updated_at = datetime('now') WHERE session = ? AND namespace = ? AND id = ?",
+            rusqlite::params![new_status, new_desc, new_owner, session, tid.namespace.as_str(), tid.id],
+        ).map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+
+        recompute_blocked_status(&conn, &session).ok();
 
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Task {} updated: {}",
-            params.id, name
+            "Task {} updated", tid
         ))]))
     }
 
-    #[tool(description = "List all tasks with their status and dependencies")]
-    async fn workslate_task_list(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+    #[tool(description = "List tasks. Optional namespace filter: 'ws', 'team', or omit for all.")]
+    async fn workslate_task_list(
+        &self,
+        Parameters(params): Parameters<TaskListParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         if let Err(e) = self.require_session().await { return Ok(e); }
-        let store = self.task_store.read().await;
-        if store.tasks.is_empty() {
+        let session = self.active_session.read().await.clone().unwrap();
+
+        let conn = self.db.lock().unwrap();
+        let tasks = load_tasks(&conn, &session, params.namespace.as_deref())
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+
+        if tasks.is_empty() {
             return Ok(CallToolResult::success(vec![Content::text("No tasks")]));
         }
 
         let mut lines = Vec::new();
-        for task in &store.tasks {
-            let status_icon = match task.status {
-                TaskStatus::Done => "✓",
-                TaskStatus::InProgress => "→",
+        for task in &tasks {
+            let icon = match task.status {
+                TaskStatus::Done => "\u{2713}",
+                TaskStatus::InProgress => "\u{2192}",
                 TaskStatus::Pending => " ",
-                TaskStatus::Blocked => "⊘",
+                TaskStatus::Blocked => "\u{2298}",
             };
-            let mut line = format!("{} {}. {}", status_icon, task.id, task.name);
+            let owner_str = task.owner.as_ref()
+                .map(|o| format!(" (owner: {})", o)).unwrap_or_default();
+            let mut line = format!("{} {}. {}{}", icon, task.display_id(), task.name, owner_str);
             if task.status == TaskStatus::InProgress {
-                line.push_str("  ← in_progress");
+                line.push_str("  \u{2190} in_progress");
             }
             if task.status == TaskStatus::Blocked && !task.depends_on.is_empty() {
-                let dep_ids: Vec<String> = task.depends_on.iter().map(|d| d.to_string()).collect();
+                let dep_ids: Vec<String> = task.depends_on.iter().map(|d| d.display()).collect();
                 line.push_str(&format!("  (blocked by: {})", dep_ids.join(", ")));
             }
             if let Some(ref desc) = task.description {
@@ -860,110 +994,150 @@ impl Workslate {
             lines.push(line);
         }
 
-        Ok(CallToolResult::success(vec![Content::text(
-            lines.join("\n"),
-        )]))
+        Ok(CallToolResult::success(vec![Content::text(lines.join("\n"))]))
     }
 
-    #[tool(description = "Clear all tasks in the current session. Use when starting a fresh plan.")]
-    async fn workslate_task_clear(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+    #[tool(description = "Clear tasks. Optional namespace: 'ws', 'team', or omit to clear all.")]
+    async fn workslate_task_clear(
+        &self,
+        Parameters(params): Parameters<TaskClearParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         if let Err(e) = self.require_session().await { return Ok(e); }
-        let mut store = self.task_store.write().await;
-        let count = store.tasks.len();
-        store.tasks.clear();
-        store.next_id = 1;
-        self.save_tasks(&store).await;
+        let session = self.active_session.read().await.clone().unwrap();
+
+        let conn = self.db.lock().unwrap();
+        let count: u32 = if let Some(ref ns) = params.namespace {
+            let c = conn.query_row(
+                "SELECT COUNT(*) FROM tasks WHERE session = ? AND namespace = ?",
+                rusqlite::params![session, ns], |row| row.get(0),
+            ).unwrap_or(0);
+            conn.execute(
+                "DELETE FROM tasks WHERE session = ? AND namespace = ?",
+                rusqlite::params![session, ns],
+            ).ok();
+            conn.execute(
+                "UPDATE task_counters SET next_id = 1 WHERE session = ? AND namespace = ?",
+                rusqlite::params![session, ns],
+            ).ok();
+            c
+        } else {
+            let c = conn.query_row(
+                "SELECT COUNT(*) FROM tasks WHERE session = ?",
+                rusqlite::params![session], |row| row.get(0),
+            ).unwrap_or(0);
+            conn.execute("DELETE FROM tasks WHERE session = ?", rusqlite::params![session]).ok();
+            conn.execute("DELETE FROM task_counters WHERE session = ?", rusqlite::params![session]).ok();
+            c
+        };
 
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Cleared {} task(s)",
-            count
+            "Cleared {} task(s)", count
         ))]))
     }
 
-    #[tool(description = "Switch to a named task session. Creates or loads tasks-{name}.json. Use to isolate tasks per work context.")]
+    #[tool(description = "Switch to a named task session. Creates or opens the session in SQLite.")]
     async fn workslate_task_init(
         &self,
         Parameters(params): Parameters<TaskInitParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let new_path = self.tasks_dir.join(format!("tasks-{}.json", params.name));
-        let new_store = match tokio::fs::read_to_string(&new_path).await {
-            Ok(json) => {
-                serde_json::from_str::<TaskStore>(&json).unwrap_or_else(|_| TaskStore::empty())
+        let json_path = self.tasks_dir.join(format!("tasks-{}.json", params.name));
+
+        let task_count = {
+            let conn = self.db.lock().unwrap();
+
+            let existing_count: u32 = conn.query_row(
+                "SELECT COUNT(*) FROM tasks WHERE session = ?",
+                rusqlite::params![params.name],
+                |row| row.get(0),
+            ).unwrap_or(0);
+
+            if existing_count == 0 {
+                if let Ok(json) = std::fs::read_to_string(&json_path) {
+                    if let Ok(old_store) = serde_json::from_str::<serde_json::Value>(&json) {
+                        if let Some(tasks) = old_store.get("tasks").and_then(|t| t.as_array()) {
+                            for task_val in tasks {
+                                let id = task_val.get("id").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                let name = task_val.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                                let desc = task_val.get("description").and_then(|v| v.as_str());
+                                let status = task_val.get("status").and_then(|v| v.as_str()).unwrap_or("pending");
+                                let deps = task_val.get("depends_on")
+                                    .and_then(|v| v.as_array())
+                                    .map(|arr| {
+                                        let ids: Vec<TaskId> = arr.iter()
+                                            .filter_map(|v| v.as_u64())
+                                            .map(|n| TaskId { namespace: Namespace::Ws, id: n as u32 })
+                                            .collect();
+                                        serialize_depends_on(&ids)
+                                    })
+                                    .unwrap_or_else(|| "[]".to_string());
+
+                                conn.execute(
+                                    "INSERT OR IGNORE INTO tasks (session, namespace, id, name, description, status, depends_on) VALUES (?, 'ws', ?, ?, ?, ?, ?)",
+                                    rusqlite::params![params.name, id, name, desc, status, deps],
+                                ).ok();
+                            }
+                            let next_id = old_store.get("next_id").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+                            conn.execute(
+                                "INSERT OR REPLACE INTO task_counters (session, namespace, next_id) VALUES (?, 'ws', ?)",
+                                rusqlite::params![params.name, next_id],
+                            ).ok();
+                            tracing::info!("Migrated session '{}' from JSON to SQLite", params.name);
+                        }
+                    }
+                }
             }
-            Err(_) => TaskStore::empty(),
+
+            conn.query_row(
+                "SELECT COUNT(*) FROM tasks WHERE session = ?",
+                rusqlite::params![params.name],
+                |row| row.get(0),
+            ).unwrap_or(0u32)
         };
 
-        let task_count = new_store.tasks.len();
-        *self.task_store.write().await = new_store;
         *self.active_session.write().await = Some(params.name.clone());
 
         let msg = if task_count > 0 {
-            format!(
-                "Switched to session '{}' ({} tasks loaded)",
-                params.name, task_count
-            )
+            format!("Switched to session '{}' ({} tasks)", params.name, task_count)
         } else {
             format!("Created new session '{}'", params.name)
         };
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
-    #[tool(description = "List all available task sessions in this project")]
+    #[tool(description = "List all available task sessions")]
     async fn workslate_task_sessions(&self) -> Result<CallToolResult, rmcp::ErrorData> {
-        let mut entries = match tokio::fs::read_dir(&self.tasks_dir).await {
-            Ok(e) => e,
-            Err(_) => {
-                return Ok(CallToolResult::success(vec![Content::text(
-                    "No sessions",
-                )]));
-            }
-        };
+        let active = self.active_session.read().await.clone();
+        let conn = self.db.lock().unwrap();
 
-        let active = self.active_session.read().await;
+        let mut stmt = conn.prepare(
+            "SELECT session, namespace, COUNT(*), SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) \
+             FROM tasks GROUP BY session, namespace ORDER BY session, namespace"
+        ).map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+
+        let rows: Vec<(String, String, u32, u32)> = stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        }).map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+        if rows.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text("No sessions")]));
+        }
+
+        let mut sessions: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+        for (session, ns, total, done) in &rows {
+            sessions.entry(session.clone()).or_default()
+                .push(format!("{}:[{}/{}]", ns, done, total));
+        }
+
         let mut lines = Vec::new();
-
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if !name.starts_with("tasks") || !name.ends_with(".json") {
-                continue;
-            }
-            let session_name = if name == "tasks.json" {
-                "(default)".to_string()
-            } else {
-                name.strip_prefix("tasks-")
-                    .and_then(|s| s.strip_suffix(".json"))
-                    .unwrap_or(&name)
-                    .to_string()
-            };
-
-            let is_active = match *active {
-                Some(ref a) => *a == session_name,
-                None => session_name == "(default)",
-            };
-            let marker = if is_active { " ← active" } else { "" };
-
-            let task_count = match tokio::fs::read_to_string(entry.path()).await {
-                Ok(json) => serde_json::from_str::<TaskStore>(&json)
-                    .map(|s| s.tasks.len())
-                    .unwrap_or(0),
-                Err(_) => 0,
-            };
-
-            lines.push(format!(
-                "  {}{}  ({} tasks)",
-                session_name, marker, task_count
-            ));
+        for (session, counters) in &sessions {
+            let is_active = active.as_ref().map(|a| a == session).unwrap_or(false);
+            let marker = if is_active { " \u{2190} active" } else { "" };
+            lines.push(format!("  {} {}{}", session, counters.join(" "), marker));
         }
 
-        if lines.is_empty() {
-            return Ok(CallToolResult::success(vec![Content::text(
-                "No sessions",
-            )]));
-        }
-        lines.sort();
-        Ok(CallToolResult::success(vec![Content::text(
-            lines.join("\n"),
-        )]))
+        Ok(CallToolResult::success(vec![Content::text(lines.join("\n"))]))
     }
 }
 
@@ -980,35 +1154,25 @@ impl Workslate {
         Ok(())
     }
 
-    fn tasks_path(&self, session: &Option<String>) -> PathBuf {
-        match session {
-            Some(name) => self.tasks_dir.join(format!("tasks-{}.json", name)),
-            None => self.tasks_dir.join("tasks.json"),
-        }
-    }
-
-    async fn save_tasks(&self, store: &TaskStore) {
-        let session = self.active_session.read().await;
-        let path = self.tasks_path(&session);
-        let json = match serde_json::to_string_pretty(store) {
-            Ok(j) => j,
-            Err(e) => {
-                tracing::error!("Failed to serialize tasks: {}", e);
-                return;
-            }
-        };
-        if let Err(e) = tokio::fs::write(&path, json).await {
-            tracing::error!("Failed to write tasks to {:?}: {}", path, e);
-        }
-    }
-
     async fn append_task_footer(&self, result: &mut CallToolResult) {
-        let store = self.task_store.read().await;
-        if store.tasks.is_empty() {
+        let session = self.active_session.read().await;
+        let session_name = match &*session {
+            Some(s) => s.clone(),
+            None => return,
+        };
+        drop(session);
+
+        let conn = self.db.lock().unwrap();
+        let tasks = match load_tasks(&conn, &session_name, None) {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+        drop(conn);
+
+        if tasks.is_empty() {
             return;
         }
-        let session = self.active_session.read().await;
-        let footer = render_task_footer(&store, &*session);
+        let footer = render_task_footer(&tasks, &session_name);
         result.content.push(Content::text(footer));
     }
 }
@@ -1020,10 +1184,11 @@ impl ServerHandler for Workslate {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
             "In-memory named buffers for drafting code before applying to files. \
              workslate_edit with file_path loads from disk and edits; without file_path edits buffer content. \
-             workslate_write stores raw content. workslate_apply writes buffer to disk. \
+             workslate_write stores raw content. workslate_apply writes buffer to disk (supports dry_run and buffer dependencies). \
+             workslate_diff supports summary mode for one-line stats. \
              Use workslate_read with file_path to view files with line numbers. \
              Use workslate_search to find patterns and get line numbers for workslate_edit. \
-             Persistent project-scoped task tracking across sessions. \
+             SQLite-backed task tracking with ws: and team: namespaces. \
              Task status is shown automatically in all tool responses.",
         )
     }
@@ -1041,7 +1206,7 @@ impl ServerHandler for Workslate {
             let session = self.active_session.read().await;
             if session.is_none() {
                 result.content.push(Content::text(
-                    "\n⚠ No task session active. For multi-step work, call workslate_task_init first."
+                    "\n\u{26a0} No task session active. For multi-step work, call workslate_task_init first."
                         .to_string(),
                 ));
             }
@@ -1092,9 +1257,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .join("workslate");
     tokio::fs::create_dir_all(&tasks_dir).await?;
 
-    let task_store = TaskStore::empty();
+    let db_path = tasks_dir.join("workslate-tasks.db");
+    let conn = rusqlite::Connection::open(&db_path)?;
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")?;
+    conn.execute_batch(SCHEMA_SQL)?;
 
-    let server = Workslate::new(tasks_dir, task_store);
+    let server = Workslate::new(conn, tasks_dir);
     let transport = rmcp::transport::io::stdio();
     let running = server.serve(transport).await?;
     running.waiting().await?;

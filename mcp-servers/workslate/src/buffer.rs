@@ -15,6 +15,7 @@ pub enum EditMode {
 pub struct BufferContent {
     pub content: String,
     pub file_path: Option<String>,
+    pub depends_on: Vec<String>,
 }
 
 // ── Target resolution ────────────────────────────────────
@@ -168,6 +169,8 @@ pub struct WriteParams {
     pub content: String,
     /// If provided, show unified diff against this file in the response
     pub file_path: Option<String>,
+    /// Buffer names that must be applied before this buffer (dependency ordering)
+    pub depends_on: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -224,6 +227,8 @@ pub struct DiffParams {
     pub file_path: Option<String>,
     /// If provided, diff only this section of the file against the buffer.
     pub old_string: Option<String>,
+    /// If true, return a one-line summary (e.g. "3 hunk(s), +47/-12 lines") instead of full diff
+    pub summary: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -234,6 +239,8 @@ pub struct ApplyParams {
     pub file_path: Option<String>,
     /// If provided, replace only this section of the file with buffer content.
     pub old_string: Option<String>,
+    /// If true, show final file content without actually writing to disk
+    pub dry_run: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

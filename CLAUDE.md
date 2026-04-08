@@ -1,8 +1,8 @@
 <!-- claude-agent-kit -->
 # Claude Agent Operating Manual
 
-**Version**: 7.2
-**Last Updated**: 2026-04-07
+**Version**: 8.0
+**Last Updated**: 2026-04-08
 
 > Global operating rules for AI coding agents. Focuses on user-specific preferences and overrides — general tool usage, security, and communication rules are handled by the system prompt.
 
@@ -108,6 +108,7 @@ User Request
 ---
 
 **Version History:**
+- v8.0 (2026-04-08): SQLite-backed task system (replaces JSON), ws:/team: namespace separation, team task support (owner, cross-namespace deps), buffer dependency ordering, workslate_diff summary mode, workslate_apply dry_run, JSON→SQLite auto-migration
 - v7.2 (2026-04-07): Buffer-first editing (workslate_edit: file_path=load from disk, no file_path=edit buffer), BufferContent enum→struct, workslate_apply/diff simplified to single path, task tracking trigger rule, server-side task session nudge
 - v7.1 (2026-04-07): Mandatory named sessions (task_init required before task operations), install scripts (install.sh, install.ps1, Makefile) with manifest-based uninstall, auto MCP registration, rule file prefix + signature for safe uninstall, PATH detection
 - v7.0.1 (2026-04-07): Split CLAUDE.md into claude-rules/ modules (task-execution, git-workflow, framework-conventions, parallel-work) — main file under 200 lines

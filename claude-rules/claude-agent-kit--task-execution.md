@@ -117,6 +117,15 @@ Two read tools support the staging workflow:
 3. `workslate_edit(name, file_path, line_start, line_end, new_string)` — edit by line range, review diff
 4. `workslate_apply(name)` — apply
 
+**Large file editing pattern (buffer-first):**
+1. `workslate_edit(name, file_path, old_string, new_string)` — load file + first edit
+2. `workslate_edit(name, old_string, new_string)` — subsequent edits on stable buffer (no line drift)
+3. `workslate_diff(name, summary=true)` — quick check: "2 hunks, +15/-8 lines"
+4. `workslate_diff(name)` — full diff for review if needed
+5. `workslate_apply(name)` — apply
+
+This avoids the line-shifting problem: once loaded into the buffer, edits operate on stable content regardless of external file changes.
+
 `position` values for `workslate_edit`:
 - omitted or `"replace"` — find old_string, replace with new_string (default)
 - `"after"` — find old_string as anchor, insert new_string after it (anchor stays)
@@ -152,7 +161,11 @@ Targeting options (apply to all position modes except append):
 3. `workslate_apply(name)` — uses stored file_path
 4. `workslate_clear(name)` — clean up the buffer
 
-`workslate_diff(name)` remains available for re-checking a buffer against its target file at any time.
+`workslate_diff(name)` remains available for re-checking a buffer against its target file at any time. Use `workslate_diff(name, summary=true)` for a one-line stat ("N hunks, +X/-Y lines") to save context.
+
+**Buffer dependencies:** `workslate_write(name, content, file_path, depends_on=["buf-a", "buf-b"])` declares that this buffer must be applied after buf-a and buf-b. `workslate_apply` enforces the ordering.
+
+**Dry run:** `workslate_apply(name, dry_run=true)` shows the final file content with line numbers without writing to disk.
 
 **Rules:**
 - **Always pass `file_path` to `workslate_write`** so the diff is returned for review. Omitting it skips the review — only acceptable for scratch buffers not destined for files.
@@ -163,19 +176,31 @@ Targeting options (apply to all position modes except append):
 
 ## Task Sessions
 
-**`workslate_task_init(name)` is mandatory before using any task tool.** Task operations are rejected until a named session is initialized. This prevents file conflicts when multiple Claude Code instances work on the same project — each session writes to its own `tasks-{name}.json`.
+**`workslate_task_init(name)` is mandatory before using any task tool.** Tasks are stored in SQLite (`workslate.db`) and shared across all agent instances in the same project. This replaces built-in TaskCreate/TaskUpdate entirely.
+
+**Namespaces:** Tasks use `ws:` (personal) or `team:` (team coordination) prefixes:
+- `workslate_task_create("Fix auth", namespace="ws")` → creates `ws:1`
+- `workslate_task_create("Port handlers", namespace="team", owner="backend-dev")` → creates `team:1`
+- `workslate_task_done("team:1")` — ID format: `"3"` (defaults to ws), `"ws:3"`, or `"team:3"`
+
+**Cross-namespace dependencies:** `depends_on: ["ws:1", "team:2"]` — a task can depend on tasks in either namespace.
+
+**Footer** shows both namespaces: `── Tasks (session) ws:[3/5] team:[8/12] ──`
 
 **Workflow:**
 1. `workslate_task_init("auth-refactor")` — create or resume a named session
-2. `workslate_task_create` / `workslate_task_done` / etc. — all scoped to this session
-3. `workslate_task_sessions()` — list all sessions with task counts and active marker
+2. `workslate_task_create(name, namespace?, owner?, depends_on?)` — create tasks
+3. `workslate_task_done("ws:1")` / `workslate_task_update("team:3", status="in_progress")` — update
+4. `workslate_task_list(namespace?)` — list tasks, optional namespace filter
+5. `workslate_task_sessions()` — list all sessions with per-namespace counters
 
 **Rules:**
-- `workslate_task_init` must be called before `task_create`, `task_done`, `task_update`, `task_list`, or `task_clear`
+- `workslate_task_init` must be called before any task operation
 - Only one session is active at a time per MCP server instance
-- Switching sessions does NOT clear the previous session's tasks (they persist on disk)
+- Switching sessions does NOT clear the previous session's tasks (SQLite persists)
 - Restarting the MCP server clears the active session — call `workslate_task_init` again to resume
 - Buffers are shared across sessions (not scoped)
+- Multiple agent instances can read/write the same session concurrently (SQLite WAL mode)
 
 ## After Completion
 
