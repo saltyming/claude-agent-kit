@@ -63,8 +63,8 @@ When asked to investigate, **ONLY investigate** — do NOT make code changes.
 | Context | Task tool | Why |
 |---------|-----------|-----|
 | Solo work | `workslate_task_*` | Footer auto-display, named sessions, disk persistence |
-| Team leader | `workslate_task_*` (own phases) + built-in `TaskCreate` (team graph) | Leader tracks personal progress in workslate, designs team task graph with built-in |
-| Teammate | Built-in `TaskCreate`/`TaskUpdate` only | Owner, auto-delivery, self-claiming, file locking |
+| Team leader | `workslate_task_*` (`ws:` own phases, `team:` task graph) | Unified tracking — footer shows both namespaces |
+| Teammate | `workslate_task_*` (`team:` namespace) | Same SQLite DB, concurrent via WAL, self-claim via `workslate_task_update(owner=self)` |
 
 **[OVERRIDE]** `"Avoid over-engineering. Only make changes that are directly requested or clearly necessary."` / `"Don't add features, refactor code, or make 'improvements' beyond what was asked."`
 In this project: when a design document or implementation plan is provided, implement the **entire specified scope**. Do not shrink it. Do not substitute a "simpler approach." Do not produce stubs, placeholders, TODOs, or "for now" implementations. The design document IS the specification — follow it completely. If you believe part of the spec is wrong, say so explicitly and wait for a decision. Do not silently reduce scope.

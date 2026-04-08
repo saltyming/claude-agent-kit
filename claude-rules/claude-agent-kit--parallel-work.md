@@ -10,7 +10,7 @@ Two systems exist for parallel work: **Subagents** and **Agent Teams**. They hav
 | Communication | Results returned to parent only | Teammates message each other directly |
 | Coordination | Parent manages everything | Shared task list with self-claiming |
 | Context | Own window; result summarized to parent | Own window; loads CLAUDE.md, MCP, skills |
-| Task system | None (prompt = task) | Built-in with dependencies + file locking |
+| Task system | None (prompt = task) | `workslate_task_*` with dependencies + SQLite WAL concurrency |
 | Best for | Focused, fire-and-forget work | Complex work requiring collaboration |
 | Token cost | Lower | Higher (each teammate is a full Claude instance) |
 
