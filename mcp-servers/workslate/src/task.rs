@@ -85,15 +85,6 @@ pub enum TaskStatus {
 }
 
 impl TaskStatus {
-    pub fn as_str(&self) -> &str {
-        match self {
-            TaskStatus::Pending => "pending",
-            TaskStatus::InProgress => "in_progress",
-            TaskStatus::Done => "done",
-            TaskStatus::Blocked => "blocked",
-        }
-    }
-
     pub fn parse(s: &str) -> Result<Self, String> {
         match s {
             "pending" => Ok(TaskStatus::Pending),
