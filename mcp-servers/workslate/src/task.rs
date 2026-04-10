@@ -273,8 +273,8 @@ pub struct TaskClearParams {
 
 // ── Task footer rendering ────────────────────────────────
 
-pub fn render_task_footer(tasks: &[Task], session: &str) -> String {
-    if tasks.is_empty() {
+pub fn render_task_footer(tasks: &[Task], session: &str, buffer_names: &[String]) -> String {
+    if tasks.is_empty() && buffer_names.is_empty() {
         return String::new();
     }
 
@@ -370,6 +370,28 @@ pub fn render_task_footer(tasks: &[Task], session: &str) -> String {
         lines.push(format!("    ... and {} more", hidden));
     }
 
+    if !buffer_names.is_empty() {
+        const MAX_NAMES: usize = 5;
+        let mut sorted: Vec<&String> = buffer_names.iter().collect();
+        sorted.sort();
+        let shown: Vec<String> = sorted
+            .iter()
+            .take(MAX_NAMES)
+            .map(|s| (*s).clone())
+            .collect();
+        let overflow = sorted.len().saturating_sub(MAX_NAMES);
+        let list = if overflow > 0 {
+            format!("{}, +{} more", shown.join(", "), overflow)
+        } else {
+            shown.join(", ")
+        };
+        lines.push(format!(
+            "── Buffers: {} staged ({}) ──",
+            buffer_names.len(),
+            list
+        ));
+    }
+
     lines.push("──────────────────────────────────────────".to_string());
     lines.join("\n")
 }
@@ -402,10 +424,37 @@ CREATE TABLE IF NOT EXISTS task_counters (
 );
 
 CREATE TABLE IF NOT EXISTS buffers (
-    name       TEXT PRIMARY KEY,
-    content    TEXT    NOT NULL,
-    file_path  TEXT,
-    depends_on TEXT    NOT NULL DEFAULT '[]',
-    updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
+    name        TEXT PRIMARY KEY,
+    content     TEXT    NOT NULL,
+    file_path   TEXT,
+    depends_on  TEXT    NOT NULL DEFAULT '[]',
+    source_hash TEXT,
+    updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 ";
+
+/// Apply schema migrations to an existing database. Runs after SCHEMA_SQL,
+/// which is idempotent (CREATE TABLE IF NOT EXISTS). Migrations handle cases
+/// where an older DB exists without newer columns.
+///
+/// Each migration must be idempotent — safe to re-run on an already-migrated DB.
+pub fn migrate_db(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    // v8.3: add buffers.source_hash for stale buffer detection
+    let has_source_hash = {
+        let mut stmt = conn.prepare("PRAGMA table_info(buffers)")?;
+        let mut found = false;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let col_name: String = row.get(1)?;
+            if col_name == "source_hash" {
+                found = true;
+                break;
+            }
+        }
+        found
+    };
+    if !has_source_hash {
+        conn.execute("ALTER TABLE buffers ADD COLUMN source_hash TEXT", [])?;
+    }
+    Ok(())
+}

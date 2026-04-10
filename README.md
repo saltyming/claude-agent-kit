@@ -16,21 +16,26 @@ Claude Code ships with system prompt directives optimized for casual Q&A — not
 | (no verification required) | Verify before claiming completion. Never fake a green result. |
 
 Also includes:
-- **Agent Teams workflow** — self-claim policy, leader intervention patterns, teammate communication triggers
-- **Code Staging via workslate** — staged editing workflow that prevents chain-of-thought leakage and scope reduction
-- **Unified task system** — all contexts (solo, leader, teammate) use `workslate_task_*` with `ws:`/`team:` namespaces
-- **Quality guardrails** — false claims mitigation, comment discipline, verification fallback
+- **Agent Teams workflow** — self-claim policy, leader intervention patterns, teammate communication triggers, **token cost criteria** (when a team is actually worth it vs. single session), and a **HARD RULE completion report format** that caps per-report tokens
+- **Code Staging via workslate** — staged editing workflow that prevents chain-of-thought leakage and scope reduction, with safety rules for `workslate_clear`, stale-buffer handling, and buffer naming across solo/leader/teammate contexts
+- **Unified task system** — all contexts (solo, leader, teammate) use `workslate_task_*` with `ws:`/`team:` namespaces, sharing a single SQLite DB via WAL concurrency
+- **Quality guardrails** — false claims mitigation, comment discipline, verification requirement before claiming completion
 
 ### Workslate MCP Server
 
 An MCP server for Claude Code that provides:
 
-- **Staged code editing** — write code to buffers, review the diff, then apply. Catches mistakes before they reach files. New files show full content with line numbers for review.
+- **Staged code editing** — write code to buffers, review the diff, then apply. Catches mistakes before they reach files. New files show full content with line numbers for review. Buffers persist across server restarts (SQLite-backed).
+- **Stale buffer detection** — when a buffer is loaded from disk, workslate records a SHA-256 of the file. At apply time it re-hashes the file and refuses to write if the disk content changed since load. `force=true` overrides. This catches silent data loss when another process (teammate, formatter, user) edited the file behind workslate's back.
+- **One buffer per file** — the server rejects creating a second buffer targeting the same file path, forcing you to either extend the existing buffer or explicitly clear it. Prevents conflicting edits from different buffers.
+- **Auto-clear on apply** — successful `workslate_apply` removes the buffer from both memory and SQLite automatically; failed apply preserves it for retry. `workslate_clear` is only needed to abandon a buffer you decided not to apply.
+- **Safe clear** — `workslate_clear()` without arguments is rejected. You must pass either `name="<buffer>"` or the explicit `all=true` opt-in (which lists the buffers being cleared as a last checkpoint). Guards against catastrophic wipes in shared/team staging areas.
 - **File reading with line numbers** — read files from disk with numbered output, feeding directly into line-range editing. Supports range reads (`start_line`/`end_line`).
 - **Pattern search** — find patterns (substring or regex) in files, returns matches with context and a summary of line numbers for precise `workslate_edit` targeting.
 - **SQLite-backed task tracking** — project-scoped tasks stored in `workslate.db` with WAL mode for concurrent access by multiple agents. Supports `ws:` (personal) and `team:` (coordination) namespaces with cross-namespace dependencies.
 - **Named task sessions** — `workslate_task_init("auth-refactor")` isolates tasks per work context. Multiple sessions coexist in SQLite, resumable across restarts.
-- **Auto-footer** — every tool response includes a task progress summary so you never lose sight of what's done and what's next.
+- **Auto-footer** — every tool response appends a footer showing active session, task progress by namespace (`ws:[3/5] team:[1/3]`), and a `── Buffers: N staged (names) ──` line when any buffers are live. You never lose sight of what's done, what's next, or what's left in staging.
+- **Project root guard** — all file operations are restricted to the current working directory tree. The server refuses to read or write outside the project root, even via symlinks.
 
 #### Tools
 
@@ -38,14 +43,14 @@ An MCP server for Claude Code that provides:
 
 | Tool | Description |
 |------|-------------|
-| `workslate_write(name, content, file_path?, depends_on?)` | Store content in a buffer. If `file_path` given, returns diff for review. New files show full content with line numbers. `depends_on` declares buffer application ordering. |
-| `workslate_edit(name, file_path?, old_string?, new_string, position?, match_index?, line_start?, line_end?)` | Stage an edit. With `file_path`: loads from disk and edits. Without: edits existing buffer content. Position: `replace`/`after`/`before`/`append`. Targeting: unique match (default), `match_index` (Nth occurrence), or `line_start`/`line_end` (line range). |
+| `workslate_write(name, content, file_path?, depends_on?)` | Store content in a buffer. If `file_path` given, returns diff for review and records a `source_hash` of the current disk file for stale detection. New files show full content with line numbers. `depends_on` declares buffer application ordering. One buffer per file enforced. |
+| `workslate_edit(name, file_path?, old_string?, new_string, position?, match_index?, line_start?, line_end?)` | Stage an edit. With `file_path`: loads file from disk, records `source_hash`, edits. Without: edits existing buffer content (chain edits on a stable buffer). Position: `replace` (default) / `after` / `before` / `append`. Targeting: unique match, `match_index` (Nth occurrence), or `line_start`/`line_end` (line range). One buffer per file enforced. |
 | `workslate_read(name?, file_path?, line_numbers?, start_line?, end_line?)` | Read a buffer by name, or read a file from disk with line numbers. File mode supports range reads. |
 | `workslate_search(file_path, pattern, regex?, context?)` | Search a file for a pattern. Returns matches with context lines and a Summary of line numbers for use with `workslate_edit`. |
 | `workslate_list()` | List all buffers with types and sizes. |
 | `workslate_diff(name, file_path?, summary?, old_string?)` | Re-check diff between buffer and file. `summary=true` returns one-line stats (e.g. "2 hunks, +15/-8 lines"). |
-| `workslate_apply(name, file_path?, dry_run?, old_string?)` | Apply buffer to file. `dry_run=true` previews without writing. Respects `depends_on` ordering. |
-| `workslate_clear(name?)` | Clear one or all buffers. |
+| `workslate_apply(name, file_path?, dry_run?, force?, old_string?)` | Apply buffer to file. `dry_run=true` previews without writing (buffer preserved). `force=true` overrides stale buffer detection (disk file changed since load). On successful write, the buffer is automatically cleared from memory and SQLite — no follow-up `workslate_clear` needed. Respects `depends_on` ordering. |
+| `workslate_clear(name?, all?)` | Clear a buffer. Pass `name` to clear a specific buffer. To clear ALL staged buffers, pass `all=true` explicitly — bare calls are rejected to prevent accidental wipes. Only needed to abandon a buffer you decided not to apply (successful apply auto-clears). |
 
 **Task tracking:**
 
@@ -99,7 +104,7 @@ This builds the workslate binary, copies `CLAUDE.md` to `~/.claude/`, rule files
 make uninstall    # only removes files it installed (verified by signature)
 ```
 
-The main `CLAUDE.md` contains core principles and quick reference (~115 lines). Detailed rules live in `claude-rules/` and are auto-loaded by Claude Code from `.claude/rules/`.
+The main `CLAUDE.md` contains core principles and quick reference (~125 lines). Detailed rules live in `claude-rules/` (task-execution, parallel-work, git-workflow, framework-conventions) and are auto-loaded by Claude Code from `.claude/rules/`.
 
 ### Manual install
 

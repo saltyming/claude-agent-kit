@@ -154,14 +154,14 @@ Targeting options (apply to all position modes except append):
 **Partial replacement workflow (existing file):**
 1. `workslate_edit(name, file_path, old_string, new_string)` — load file from disk, apply edit, review diff
 2. If more edits needed: `workslate_edit(name, old_string, new_string)` — edits buffer (no file_path = chains with previous)
-3. `workslate_apply(name)` — uses stored file_path
-4. `workslate_clear(name)` — clean up the buffer
+3. `workslate_apply(name)` — uses stored file_path; buffer auto-clears on success
 
 **Full file workflow (new file):**
 1. `workslate_write(name, content, file_path)` — draft the full content, review the returned diff
 2. If issues found: `workslate_edit(name, old_string, new_string)` — edits buffer directly (no file_path = buffer mode)
-3. `workslate_apply(name)` — uses stored file_path
-4. `workslate_clear(name)` — clean up the buffer
+3. `workslate_apply(name)` — uses stored file_path; buffer auto-clears on success
+
+`workslate_clear` is only needed to abandon a buffer without applying it. Successful `workslate_apply` removes the buffer from both memory and SQLite automatically.
 
 `workslate_diff(name)` remains available for re-checking a buffer against its target file at any time. Use `workslate_diff(name, summary=true)` for a one-line stat ("N hunks, +X/-Y lines") to save context.
 
@@ -173,8 +173,21 @@ Targeting options (apply to all position modes except append):
 - **Always pass `file_path` to `workslate_write`** so the diff is returned for review. Omitting it skips the review — only acceptable for scratch buffers not destined for files.
 - Use descriptive buffer names that indicate the target (e.g., `auth-middleware`, `lock-ordering-fix`)
 - Chain-of-thought prohibition applies equally to staged code — no reasoning in comments
-- Clear buffers after applying to avoid stale state across tasks
+- `workslate_apply` auto-clears the buffer on success; only call `workslate_clear(name=...)` to **abandon** a buffer you no longer want to apply
 - When working in Agent Teams, each teammate should use buffer names prefixed with their scope to avoid collisions
+
+### Workslate safety rules (HARD RULES)
+
+These rules prevent catastrophic loss of staged work. The code enforces the first rule; the others are behavioral.
+
+- **`workslate_clear()` without arguments is forbidden.** The tool now requires either `name="<buffer>"` or `all=true` explicitly. This exists because a bare call in Agent Team scenarios can wipe every teammate's staged work in one step. If you want to clear everything, pass `all=true` and you will see the list of buffers being cleared — use that as a last checkpoint.
+- **Buffer names must be prefixed with context** so multiple agents in the same project (solo sessions, team leader, teammates) do not collide on a shared key:
+  - Solo work: `<module>-<file>` — e.g., `vfs-main-rs`, `auth-middleware`
+  - Team leader: `leader-<file>` — e.g., `leader-types-rs`
+  - Teammate: `<teammate-name>-<file>` — e.g., `posix-libs-at-rs`, `backend-api-routes`
+- **`workslate_apply` auto-clears the applied buffer on success** — both from memory and from SQLite. You do not need (and should not) call `workslate_clear` after a successful apply. If apply fails (write error, stale buffer without `force`, unapplied dependency), the buffer is preserved so you can retry. `workslate_clear(name=...)` is only for abandoning a buffer you decided not to apply.
+- **Stale buffer detection is on by default.** When `workslate_edit` or `workslate_write` loads a file from disk, the current SHA-256 is recorded. At apply time, if the disk file has changed, apply refuses with an error pointing at `workslate_diff`. If you intentionally want to overwrite the changed file, pass `force=true`. Do not habitually pass `force=true` — it defeats the safety net. Investigate the divergence first.
+- **The footer shows staged buffer state.** After each tool call, the footer includes `── Buffers: N staged (names) ──` when any buffer is live. Use this to notice buffers left behind from a prior task and clean them up before starting new work.
 
 ## Task Sessions
 

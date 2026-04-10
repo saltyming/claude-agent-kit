@@ -38,6 +38,21 @@ Lightweight workers spawned via the `Agent` tool. Execute a task and return a re
 
 A coordination system for multiple Claude Code instances that work together via shared task lists and direct messaging. **Experimental feature** — requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`.
 
+### Agent Teams are expensive — do not reach for them first
+
+Each teammate is a full Claude Code instance. On spawn, each teammate independently loads CLAUDE.md, every MCP server, and every skill. Once running, every completion report, idle notification, and status update flows through the leader's context. A 5-teammate team spends roughly 3–5× the tokens of the same work done in a single session.
+
+**Scale criteria — use these, not "the work feels parallel":**
+
+| Scope | Recommended approach |
+|---|---|
+| < 5 files to modify | Single session. No team, no subagents. |
+| 5–10 files, cross-cutting concerns | Leader session + 1–2 subagents. Subagents do research or isolated edits; leader integrates. |
+| 10+ files with clean, non-overlapping file scopes | Agent Team is justified. |
+| 10+ files but scopes overlap / shared types dominate | Still single session — a team will generate coordination overhead that exceeds the parallelism win. |
+
+**When unsure: do not create a team.** A slower single session is cheaper than a fast-but-expensive team. The user can always ask for parallelism if they want it.
+
 **How Agent Teams actually work (system-level guarantees):**
 - Teammates load **CLAUDE.md, MCP servers, and skills** automatically (same as any Claude Code session)
 - Teammates do NOT inherit the leader's conversation history
@@ -144,8 +159,7 @@ The leader does NOT need to review every completion report in detail. Skim repor
 1. **On creation:** Read and explore code within your assigned scope. **Do NOT start implementing anything.** Wait until tasks appear in the task list.
 2. **Self-claim** an eligible task (see Task Claiming Policy below).
 3. **Work** on that task only. Stay within your assigned file scope.
-4. **On task completion:** Send a **completion report** to the leader, then self-claim the next eligible task. If no eligible task exists, wait.
-   - Report format: files created/modified, cross-module references, whether build verification is needed
+4. **On task completion:** Send a **completion report** to the leader using the format below, then self-claim the next eligible task. If no eligible task exists, wait.
 5. **On blocker:** Report to the leader immediately and wait.
 6. **On `shutdown_request`:** Finish current work and shut down gracefully.
 
@@ -155,6 +169,35 @@ The leader does NOT need to review every completion report in detail. Skim repor
 - If task ownership is ambiguous, ask the leader instead of claiming
 - **Do not reduce task scope.** Implement the entire task as specified. If you believe the scope is too large or contains an error, report to the leader BEFORE starting — do not silently skip parts. "Simplify" or "minimal implementation" is not an acceptable reason to cut scope.
 - **Notify affected teammates directly.** When your output (types, APIs, file formats, constants) is used by another teammate's task, message that teammate with what you produced. Do not assume they will discover it on their own.
+
+### Completion report format (HARD RULE)
+
+Every completion report must be plain text, under ~500 tokens, and follow this exact structure:
+
+```
+TASK: <id> — DONE
+
+CHANGED:
+- <file:line-range>: <1-line summary of what changed>
+- <file:line-range>: <1-line summary of what changed>
+
+VERIFICATION:
+- <grep check, invariant confirmed, types compile, etc — concrete evidence>
+
+DEFERRED (optional, omit if none):
+- <thing intentionally not touched and why>
+
+NEXT: <ready for task X / shutdown / blocked on Y>
+```
+
+**Rules for the report:**
+- Do not narrate your process. "I started by reading X, then I considered Y, then I chose Z" is noise. The final state is what matters.
+- Do not describe each hunk. The leader has the diff.
+- Do not paste code. If the leader needs details, they will read the file.
+- Prefer file:line references over prose descriptions of location.
+- `VERIFICATION` must contain **concrete evidence**, not assertions. "grep 'fn old_name' returns 0 matches" is evidence. "types are correct" is not.
+
+Long, narrative completion reports waste the leader's context and delay the next task assignment. A disciplined report is a sign of a disciplined teammate.
 
 ### Task Claiming Policy
 

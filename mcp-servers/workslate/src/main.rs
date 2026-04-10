@@ -18,6 +18,7 @@ use rmcp::{
     tool, tool_router,
 };
 use serde_json;
+use sha2::{Digest, Sha256};
 use similar::{DiffOp, TextDiff};
 use tokio::sync::RwLock;
 
@@ -28,9 +29,24 @@ use buffer::{
 use file::{MAX_FILE_SIZE, format_numbered_line, is_binary, validate_path};
 use task::{
     Namespace, TaskClearParams, TaskCreateParams, TaskDoneParams, TaskId, TaskInitParams,
-    TaskListParams, TaskStatus, TaskUpdateParams, load_tasks,
+    TaskListParams, TaskStatus, TaskUpdateParams, load_tasks, migrate_db,
     recompute_blocked_status, render_task_footer, serialize_depends_on, SCHEMA_SQL,
 };
+
+// ── Content hashing ───────────────────────────────────────
+
+/// SHA-256 of a string, hex-encoded. Used for stale buffer detection:
+/// workslate records this when a buffer is loaded from disk, then
+/// re-checks it at apply time to catch out-of-band modifications.
+fn hash_content(content: &str) -> String {
+    hash_bytes(content.as_bytes())
+}
+
+fn hash_bytes(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
 
 // ── Workslate server ──────────────────────────────────────
 
@@ -69,7 +85,7 @@ impl Workslate {
         let line_count = params.content.lines().count();
         let header = format!("Buffer '{}' written ({} lines)", params.name, line_count);
 
-        let diff_output = if let Some(ref file_path) = params.file_path {
+        let (diff_output, source_hash) = if let Some(ref file_path) = params.file_path {
             if let Err(e) = validate_path(file_path, &self.project_root) {
                 return Ok(CallToolResult::error(vec![Content::text(e)]));
             }
@@ -78,6 +94,7 @@ impl Workslate {
             }
             match tokio::fs::read_to_string(file_path).await {
                 Ok(file_content) => {
+                    let hash = hash_content(&file_content);
                     let diff = TextDiff::from_lines(&file_content, &params.content);
                     let unified = diff
                         .unified_diff()
@@ -87,11 +104,12 @@ impl Workslate {
                             &format!("b/{}", file_path),
                         )
                         .to_string();
-                    if unified.is_empty() {
-                        Some("No differences".to_string())
+                    let diff_str = if unified.is_empty() {
+                        "No differences".to_string()
                     } else {
-                        Some(unified)
-                    }
+                        unified
+                    };
+                    (Some(diff_str), Some(hash))
                 }
                 Err(_) => {
                     let width = line_count.max(1).to_string().len();
@@ -101,11 +119,14 @@ impl Workslate {
                         .enumerate()
                         .map(|(i, line)| format_numbered_line(i + 1, width, line, false))
                         .collect();
-                    Some(format!("(new file: {})\n{}", file_path, numbered.join("\n")))
+                    (
+                        Some(format!("(new file: {})\n{}", file_path, numbered.join("\n"))),
+                        None,
+                    )
                 }
             }
         } else {
-            None
+            (None, None)
         };
 
         let mut buffers = self.buffers.write().await;
@@ -113,6 +134,7 @@ impl Workslate {
             content: params.content,
             file_path: params.file_path.clone(),
             depends_on: params.depends_on.unwrap_or_default(),
+            source_hash,
         };
         self.save_buffer(&params.name, &buf);
         buffers.insert(params.name.clone(), buf);
@@ -162,7 +184,7 @@ impl Workslate {
             },
         };
 
-        let (base_content, stored_file_path, stored_depends_on) = if let Some(ref file_path) = params.file_path {
+        let (base_content, stored_file_path, stored_depends_on, stored_source_hash) = if let Some(ref file_path) = params.file_path {
             if let Err(e) = validate_path(file_path, &self.project_root) {
                 return Ok(CallToolResult::error(vec![Content::text(e)]));
             }
@@ -170,7 +192,10 @@ impl Workslate {
                 return Ok(err);
             }
             match tokio::fs::read_to_string(file_path).await {
-                Ok(c) => (c, Some(file_path.clone()), vec![]),
+                Ok(c) => {
+                    let hash = hash_content(&c);
+                    (c, Some(file_path.clone()), vec![], Some(hash))
+                }
                 Err(e) => {
                     return Ok(CallToolResult::error(vec![Content::text(format!(
                         "Failed to read '{}': {}",
@@ -181,7 +206,12 @@ impl Workslate {
         } else {
             let buffers = self.buffers.read().await;
             match buffers.get(&params.name) {
-                Some(buf) => (buf.content.clone(), buf.file_path.clone(), buf.depends_on.clone()),
+                Some(buf) => (
+                    buf.content.clone(),
+                    buf.file_path.clone(),
+                    buf.depends_on.clone(),
+                    buf.source_hash.clone(),
+                ),
                 None => {
                     return Ok(CallToolResult::error(vec![Content::text(format!(
                         "No buffer '{}' and no file_path provided",
@@ -229,6 +259,7 @@ impl Workslate {
             content: result_content,
             file_path: stored_file_path,
             depends_on: stored_depends_on,
+            source_hash: stored_source_hash,
         };
         self.save_buffer(&params.name, &buf);
         buffers.insert(params.name.clone(), buf);
@@ -504,7 +535,7 @@ impl Workslate {
     }
 
     #[tool(
-        description = "Apply buffer content to file. file_path falls back to stored target. old_string for partial replacement. dry_run=true to preview. Respects buffer depends_on ordering."
+        description = "Apply buffer content to file. file_path falls back to stored target. old_string for partial replacement. dry_run=true to preview without writing (buffer is preserved). force=true overrides stale buffer detection (disk file changed since load). On successful write, the buffer is automatically cleared from memory and SQLite — no follow-up workslate_clear needed. Respects buffer depends_on ordering."
     )]
     async fn workslate_apply(
         &self,
@@ -550,6 +581,41 @@ impl Workslate {
                 )]));
             }
         };
+
+        // Stale buffer check: if we recorded a source_hash when the buffer
+        // was loaded from disk, verify the file hasn't been modified since.
+        // This catches silent data loss when another process (teammate,
+        // user, formatter) edited the file behind workslate's back.
+        // Skip when force=true or no hash was recorded (new-file writes).
+        if !params.force.unwrap_or(false) {
+            if let Some(ref recorded_hash) = buffer.source_hash {
+                match tokio::fs::read(&file_path).await {
+                    Ok(current_bytes) => {
+                        let current_hash = hash_bytes(&current_bytes);
+                        if &current_hash != recorded_hash {
+                            return Ok(CallToolResult::error(vec![Content::text(format!(
+                                "Stale buffer: '{}' was loaded from '{}' but the file has been modified since. \
+                                 Review with workslate_diff, then either re-stage the edit or apply with force=true.",
+                                params.name, file_path
+                            ))]));
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Stale buffer: '{}' was loaded from '{}' but the file no longer exists. \
+                             Apply with force=true to recreate it, or clear the buffer.",
+                            params.name, file_path
+                        ))]));
+                    }
+                    Err(e) => {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Failed to check '{}' for stale buffer detection: {}",
+                            file_path, e
+                        ))]));
+                    }
+                }
+            }
+        }
 
         if let Some(ref old_string) = params.old_string {
             let file_content = match tokio::fs::read_to_string(&file_path).await {
@@ -597,6 +663,7 @@ impl Workslate {
             }
 
             self.applied_buffers.write().await.insert(params.name.clone());
+            self.buffers.write().await.remove(&params.name);
             self.delete_buffer(&params.name);
 
             Ok(CallToolResult::success(vec![Content::text(format!(
@@ -637,6 +704,7 @@ impl Workslate {
             }
 
             self.applied_buffers.write().await.insert(params.name.clone());
+            self.buffers.write().await.remove(&params.name);
             self.delete_buffer(&params.name);
 
             Ok(CallToolResult::success(vec![Content::text(format!(
@@ -646,12 +714,39 @@ impl Workslate {
         }
     }
 
-    #[tool(description = "Clear a specific buffer by name, or all buffers if no name is given")]
+    #[tool(description = "Clear a buffer. Pass `name` to clear a specific buffer. To clear ALL staged buffers, pass `all=true` explicitly — there is no bare-call shortcut, to prevent accidental wipes of team/shared staging areas.")]
     async fn workslate_clear(
         &self,
         Parameters(params): Parameters<ClearParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let mut buffers = self.buffers.write().await;
+
+        // Bare workslate_clear() is forbidden — caller must specify a name
+        // or pass all=true. This guards against catastrophic wipes in shared
+        // staging areas (e.g., Agent Team scenarios where one teammate's
+        // cleanup would destroy another teammate's staged work).
+        if params.name.is_none() && !params.all.unwrap_or(false) {
+            if buffers.is_empty() {
+                return Ok(CallToolResult::success(vec![Content::text(
+                    "No buffers to clear.".to_string(),
+                )]));
+            }
+            let mut names: Vec<&String> = buffers.keys().collect();
+            names.sort();
+            let list = names
+                .iter()
+                .map(|n| format!("  - {}", n))
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Ok(CallToolResult::error(vec![Content::text(format!(
+                "workslate_clear requires `name` or `all=true`. {} buffer(s) currently staged:\n{}\n\n\
+                 Clear one:   workslate_clear(name=\"<name>\")\n\
+                 Clear all:   workslate_clear(all=true)",
+                buffers.len(),
+                list
+            ))]));
+        }
+
         if let Some(ref name) = params.name {
             if buffers.remove(name).is_some() {
                 self.applied_buffers.write().await.remove(name);
@@ -667,14 +762,24 @@ impl Workslate {
                 ))]))
             }
         } else {
-            let count = buffers.len();
+            // all=true branch
+            let mut names: Vec<String> = buffers.keys().cloned().collect();
+            names.sort();
+            let count = names.len();
             buffers.clear();
             self.applied_buffers.write().await.clear();
             self.delete_all_buffers();
-            Ok(CallToolResult::success(vec![Content::text(format!(
-                "Cleared {} buffer(s)",
-                count
-            ))]))
+            if count == 0 {
+                Ok(CallToolResult::success(vec![Content::text(
+                    "No buffers to clear.".to_string(),
+                )]))
+            } else {
+                Ok(CallToolResult::success(vec![Content::text(format!(
+                    "Cleared {} buffer(s): {}",
+                    count,
+                    names.join(", ")
+                ))]))
+            }
         }
     }
 
@@ -1215,8 +1320,8 @@ impl Workslate {
         if let Ok(conn) = self.db.lock() {
             let deps_json = serde_json::to_string(&buf.depends_on).unwrap_or_else(|_| "[]".to_string());
             conn.execute(
-                "INSERT OR REPLACE INTO buffers (name, content, file_path, depends_on, updated_at) VALUES (?, ?, ?, ?, datetime('now'))",
-                rusqlite::params![name, buf.content, buf.file_path, deps_json],
+                "INSERT OR REPLACE INTO buffers (name, content, file_path, depends_on, source_hash, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'))",
+                rusqlite::params![name, buf.content, buf.file_path, deps_json, buf.source_hash],
             ).ok();
         }
     }
@@ -1239,7 +1344,7 @@ impl Workslate {
             Ok(c) => c,
             Err(_) => return map,
         };
-        let mut stmt = match conn.prepare("SELECT name, content, file_path, depends_on FROM buffers") {
+        let mut stmt = match conn.prepare("SELECT name, content, file_path, depends_on, source_hash FROM buffers") {
             Ok(s) => s,
             Err(_) => return map,
         };
@@ -1248,8 +1353,9 @@ impl Workslate {
             let content: String = row.get(1)?;
             let file_path: Option<String> = row.get(2)?;
             let deps_json: String = row.get(3)?;
+            let source_hash: Option<String> = row.get(4)?;
             let depends_on: Vec<String> = serde_json::from_str(&deps_json).unwrap_or_default();
-            Ok((name, BufferContent { content, file_path, depends_on }))
+            Ok((name, BufferContent { content, file_path, depends_on, source_hash }))
         }) {
             Ok(r) => r,
             Err(_) => return map,
@@ -1284,6 +1390,14 @@ impl Workslate {
         };
         drop(session);
 
+        // Snapshot buffers BEFORE acquiring the SQLite mutex.
+        // Holding a std::sync::MutexGuard across an await makes the
+        // tool future !Send, which the rmcp handler rejects.
+        let buffer_names: Vec<String> = {
+            let buffers = self.buffers.read().await;
+            buffers.keys().cloned().collect()
+        };
+
         let conn = match self.db.lock() {
             Ok(c) => c,
             Err(_) => return,
@@ -1294,10 +1408,10 @@ impl Workslate {
         };
         drop(conn);
 
-        if tasks.is_empty() {
+        if tasks.is_empty() && buffer_names.is_empty() {
             return;
         }
-        let footer = render_task_footer(&tasks, &session_name);
+        let footer = render_task_footer(&tasks, &session_name, &buffer_names);
         result.content.push(Content::text(footer));
     }
 }
@@ -1391,6 +1505,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let conn = rusqlite::Connection::open(&db_path)?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")?;
     conn.execute_batch(SCHEMA_SQL)?;
+    migrate_db(&conn)?;
 
     let project_root = cwd.canonicalize()?;
     let server = Workslate::new(conn, tasks_dir, project_root);

@@ -16,6 +16,11 @@ pub struct BufferContent {
     pub content: String,
     pub file_path: Option<String>,
     pub depends_on: Vec<String>,
+    /// SHA-256 of the disk file contents at the moment this buffer was
+    /// loaded or written. Used by workslate_apply to detect stale buffers
+    /// (disk file modified out-of-band since the buffer was staged).
+    /// None for pure-buffer writes with no target file.
+    pub source_hash: Option<String>,
 }
 
 // ── Target resolution ────────────────────────────────────
@@ -244,10 +249,16 @@ pub struct ApplyParams {
     pub old_string: Option<String>,
     /// If true, show final file content without actually writing to disk
     pub dry_run: Option<bool>,
+    /// Override stale buffer detection. When the disk file has changed since
+    /// the buffer was loaded, apply refuses to write unless force=true.
+    pub force: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ClearParams {
-    /// Name of the buffer to clear. If omitted, all buffers are cleared.
+    /// Name of the buffer to clear. Required unless `all` is true.
     pub name: Option<String>,
+    /// If true, clear ALL staged buffers. Destructive — requires explicit
+    /// opt-in to prevent accidental wipes in shared/team staging areas.
+    pub all: Option<bool>,
 }
