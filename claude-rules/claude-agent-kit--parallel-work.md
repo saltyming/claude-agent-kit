@@ -53,6 +53,15 @@ Each teammate is a full Claude Code instance. On spawn, each teammate independen
 
 **When unsure: do not create a team.** A slower single session is cheaper than a fast-but-expensive team. The user can always ask for parallelism if they want it.
 
+### Model choice for teammates
+
+Teammates are spawned via the `Agent` tool, which takes a `model` parameter (`sonnet` | `opus` | `haiku`). Pick deliberately — model choice is the single biggest lever on team cost after team size.
+
+- **Default teammates to Sonnet** — `Agent(team_name=..., name=..., model="sonnet", ...)`. Teammate work is well-scoped: claim an unblocked task, edit files inside an assigned scope, produce a completion report. Sonnet handles this reliably at a fraction of Opus token cost, and the leader (on Opus) is where cross-teammate reasoning happens anyway.
+- **Leader stays on Opus** — inherited from the current session, no override needed. The leader designs the task graph, reconciles conflicting assumptions between teammates, and owns integration/verification. Weakening the leader to save tokens usually costs more in rework.
+- **Escalate a specific teammate to Opus only for genuine reasoning load** — e.g., a `verifier-review` / semantic reviewer that must catch subtle contract mismatches across modules, or an `arch-designer` making cross-cutting design calls. Note the exception in the creation prompt so future readers know why that teammate is not on the default.
+- **Model choice does not license scope shrinkage.** Sonnet teammates are still bound by the "task scope is non-negotiable" rule — if a Sonnet teammate cannot complete the task as specified, they report to the leader rather than silently trimming it.
+
 **How Agent Teams actually work (system-level guarantees):**
 - Teammates load **CLAUDE.md, MCP servers, and skills** automatically (same as any Claude Code session)
 - Teammates do NOT inherit the leader's conversation history
@@ -131,6 +140,7 @@ Read and understand the code in your scope while waiting for task assignments."
 6. Shutdown all teammates before `TeamDelete`
 
 **Leader checklist:**
+- [ ] Teammates spawned with `model="sonnet"` unless a specific role justifies Opus (document the exception in the creation prompt)
 - [ ] Creation prompts contain role/scope only (no implementation instructions)
 - [ ] Task graph designed with proper `blockedBy` dependencies
 - [ ] Shared types / integration / public interface tasks reserved to leader (owner = leader)
@@ -310,6 +320,8 @@ Verification teammate's scope:
 `verifier-build` runs immediately when any task completes (fast, parallel-safe). `verifier-review` runs after `verifier-build` passes (deeper, sequential). This prevents the build queue from blocking semantic review and vice versa.
 
 For teams of 1-2 implementers, a single verifier is sufficient.
+
+Spawn all three with `model="sonnet"` by default. Escalate `verifier-review` to Opus only if semantic review is missing regressions that cross-module reasoning would catch — and document that exception in its creation prompt.
 
 Creation prompt examples:
 ```

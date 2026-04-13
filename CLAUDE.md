@@ -1,8 +1,8 @@
 <!-- claude-agent-kit -->
 # Claude Agent Operating Manual
 
-**Version**: 8.3
-**Last Updated**: 2026-04-11
+**Version**: 8.4
+**Last Updated**: 2026-04-13
 
 > Global operating rules for AI coding agents. Focuses on user-specific preferences and overrides — general tool usage, security, and communication rules are handled by the system prompt.
 
@@ -108,6 +108,7 @@ User Request
 ---
 
 **Version History:**
+- v8.4 (2026-04-13): Agent Teams — default teammates to `model="sonnet"` for cost efficiency (each teammate is a full Claude instance; Sonnet handles scoped task-claiming work reliably). Leader stays on Opus. Exception carve-out for `verifier-review` / `arch-designer` roles that genuinely need cross-module reasoning. Added leader checklist item and note to verifier creation-prompt examples.
 - v8.3 (2026-04-11): Field feedback pass — `workslate_clear` safety (bare call forbidden, `all=true` opt-in with buffer list preview), stale buffer detection via SHA-256 `source_hash` recorded at load/write and verified at apply (`force=true` override), footer buffer status line, successful `workslate_apply` now auto-clears the buffer from both memory and SQLite (failed apply preserves buffer for retry), Agent Teams token cost warning + scale criteria in parallel-work.md, HARD RULE completion report format template
 - v8.2.1 (2026-04-09): Rename DB to workslate.db (auto-migrate from workslate-tasks.db)
 - v8.2 (2026-04-09): SQLite buffer persistence (survives restarts), same-file collision guard (one buffer per file enforced), edit tool signatures in docs, search regex? clarification
