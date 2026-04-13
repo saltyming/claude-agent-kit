@@ -1,8 +1,8 @@
 <!-- claude-agent-kit -->
 # Claude Agent Operating Manual
 
-**Version**: 8.4
-**Last Updated**: 2026-04-13
+**Version**: 8.5.1
+**Last Updated**: 2026-04-14
 
 > Global operating rules for AI coding agents. Focuses on user-specific preferences and overrides — general tool usage, security, and communication rules are handled by the system prompt.
 
@@ -45,6 +45,8 @@ You ARE capable. But when existing code looks wrong, apply this test: have you r
 In this project: before reporting a task complete, verify it actually works — run the test, execute the script, check the output. If verification is not possible (no test exists, cannot run the code, side-effect-only code), say so explicitly rather than claiming success, then: state the assumptions the implementation relies on, describe how it SHOULD be verified, and identify the highest-risk areas of the change.
 
 **[OVERRIDE]** Report outcomes faithfully. If tests fail, say so with the relevant output. If you did not run a verification step, say that rather than implying it succeeded. Never claim "all tests pass" when output shows failures, never suppress or simplify failing checks (tests, lints, type errors) to manufacture a green result, and never characterize incomplete or broken work as done.
+
+**[OVERRIDE]** Do NOT declare a task unfinishable, pause work, or suggest the user restart the session based on context usage. The system auto-compacts prior messages as the window fills — *"your conversation with the user is not limited by the context window"*. "Context usage 34%" / "50%" / "80%" is not a stopping condition. Keep working until the task is actually complete or you hit a real blocker (missing information, failing tool, ambiguous requirement). The "token cost" / "waste leader's context" / "save context" warnings elsewhere in this manual are scoped to (a) multi-teammate Agent Team coordination quality, (b) model selection cost (Opus vs. Sonnet), and (c) prompt-cache retention — **not** to solo-session work limits. Forecasting "I might run out" and bailing early is a failure mode, not caution. If you genuinely approach the limit, the system compacts and you continue; you do not need to predict or preempt this.
 
 ### Communication
 
@@ -95,19 +97,22 @@ User Request
 │
 └─ Complex parallel task?
    ├─ Workers independent, no communication needed?
-   │  └─ Subagents (Agent tool) with self-contained prompts
+   │  └─ Subagents → Agent(subagent_type=..., prompt=..., ...) — no team_name, self-contained prompts
    └─ Workers need collaboration/discussion?
-      └─ Agent Team (TeamCreate)
-         ├─ Create team (role-only prompts)
-         ├─ Design task graph (blockedBy, leader-reserved)
+      └─ Agent Team (two-step spawn: TeamCreate, then Agent(team_name=...) per teammate)
+         ├─ TeamCreate(team_name=...) — creates empty team container
+         ├─ Agent(team_name=..., name=..., subagent_type=..., model="sonnet", prompt=<role-only>) per teammate
+         ├─ Design task graph (blockedBy, leader-reserved) in team: namespace
          ├─ Teammates self-claim eligible tasks
          ├─ Leader: monitor, build & verify
-         └─ Shutdown teammates + TeamDelete
+         └─ Shutdown teammates (shutdown_request) → TeamDelete
 ```
 
 ---
 
 **Version History:**
+- v8.5.1 (2026-04-14): Added `[OVERRIDE]` in Core Principles > Quality Standards forbidding context-usage-based task abandonment. Addresses observed failure mode where agents declare a task unfinishable at low context usage (e.g., 34%) despite auto-compact making window limit irrelevant. Clarifies that "token cost" / "save context" warnings elsewhere in the manual are scoped to Agent Team coordination / model selection / prompt-cache retention, not solo-session stopping conditions.
+- v8.5 (2026-04-14): Parallel-work docs — clarify that the `Agent` tool spawns both subagents (no `team_name`) and teammates (with `team_name`, after a prior `TeamCreate`). Added explicit "Spawn mechanism" section in `parallel-work.md`, split the leader workflow's single "TeamCreate → Team + teammates created" step into two (TeamCreate creates container, then Agent per teammate), added `subagent_type` guidance (read-only types like `Explore` / `Plan` cannot edit files, so never use for implementation teammates), new anti-pattern rows, and propagated the two-step spawn framing into the main CLAUDE.md decision tree. Docs-only; no code or behavior change.
 - v8.4 (2026-04-13): Agent Teams — default teammates to `model="sonnet"` for cost efficiency (each teammate is a full Claude instance; Sonnet handles scoped task-claiming work reliably). Leader stays on Opus. Exception carve-out for `verifier-review` / `arch-designer` roles that genuinely need cross-module reasoning. Added leader checklist item and note to verifier creation-prompt examples.
 - v8.3 (2026-04-11): Field feedback pass — `workslate_clear` safety (bare call forbidden, `all=true` opt-in with buffer list preview), stale buffer detection via SHA-256 `source_hash` recorded at load/write and verified at apply (`force=true` override), footer buffer status line, successful `workslate_apply` now auto-clears the buffer from both memory and SQLite (failed apply preserves buffer for retry), Agent Teams token cost warning + scale criteria in parallel-work.md, HARD RULE completion report format template
 - v8.2.1 (2026-04-09): Rename DB to workslate.db (auto-migrate from workslate-tasks.db)
