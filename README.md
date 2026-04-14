@@ -184,7 +184,7 @@ claude mcp add aside     -s user --transport stdio -- aside
 
 ## Background
 
-This kit was developed over 2 months of building [SaltyOS](https://github.com/SaltyOS/saltyos), a capability-based microkernel written from scratch in Rust. The project runs 6 parallel Claude Code agents for kernel development, userland servers, and cross-architecture porting. Every rule in the CLAUDE.md exists because something went wrong without it.
+This kit was developed over months of intensive multi-agent development on a real project, running multiple Claude Code agents in parallel against a shared codebase. Every rule in the CLAUDE.md exists because something went wrong without it.
 
 Key references that informed the system prompt overrides:
 
