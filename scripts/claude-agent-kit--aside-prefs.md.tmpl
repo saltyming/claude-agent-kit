@@ -40,14 +40,6 @@ Valid values:
 - `preference-only` — call the preferred backend on explicit user request; no auto-calls.
 - `proactive` — on high-stakes decisions (architecture changes, cross-module refactors, concurrency / invariant changes, API / schema / public-contract changes, security-sensitive code) Claude **SHOULD** call the preferred backend even without being asked. Trigger list and cost carve-out live in `claude-agent-kit--aside.md`. Independent of built-in `advisor()` — fires whether `advisor()` exists in this environment or not.
 
-## Per-topic overrides (fill in to activate routing)
-
-**Fill in to activate routing — leave blank for backend-default only.** Entries below are examples; edit them to match your project, or delete. A filled line becomes a live routing rule Claude follows when the topic applies:
-
-- Frontend / React / Next.js questions → prefer gemini (model: `gemini-3.1-pro`)    <!-- example; edit or remove -->
-- Rust / systems code → prefer copilot (model: `claude-opus-4.6`)                   <!-- example; edit or remove -->
-- General reasoning review → prefer codex (model: `gpt-5.4`)                         <!-- example; edit or remove -->
-
 ## Notes
 
-Free-form. Claude reads this file at the start of each turn when aside tools are available. Keep it short so it stays in active context.
+Free-form. Claude reads this file at the start of each turn when aside tools are available. Keep it short so it stays in active context. Anything you write here is treated as a live rule; there are no templates or placeholders to disambiguate.
