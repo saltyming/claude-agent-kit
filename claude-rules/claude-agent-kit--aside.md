@@ -34,7 +34,7 @@ Fire one aside call to the preferred backend when ANY of these happen, regardles
 - API / wire-protocol / schema / public contract changes visible to callers outside the change set.
 - Concurrency, locking, invariant, or ordering-assumption changes.
 - Security-sensitive code: authentication, authorisation, crypto, access control, input sanitisation, privilege boundaries.
-- IF `advisor()` is available AND you're about to call it for a high-stakes decision → fire an aside call at the same moment. Do not skip either.
+- **Whenever you are about to call `advisor()`, fire an aside call in the same turn.** The act of deciding to call `advisor()` is itself the signal that you want a second opinion — pairing is the whole point. Do NOT re-audit this specific decision against the other triggers above (architecture / API / concurrency / security) to talk yourself out of the pair; those gate the *other* proactive calls, not this one. "I decided this isn't really high-stakes after all" is a failure mode, not caution. The only legitimate reasons to skip aside here: the user's prefs set `policy: conservative` / `policy: preference-only`, or no aside backend is installed on this machine (`aside_list` reports all unavailable).
 
 Announce the call briefly when you fire it ("I'm also asking gemini because this is a Next.js routing question") so the user sees the reasoning.
 
@@ -49,19 +49,12 @@ If both surfaces exist, both run by default on these triggers. If only aside exi
 - If neither is set, omit `model` so the CLI uses its own default.
 - Same flow for `reasoning_effort` (codex / copilot only — gemini CLI currently ignores it).
 
-## Passing model and reasoning_effort
-
-- If the user named a specific model this turn ("ask codex with gpt-5.4"), pass that value as `model`.
-- Otherwise, read the default from `claude-agent-kit--aside-prefs.md` for that backend and pass it as `model`.
-- If neither is set, omit `model` so the CLI uses its own default.
-- Same flow for `reasoning_effort` (codex / copilot only — gemini CLI currently ignores it).
-
 ## Cost awareness
 
 Every aside call consumes the user's third-party API quota. Rules:
 - Single question per call. No loops. No duplicate calls for the same question.
 - Consolidate multiple questions into one prompt when they share context.
-- **A call fired by a `proactive` trigger in the user's prefs is NOT speculative — it's required.** Budget expectation: ~1–2 such calls per high-stakes decision. "No speculative calls" applies to routine work outside the trigger list, not to the trigger-fired calls themselves.
+- **A call fired by a `proactive` trigger in the user's prefs is NOT speculative — it's required.** Budget expectation: ~1–2 such calls per advisor-paired decision or other triggered scope. "No speculative calls" applies to routine work outside the trigger list, not to the trigger-fired calls themselves.
 - In `conservative` / `preference-only` modes: if the user didn't ask for a cross-family opinion, don't volunteer one for routine work.
 
 ## Reporting

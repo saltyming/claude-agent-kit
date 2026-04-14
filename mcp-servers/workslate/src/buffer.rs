@@ -26,7 +26,6 @@ pub struct BufferContent {
 // ── Target resolution ────────────────────────────────────
 
 pub struct ResolvedTarget {
-    pub old_text: String,
     pub byte_start: usize,
     pub byte_end: usize,
 }
@@ -70,10 +69,8 @@ pub fn resolve_target(
             line_offsets[e - 1].1
         };
         let byte_end = byte_end.min(file_content.len());
-        let old_text = file_content[byte_start..byte_end].to_string();
 
         Ok(ResolvedTarget {
-            old_text,
             byte_start,
             byte_end,
         })
@@ -108,7 +105,6 @@ pub fn resolve_target(
         let byte_start = matches[idx];
         let byte_end = byte_start + old_string.len();
         Ok(ResolvedTarget {
-            old_text: old_string.to_string(),
             byte_start,
             byte_end,
         })
@@ -142,28 +138,6 @@ pub fn apply_mode(file_content: &str, target: &ResolvedTarget, new_string: &str,
                 format!("{}\n{}", file_content, new_string)
             }
         }
-    }
-}
-
-pub fn diff_texts(target: &ResolvedTarget, new_string: &str, mode: &EditMode, file_content: &str) -> (String, String) {
-    match mode {
-        EditMode::Replace => (target.old_text.clone(), new_string.to_string()),
-        EditMode::After => (
-            target.old_text.clone(),
-            format!("{}{}", target.old_text, new_string),
-        ),
-        EditMode::Before => (
-            target.old_text.clone(),
-            format!("{}{}", new_string, target.old_text),
-        ),
-        EditMode::Append => (
-            file_content.to_string(),
-            if file_content.ends_with('\n') {
-                format!("{}{}", file_content, new_string)
-            } else {
-                format!("{}\n{}", file_content, new_string)
-            },
-        ),
     }
 }
 

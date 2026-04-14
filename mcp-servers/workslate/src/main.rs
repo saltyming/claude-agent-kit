@@ -25,7 +25,7 @@ use tokio::sync::RwLock;
 
 use buffer::{
     ApplyParams, BufferContent, ClearParams, DiffParams, EditBufferParams, EditMode, ReadParams,
-    ResolvedTarget, SearchParams, WriteParams, apply_mode, diff_texts, resolve_target,
+    ResolvedTarget, SearchParams, WriteParams, apply_mode, resolve_target,
 };
 use file::{MAX_FILE_SIZE, format_numbered_line, is_binary, validate_path};
 use task::{
@@ -48,6 +48,15 @@ fn hash_bytes(bytes: &[u8]) -> String {
     hasher.update(bytes);
     format!("{:x}", hasher.finalize())
 }
+
+// ── Diff rendering ────────────────────────────────────────
+
+/// Context radius (lines of surrounding, unchanged code above and below each
+/// change) used in unified diff output returned by workslate_edit,
+/// workslate_write, and workslate_diff. Also used as the hunk-grouping
+/// radius for workslate_diff's summary mode so the hunk count stays
+/// consistent with the full diff.
+const DIFF_CONTEXT_RADIUS: usize = 10;
 
 // ── Workslate server ──────────────────────────────────────
 
@@ -99,7 +108,7 @@ impl Workslate {
                     let diff = TextDiff::from_lines(&file_content, &params.content);
                     let unified = diff
                         .unified_diff()
-                        .context_radius(3)
+                        .context_radius(DIFF_CONTEXT_RADIUS)
                         .header(
                             &format!("a/{}", file_path),
                             &format!("b/{}", file_path),
@@ -236,19 +245,22 @@ impl Workslate {
         };
 
         let empty_target = ResolvedTarget {
-            old_text: String::new(),
             byte_start: 0,
             byte_end: 0,
         };
         let target_ref = target.as_ref().unwrap_or(&empty_target);
 
-        let (diff_old, diff_new) = diff_texts(target_ref, &params.new_string, &mode, &base_content);
         let result_content = apply_mode(&base_content, target_ref, &params.new_string, &mode);
 
-        let diff = TextDiff::from_lines(&diff_old, &diff_new);
+        // Diff the full pre- and post-edit file contents so context_radius can
+        // actually surface surrounding lines. Earlier versions diffed a
+        // localized excerpt (old_text vs new_string), which meant radius had
+        // no lines to draw from and the response showed just the change with
+        // no structure around it.
+        let diff = TextDiff::from_lines(&base_content, &result_content);
         let unified = diff
             .unified_diff()
-            .context_radius(3)
+            .context_radius(DIFF_CONTEXT_RADIUS)
             .header(
                 &format!("a/{}", diff_header_path),
                 &format!("b/{}", diff_header_path),
@@ -469,7 +481,7 @@ impl Workslate {
                     let mut hunks = 0u32;
                     let mut adds = 0usize;
                     let mut dels = 0usize;
-                    for group in diff.grouped_ops(3) {
+                    for group in diff.grouped_ops(DIFF_CONTEXT_RADIUS) {
                         hunks += 1;
                         for op in &group {
                             match op {
@@ -491,7 +503,7 @@ impl Workslate {
                 let diff = TextDiff::from_lines(&old_text, &buffer.content);
                 let unified = diff
                     .unified_diff()
-                    .context_radius(3)
+                    .context_radius(DIFF_CONTEXT_RADIUS)
                     .header(
                         &format!("a/{}", file_path),
                         &format!("b/{}", file_path),
