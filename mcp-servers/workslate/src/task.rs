@@ -227,7 +227,10 @@ pub struct TaskCreateParams {
     pub name: String,
     /// Optional description with more detail
     pub description: Option<String>,
-    /// Task IDs this depends on. Supports: "3", "ws:3", "team:2"
+    /// Task IDs this depends on (JSON array of strings, e.g. `["ws:1", "team:2"]`).
+    /// Must be a JSON array — do NOT pass a stringified array like `"[\"ws:1\"]"`.
+    /// Supports ID forms: "3", "ws:3", "team:2".
+    #[serde(default, deserialize_with = "crate::lenient::lenient_opt_vec_string")]
     pub depends_on: Option<Vec<String>>,
     /// Namespace: "ws" (default) or "team"
     pub namespace: Option<String>,

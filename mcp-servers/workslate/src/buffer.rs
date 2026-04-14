@@ -168,6 +168,12 @@ pub fn diff_texts(target: &ResolvedTarget, new_string: &str, mode: &EditMode, fi
 }
 
 // ── Buffer param structs ──────────────────────────────────
+//
+// Notes for tool callers: array / boolean / integer fields below use lenient
+// deserializers from the `lenient` module. They accept the native JSON type
+// (preferred) and also JSON-encoded strings (e.g. `"true"` for bool, `"3"` for
+// u32, `"[\"a\"]"` for arrays) as a tolerance shim. When tolerance fails, the
+// error message tells the caller to pass a raw JSON value.
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct WriteParams {
@@ -177,7 +183,10 @@ pub struct WriteParams {
     pub content: String,
     /// If provided, show unified diff against this file in the response
     pub file_path: Option<String>,
-    /// Buffer names that must be applied before this buffer (dependency ordering)
+    /// Buffer names that must be applied before this buffer (dependency ordering).
+    /// JSON array of strings, e.g. `["buf-types", "buf-core"]`. Must be a JSON
+    /// array — do NOT pass a stringified array like `"[\"buf-types\"]"`.
+    #[serde(default, deserialize_with = "crate::lenient::lenient_opt_vec_string")]
     pub depends_on: Option<Vec<String>>,
 }
 
@@ -193,11 +202,17 @@ pub struct EditBufferParams {
     pub new_string: String,
     /// Position mode: "replace" (default), "after" (insert after old_string), "before" (insert before old_string), "append" (append to end of file)
     pub position: Option<String>,
-    /// Target the Nth occurrence of old_string (1-based). Without this, old_string must appear exactly once.
+    /// Target the Nth occurrence of old_string (1-based, JSON integer like `2`).
+    /// Without this, old_string must appear exactly once. Pass a raw number, not a string.
+    #[serde(default, deserialize_with = "crate::lenient::lenient_opt_u32")]
     pub match_index: Option<u32>,
-    /// Target a line range instead of old_string (1-based). When provided, old_string is ignored.
+    /// Target a line range instead of old_string (1-based, JSON integer).
+    /// When provided, old_string is ignored. Pass a raw number, not a string.
+    #[serde(default, deserialize_with = "crate::lenient::lenient_opt_u32")]
     pub line_start: Option<u32>,
-    /// End of line range (1-based, inclusive). Defaults to line_start if omitted.
+    /// End of line range (1-based, inclusive, JSON integer). Defaults to line_start if omitted.
+    /// Pass a raw number, not a string.
+    #[serde(default, deserialize_with = "crate::lenient::lenient_opt_u32")]
     pub line_end: Option<u32>,
 }
 
@@ -207,11 +222,15 @@ pub struct ReadParams {
     pub name: Option<String>,
     /// Path to a file to read from disk. Output includes line numbers for use with workslate_edit's line_start/line_end.
     pub file_path: Option<String>,
-    /// Show line numbers in output (default: true for file reads, ignored for buffer reads)
+    /// Show line numbers in output (JSON boolean; default: true for file reads, ignored for buffer reads).
+    /// Pass raw `true` / `false`, not strings.
+    #[serde(default, deserialize_with = "crate::lenient::lenient_opt_bool")]
     pub line_numbers: Option<bool>,
-    /// Start reading from this line number (1-based, inclusive). Only used with file_path.
+    /// Start reading from this line number (1-based, inclusive, JSON integer). Only used with file_path.
+    #[serde(default, deserialize_with = "crate::lenient::lenient_opt_u32")]
     pub start_line: Option<u32>,
-    /// Stop reading at this line number (1-based, inclusive). Only used with file_path.
+    /// Stop reading at this line number (1-based, inclusive, JSON integer). Only used with file_path.
+    #[serde(default, deserialize_with = "crate::lenient::lenient_opt_u32")]
     pub end_line: Option<u32>,
 }
 
@@ -221,9 +240,12 @@ pub struct SearchParams {
     pub file_path: String,
     /// Search pattern (substring match by default, or regex if regex=true)
     pub pattern: String,
-    /// Treat pattern as a regular expression (default: false, plain substring match)
+    /// Treat pattern as a regular expression (JSON boolean; default: false).
+    /// Pass raw `true` / `false`, not strings.
+    #[serde(default, deserialize_with = "crate::lenient::lenient_opt_bool")]
     pub regex: Option<bool>,
-    /// Number of context lines to show around each match (default: 2)
+    /// Number of context lines to show around each match (JSON integer; default: 2).
+    #[serde(default, deserialize_with = "crate::lenient::lenient_opt_u32")]
     pub context: Option<u32>,
 }
 
@@ -235,7 +257,9 @@ pub struct DiffParams {
     pub file_path: Option<String>,
     /// If provided, diff only this section of the file against the buffer.
     pub old_string: Option<String>,
-    /// If true, return a one-line summary (e.g. "3 hunk(s), +47/-12 lines") instead of full diff
+    /// If true (JSON boolean), return a one-line summary (e.g. "3 hunk(s), +47/-12 lines") instead of full diff.
+    /// Pass raw `true` / `false`, not strings.
+    #[serde(default, deserialize_with = "crate::lenient::lenient_opt_bool")]
     pub summary: Option<bool>,
 }
 
@@ -247,10 +271,14 @@ pub struct ApplyParams {
     pub file_path: Option<String>,
     /// If provided, replace only this section of the file with buffer content.
     pub old_string: Option<String>,
-    /// If true, show final file content without actually writing to disk
+    /// If true (JSON boolean), show final file content without actually writing to disk.
+    /// Pass raw `true` / `false`, not strings.
+    #[serde(default, deserialize_with = "crate::lenient::lenient_opt_bool")]
     pub dry_run: Option<bool>,
-    /// Override stale buffer detection. When the disk file has changed since
+    /// Override stale buffer detection (JSON boolean). When the disk file has changed since
     /// the buffer was loaded, apply refuses to write unless force=true.
+    /// Pass raw `true` / `false`, not strings.
+    #[serde(default, deserialize_with = "crate::lenient::lenient_opt_bool")]
     pub force: Option<bool>,
 }
 
@@ -258,7 +286,10 @@ pub struct ApplyParams {
 pub struct ClearParams {
     /// Name of the buffer to clear. Required unless `all` is true.
     pub name: Option<String>,
-    /// If true, clear ALL staged buffers. Destructive — requires explicit
+    /// If true (JSON boolean), clear ALL staged buffers. Destructive — requires explicit
     /// opt-in to prevent accidental wipes in shared/team staging areas.
+    /// Pass raw `true` / `false`, not strings.
+    #[serde(default, deserialize_with = "crate::lenient::lenient_opt_bool")]
     pub all: Option<bool>,
 }
+

@@ -169,6 +169,21 @@ Targeting options (apply to all position modes except append):
 
 **Dry run:** `workslate_apply(name, dry_run=true)` shows the final file content with line numbers without writing to disk.
 
+**Parameter types (HARD RULE).** Workslate MCP fields take **native JSON types** — pass JSON arrays, booleans, and numbers, never JSON-encoded strings:
+
+```
+depends_on: ["ws:1", "team:2"]   ✓ JSON array
+depends_on: "[\"ws:1\"]"          ✗ stringified array — don't
+
+dry_run: true                     ✓ JSON boolean
+dry_run: "true"                   ✗ string
+
+match_index: 2                    ✓ JSON integer
+match_index: "2"                  ✗ string
+```
+
+The server tolerates the stringified forms as a best-effort shim, but treat this as a bug in your tool call — aim to send raw JSON values every time. Applies to every array/bool/int field across `workslate_task_create`, `workslate_write`, `workslate_edit`, `workslate_read`, `workslate_search`, `workslate_diff`, `workslate_apply`, `workslate_clear`.
+
 **Rules:**
 - **Always pass `file_path` to `workslate_write`** so the diff is returned for review. Omitting it skips the review — only acceptable for scratch buffers not destined for files.
 - Use descriptive buffer names that indicate the target (e.g., `auth-middleware`, `lock-ordering-fix`)

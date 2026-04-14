@@ -1,5 +1,6 @@
 mod buffer;
 mod file;
+mod lenient;
 mod task;
 
 use std::collections::{HashMap, HashSet};

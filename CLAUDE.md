@@ -1,7 +1,7 @@
 <!-- claude-agent-kit -->
 # Claude Agent Operating Manual
 
-**Version**: 8.5.3
+**Version**: 8.5.4
 **Last Updated**: 2026-04-14
 
 > Global operating rules for AI coding agents. Focuses on user-specific preferences and overrides — general tool usage, security, and communication rules are handled by the system prompt.
@@ -113,6 +113,7 @@ User Request
 ---
 
 **Version History:**
+- v8.5.4 (2026-04-14): workslate MCP — lenient deserializers for `Option<Vec<String>>` / `Option<bool>` / `Option<u32>` params. Array (`depends_on`), boolean (`dry_run`, `force`, `summary`, `regex`, `line_numbers`, `all`), and integer (`match_index`, `line_start`, `line_end`, `start_line`, `end_line`, `context`) fields now accept both native JSON types and JSON-encoded strings as a best-effort tolerance shim. On failure the error message points at the expected JSON shape instead of serde's default cryptic mismatch. Schema doc comments reinforced with explicit JSON-type examples. Mitigates frequent agent failure of sending `depends_on: "[\"ws:1\"]"` (stringified) instead of `depends_on: ["ws:1"]` (JSON array). Docs + new `src/lenient.rs` module with 20 unit tests. No breaking change — existing correct call sites unaffected.
 - v8.5.3 (2026-04-14): Parallel-work — new Leader Intervention bullet: when a teammate stops for a reason other than `shutdown_request` / task completion / explicit teammate error report, treat it as a **user-initiated interrupt on that teammate** and do NOT re-assign, pivot, spawn a replacement, or infer what the teammate "would have done." Wait for the user's instruction instead. Addresses observed pattern where the leader over-reacts to teammate interrupts by attempting recovery the user did not ask for.
 - v8.5.2 (2026-04-14): Close loopholes in scope-reduction overrides. New `[OVERRIDE]` in Core Principles > Quality Standards forbidding deferral of any requested work to a follow-up PR / subsequent commit / future ticket / "future refactor," regardless of whether a design doc was provided, and regardless of whether the split is announced openly or silently (closes the `silently reduce scope` loophole). `task-execution.md` scope override strengthened to list follow-up-PR deferral alongside stubs/placeholders/TODOs and cross-reference the Core Principles rule. Addresses observed pattern where agents complete part of a request and push remainder to a follow-up.
 - v8.5.1 (2026-04-14): Added `[OVERRIDE]` in Core Principles > Quality Standards forbidding context-usage-based task abandonment. Addresses observed failure mode where agents declare a task unfinishable at low context usage (e.g., 34%) despite auto-compact making window limit irrelevant. Clarifies that "token cost" / "save context" warnings elsewhere in the manual are scoped to Agent Team coordination / model selection / prompt-cache retention, not solo-session stopping conditions.

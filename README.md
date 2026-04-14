@@ -64,6 +64,14 @@ An MCP server for Claude Code that provides:
 | `workslate_task_init(name)` | Switch to a named task session (SQLite-backed). |
 | `workslate_task_sessions()` | List all sessions with per-namespace counters. |
 
+**Parameter type notes.** Array fields (`depends_on`), boolean fields (`dry_run`,
+`force`, `summary`, `regex`, `line_numbers`, `all`) and integer fields
+(`match_index`, `line_start`, `line_end`, `start_line`, `end_line`, `context`)
+expect native JSON types — arrays, booleans, and numbers respectively.
+Stringified JSON values (e.g. `"[\"ws:1\"]"`, `"true"`, `"3"`) are tolerated
+as a best-effort shim, but the error message on failure points back at the
+expected JSON shape — so always prefer raw JSON values.
+
 ## Installation
 
 ### macOS / Linux
