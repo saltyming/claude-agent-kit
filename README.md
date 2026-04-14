@@ -182,6 +182,58 @@ claude mcp add workslate -s user --transport stdio -- workslate
 claude mcp add aside     -s user --transport stdio -- aside
 ```
 
+## Field report — one Claude session, both tools
+
+Asked Claude, at the end of a real systems refactor (18 tasks, cross-architecture, multiple internal modules), what it honestly thought of `workslate` and `aside` — both tools used throughout. Reply below, verbatim:
+
+> ### workslate — what helped
+>
+> - **Staging forced a diff review that caught real mistakes.** One staged edit *looked* like a two-line file replacement; checking the diff before apply confirmed it was actually correct. The enforced review converted panic into confidence rather than a needless revert.
+> - **One-buffer-per-file prevented partial-edit collisions** without requiring manual discipline.
+> - **Task tracking held coherence across 18 tasks** — nothing fell off the list.
+> - **Line-number targeting via `workslate_search` + `workslate_read` was precise** — more reliable than substring-unique matching.
+>
+> ### workslate — what was awkward
+>
+> - **`replace_all` is weak on 3+ duplicates.** Replacing a constant that appeared 3 times in the same file failed with "appears 3 times" and required splitting into 3 `match_index` edits. Workable, but friction-heavy.
+> - **One-buffer-per-file adds round-trips on heavy-touch files.** A refactor with 10+ edits on the same file becomes `apply` → re-edit → `apply` → re-edit. The safety it buys is real, but so is the friction.
+> - **"Buffer not found" errors after a successful apply don't explain that the buffer auto-cleared on apply.** A follow-up edit that forgot to reload the file just sees a generic not-found error.
+>
+> ### aside (`policy: proactive`, copilot backend) — decisive
+>
+> **Caught two ship-blocking bugs across two calls in the same session:**
+>
+> 1. A missed symbol conversion in an arch-specific file that would have broken the aarch64 build. I had reviewed that file and missed it.
+> 2. A silent capability-slot-allocation overshoot: a startup routine pre-reserved `MAX_SERVICES × STRIDE` entries, overshooting the slot-table bound by ~170 slots. Copilot did the arithmetic in one pass; otherwise this would have surfaced as a runtime out-of-bounds after the build landed.
+>
+> ### aside — what worked
+>
+> - **Cross-family perspective was real value.** The arithmetic check is the kind of thing I'd likely have skimmed past reading my own transcript.
+> - **Structured "critical / medium / low" risk framing made triage fast.**
+> - **~1–2 min turnaround with auto-forwarded transcript** — no re-explaining context.
+>
+> ### aside — what to watch
+>
+> - **Some claims were partially speculative.** One review stated that a helper had pre-existing deduplication behavior. It turned out to be true, but the response stated it with more confidence than it had grounds for. Hedge language ("I didn't verify, but plausibly...") would be healthier.
+> - **Long replies add to session context fast.** Two 500–800-word responses built up quickly. Asking for tighter replies is the caller's responsibility.
+> - **ROI was positive because both calls found bugs.** If a call finds nothing, the cost is wasted. Pre-call judgment — "do I actually need an outside view right now?" — still matters even under `policy: proactive`.
+>
+> ### Meta observation
+>
+> workslate's **"review your own diff" loop was less effective than expected** — long diffs got skimmed.
+> **Friction-based controls** (unique-match requirement, one-buffer-per-file) caught more mistakes than **inspection-based controls** (the diff view).
+> External perspective (`aside`) caught what self-review missed.
+>
+> **Short version: tools that force you to slow down outperformed tools that ask you to pay attention.**
+>
+> ### Changes for the next session
+>
+> 1. Call `aside` earlier in a refactor — at design review, not mid-implementation.
+> 2. When planning multi-occurrence replacements, include unique surrounding context per site from the start instead of relying on `replace_all`.
+> 3. Invest up-front time batching `workslate_task_create` (10+ tasks at once) — pays back across the whole refactor.
+>
+> Net positive. `aside` in particular prevented two bugs that would otherwise have surfaced as broken builds.
+
 ## Background
 
 This kit was developed over months of intensive multi-agent development on a real project, running multiple Claude Code agents in parallel against a shared codebase. Every rule in the CLAUDE.md exists because something went wrong without it.
