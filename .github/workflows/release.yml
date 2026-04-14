@@ -16,31 +16,31 @@ jobs:
           # macOS
           - target: aarch64-apple-darwin
             os: macos-latest
-            name: workslate-aarch64-apple-darwin
+            platform: aarch64-apple-darwin
           - target: x86_64-apple-darwin
             os: macos-latest
-            name: workslate-x86_64-apple-darwin
+            platform: x86_64-apple-darwin
           # Linux glibc
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            name: workslate-aarch64-unknown-linux-gnu
+            platform: aarch64-unknown-linux-gnu
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            name: workslate-x86_64-unknown-linux-gnu
+            platform: x86_64-unknown-linux-gnu
           # Linux musl (static)
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
-            name: workslate-aarch64-unknown-linux-musl
+            platform: aarch64-unknown-linux-musl
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-            name: workslate-x86_64-unknown-linux-musl
+            platform: x86_64-unknown-linux-musl
           # Windows
           - target: aarch64-pc-windows-msvc
             os: windows-latest
-            name: workslate-aarch64-pc-windows-msvc
+            platform: aarch64-pc-windows-msvc
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            name: workslate-x86_64-pc-windows-msvc
+            platform: x86_64-pc-windows-msvc
 
     runs-on: ${{ matrix.os }}
 
@@ -57,31 +57,36 @@ jobs:
 
       - name: Build (Linux via zigbuild)
         if: runner.os == 'Linux'
-        run: cargo zigbuild --release --target ${{ matrix.target }} -p workslate
+        run: cargo zigbuild --release --target ${{ matrix.target }} -p workslate -p aside
 
       - name: Build (macOS / Windows)
         if: runner.os != 'Linux'
-        run: cargo build --release --target ${{ matrix.target }} -p workslate
+        run: cargo build --release --target ${{ matrix.target }} -p workslate -p aside
 
       - name: Package (unix)
         if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../${{ matrix.name }}.tar.gz workslate
+          tar czf ../../../workslate-${{ matrix.platform }}.tar.gz workslate
+          tar czf ../../../aside-${{ matrix.platform }}.tar.gz aside
           cd ../../..
 
       - name: Package (windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path "target/${{ matrix.target }}/release/workslate.exe" -DestinationPath "${{ matrix.name }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/workslate.exe" -DestinationPath "workslate-${{ matrix.platform }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/aside.exe" -DestinationPath "aside-${{ matrix.platform }}.zip"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.name }}
+          name: binaries-${{ matrix.platform }}
           path: |
-            ${{ matrix.name }}.tar.gz
-            ${{ matrix.name }}.zip
+            workslate-${{ matrix.platform }}.tar.gz
+            workslate-${{ matrix.platform }}.zip
+            aside-${{ matrix.platform }}.tar.gz
+            aside-${{ matrix.platform }}.zip
+          if-no-files-found: ignore
 
   release:
     needs: build

@@ -1,6 +1,6 @@
 # Claude Agent Kit
 
-A battle-tested `CLAUDE.md` for Claude Code and a custom MCP server (`workslate`) for staged code editing with persistent task tracking.
+A battle-tested `CLAUDE.md` for Claude Code, plus two custom MCP servers: `workslate` (staged code editing + SQLite-backed task tracking) and `aside` (cross-family second opinions — wraps OpenAI codex, Google gemini, and GitHub copilot CLIs so Claude can consult another model family mid-session).
 
 ## What's Inside
 
@@ -72,6 +72,36 @@ Stringified JSON values (e.g. `"[\"ws:1\"]"`, `"true"`, `"3"`) are tolerated
 as a best-effort shim, but the error message on failure points back at the
 expected JSON shape — so always prefer raw JSON values.
 
+### Aside MCP Server
+
+Cross-family second opinions via locally-installed third-party CLIs. Complements — never replaces — the built-in `advisor()` tool (which forwards the transcript to a stronger Claude reviewer). Use `aside` when you want a perspective from a *different* model family: OpenAI codex, Google gemini, or GitHub copilot.
+
+- **Transcript forwarding is on by default.** `include_transcript` defaults to `true`, mirroring the built-in `advisor()` shape. The current Claude Code conversation (parsed from `~/.claude/projects/{dashed-cwd}/<session>.jsonl`) is rendered as plain text and forwarded to the backend, subject to a 100 KB cap (front-trimmed, with a `[transcript truncated: kept last K of M messages]` header when trimming occurs). Pass `include_transcript=false` for decontextualised questions.
+- **Three adapters, same schema.** `aside_codex` / `aside_gemini` / `aside_copilot` share the same params (`question`, `context?`, `include_transcript?`, `transcript_tail?`, `timeout_secs?`, `model?`, `reasoning_effort?`). `aside_list` reports which CLIs are on `$PATH` with `--version` strings.
+- **Read-only, non-interactive invocation.** Each backend is spawned with flags that prevent file edits or shell execution so the CLI behaves as pure Q&A: codex `-s read-only -a never exec`; gemini `-p ... --approval-mode plan -o text`; copilot `-p ... --allow-all-tools --available-tools= -s --no-color`.
+- **Preference-driven call policy.** The install flow generates `~/.claude/rules/claude-agent-kit--aside-prefs.md` where you set a preferred backend, per-backend default models, per-backend reasoning effort, and an auto-call policy (`conservative` / `preference-only` / `proactive`). Claude reads this rule and applies your preferences when the current turn doesn't name a backend or model explicitly. Re-run `make configure` anytime to regenerate it.
+- **Custom rules passthrough.** At install time the installer can also copy a directory of your own `*.md` rule files into `~/.claude/rules/`. They get the `claude-agent-kit-custom:user` signature so `make uninstall` preserves them by default (it asks interactively, with an explicit `y` required to remove).
+- **Cost awareness.** Every aside call consumes your third-party API quota with the backend provider. See `claude-agent-kit--aside.md` for the usage rules Claude follows (single question per call, no speculative calls, no loops).
+
+#### Tools
+
+| Tool | Description |
+|------|-------------|
+| `aside_list()` | Report which of codex / gemini / copilot are on `$PATH` and their `--version` output. |
+| `aside_codex(question, context?, include_transcript?, transcript_tail?, timeout_secs?, model?, reasoning_effort?)` | Ask OpenAI codex. Maps `model` → `-m`, `reasoning_effort` → `-c model_reasoning_effort=...`. |
+| `aside_gemini(question, context?, include_transcript?, transcript_tail?, timeout_secs?, model?, reasoning_effort?)` | Ask Google gemini. Maps `model` → `-m`. `reasoning_effort` is accepted for API symmetry but the gemini CLI currently exposes no flag that consumes it. |
+| `aside_copilot(question, context?, include_transcript?, transcript_tail?, timeout_secs?, model?, reasoning_effort?)` | Ask GitHub copilot (standalone CLI, not the `gh` extension). Maps `model` → `--model`, `reasoning_effort` → `--effort` (`low` / `medium` / `high` / `xhigh`). |
+
+#### Required CLIs
+
+You install these separately — `aside` just wraps them:
+
+- [codex](https://github.com/openai/codex) (`npm i -g @openai/codex`)
+- [gemini](https://github.com/google-gemini/gemini-cli) (`npm i -g @google/gemini-cli`)
+- [copilot](https://docs.github.com/copilot/how-tos/copilot-cli) (GitHub's standalone Copilot CLI — not `gh copilot`)
+
+`aside_list` will tell you which ones this machine has. Missing CLIs are reported as unavailable, not as errors.
+
 ## Installation
 
 ### macOS / Linux
@@ -96,7 +126,7 @@ irm https://raw.githubusercontent.com/saltyming/claude-agent-kit/main/install.ps
 irm https://raw.githubusercontent.com/saltyming/claude-agent-kit/main/install.ps1 -OutFile install.ps1; .\install.ps1 -Uninstall
 ```
 
-Downloads the pre-built workslate binary from GitHub Releases, `CLAUDE.md`, and rule files. No Rust toolchain required. On macOS, the installer automatically re-signs the binary with `codesign` to prevent endpoint security software (e.g. Kaspersky) from blocking it. The installer also registers the workslate MCP server with Claude Code (if `claude` CLI is available). If `~/.local/bin` is not in your PATH, the installer will print instructions to add it.
+Downloads the pre-built `workslate` and `aside` binaries from GitHub Releases, `CLAUDE.md`, and rule files. No Rust toolchain required. On macOS, the installer automatically re-signs binaries with `codesign` to prevent endpoint security software (e.g. Kaspersky) from blocking them. The installer registers both MCP servers with Claude Code (if `claude` CLI is available) and then runs an interactive configuration step for `aside` — you'll be prompted for preferred backend / default models / reasoning effort / auto-call policy, and optionally a directory of your own custom rule files to install alongside. All prompts accept ENTER for the documented default, and `ASIDE_*` env vars skip them entirely (useful for CI / automation). If `~/.local/bin` is not in your PATH, the installer will print instructions to add it.
 
 ### From source (requires Rust)
 
@@ -106,13 +136,18 @@ cd claude-agent-kit
 make install
 ```
 
-This builds the workslate binary, copies `CLAUDE.md` to `~/.claude/`, rule files to `~/.claude/rules/`, and the binary to `~/.local/bin/`. On macOS, the binary is re-signed with `codesign` for endpoint security compatibility. A manifest is written to `~/.claude/.claude-agent-kit-manifest` for safe uninstall.
+This builds both binaries (`workslate`, `aside`), copies `CLAUDE.md` to `~/.claude/`, rule files to `~/.claude/rules/`, and the binaries to `~/.local/bin/`. On macOS, binaries are re-signed with `codesign` for endpoint security compatibility. A manifest is written to `~/.claude/.claude-agent-kit-manifest` for safe uninstall. The install step ends with an interactive prompt to configure `aside` preferences (see above); re-run anytime with `make configure`.
 
 ```bash
-make uninstall    # only removes files it installed (verified by signature)
+make uninstall    # removes kit-owned files; prompts before removing user-owned ones
+make configure    # re-run just the aside preferences prompts
 ```
 
-The main `CLAUDE.md` contains core principles and quick reference (~125 lines). Detailed rules live in `claude-rules/` (task-execution, parallel-work, git-workflow, framework-conventions) and are auto-loaded by Claude Code from `.claude/rules/`.
+Uninstall uses signatures on the first line of each `.md` to branch:
+- `<!-- claude-agent-kit -->` → kit-owned, removed unconditionally.
+- `<!-- claude-agent-kit-custom... -->` → user-owned (the generated `aside-prefs.md` and any ingested custom rules). Preserved by default; you get an interactive `[y/N]` prompt to remove them. Non-interactive runs honor `ASIDE_UNINSTALL_KEEP_PREFS=yes|no`.
+
+The main `CLAUDE.md` contains core principles and quick reference (~125 lines). Detailed rules live in `claude-rules/` (task-execution, parallel-work, git-workflow, framework-conventions, aside) and are auto-loaded by Claude Code from `.claude/rules/`.
 
 ### Manual install
 
@@ -127,11 +162,17 @@ cp CLAUDE.md your-project/CLAUDE.md
 mkdir -p your-project/.claude/rules
 cp claude-rules/*.md your-project/.claude/rules/
 
-# Workslate binary
-cargo build --release -p workslate
+# Both binaries
+cargo build --release -p workslate -p aside
 cp target/release/workslate ~/.local/bin/
+cp target/release/aside ~/.local/bin/
 # macOS: re-sign to avoid endpoint security (Kaspersky, etc.) blocking
 codesign --force --sign - ~/.local/bin/workslate
+codesign --force --sign - ~/.local/bin/aside
+
+# Register both MCP servers
+claude mcp add workslate -s user --transport stdio -- workslate
+claude mcp add aside     -s user --transport stdio -- aside
 ```
 
 ## Background

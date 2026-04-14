@@ -9,12 +9,14 @@ RULES_DIR="${CLAUDE_DIR}/rules"
 BIN_DIR="${HOME}/.local/bin"
 MANIFEST="${CLAUDE_DIR}/.claude-agent-kit-manifest"
 SIGNATURE="claude-agent-kit"
+CUSTOM_SIGNATURE="claude-agent-kit-custom"
 
 RULE_FILES="
 claude-agent-kit--task-execution.md
 claude-agent-kit--git-workflow.md
 claude-agent-kit--framework-conventions.md
 claude-agent-kit--parallel-work.md
+claude-agent-kit--aside.md
 "
 
 uninstall() {
@@ -22,11 +24,15 @@ uninstall() {
         echo "No manifest found. Nothing to uninstall."
         exit 0
     fi
+    custom_list_file="$(mktemp)"
     while IFS= read -r f; do
         if [ -f "$f" ]; then
             case "$f" in
                 *.md)
-                    if head -1 "$f" | grep -q "$SIGNATURE"; then
+                    first="$(head -1 "$f" 2>/dev/null || true)"
+                    if printf '%s' "$first" | grep -Fq "<!-- ${CUSTOM_SIGNATURE}"; then
+                        printf '%s\n' "$f" >> "$custom_list_file"
+                    elif printf '%s' "$first" | grep -Fq "<!-- ${SIGNATURE} -->"; then
                         rm -f "$f"
                         echo "  removed $f"
                     else
@@ -38,9 +44,42 @@ uninstall() {
             esac
         fi
     done < "$MANIFEST"
+
+    if [ -s "$custom_list_file" ]; then
+        echo ""
+        echo "The following user-owned files were installed alongside the kit:"
+        sed 's/^/  /' "$custom_list_file"
+        keep="yes"
+        if [ -n "$ASIDE_UNINSTALL_KEEP_PREFS" ]; then
+            case "$ASIDE_UNINSTALL_KEEP_PREFS" in
+                no|NO|No|n|N) keep="no" ;;
+                *)            keep="yes" ;;
+            esac
+        elif [ -r /dev/tty ]; then
+            printf "Remove these too? [y/N]: " > /dev/tty
+            read answer < /dev/tty || answer=""
+            case "$answer" in
+                y|Y|yes|YES|Yes) keep="no" ;;
+                *)               keep="yes" ;;
+            esac
+        fi
+        if [ "$keep" = "no" ]; then
+            while IFS= read -r f; do
+                [ -z "$f" ] && continue
+                rm -f "$f" && echo "  removed $f"
+            done < "$custom_list_file"
+        else
+            echo ""
+            echo "Preserved (not managed by claude-agent-kit from this point on):"
+            sed 's/^/  /' "$custom_list_file"
+        fi
+    fi
+    rm -f "$custom_list_file"
     rm -f "$MANIFEST"
     if command -v claude >/dev/null 2>&1; then
-        claude mcp remove workslate -s user 2>/dev/null && echo "  MCP server unregistered." || true
+        for srv in workslate aside; do
+            claude mcp remove "$srv" -s user 2>/dev/null && echo "  $srv unregistered." || true
+        done
     fi
     echo "Uninstalled."
     exit 0
@@ -84,26 +123,32 @@ download() {
     fi
 }
 
+install_binary() {
+    name="$1"
+    echo "Downloading $name binary (${PLATFORM})..."
+    url="https://github.com/${REPO}/releases/latest/download/${name}-${PLATFORM}.tar.gz"
+    tmp=$(mktemp -d)
+    download "$url" "$tmp/${name}.tar.gz"
+    tar xzf "$tmp/${name}.tar.gz" -C "$tmp"
+    cp "$tmp/$name" "$BIN_DIR/$name"
+    chmod +x "$BIN_DIR/$name"
+    if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
+        codesign --force --sign - "$BIN_DIR/$name" 2>/dev/null && \
+            echo "  Code signed (ad-hoc): $name." || true
+    fi
+    echo "$BIN_DIR/$name" >> "$MANIFEST"
+    rm -rf "$tmp"
+}
+
 echo "Installing claude-agent-kit..."
 
 detect_platform
 mkdir -p "$RULES_DIR" "$BIN_DIR"
 : > "$MANIFEST"
 
-# Binary from latest GitHub Release
-echo "Downloading workslate binary (${PLATFORM})..."
-RELEASE_URL="https://github.com/${REPO}/releases/latest/download/workslate-${PLATFORM}.tar.gz"
-TMP=$(mktemp -d)
-download "$RELEASE_URL" "$TMP/workslate.tar.gz"
-tar xzf "$TMP/workslate.tar.gz" -C "$TMP"
-cp "$TMP/workslate" "$BIN_DIR/workslate"
-chmod +x "$BIN_DIR/workslate"
-if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
-    codesign --force --sign - "$BIN_DIR/workslate" 2>/dev/null && \
-        echo "  Code signed (ad-hoc) for macOS compatibility." || true
-fi
-echo "$BIN_DIR/workslate" >> "$MANIFEST"
-rm -rf "$TMP"
+# Binaries from latest GitHub Release
+install_binary workslate
+install_binary aside
 
 # CLAUDE.md
 echo "Downloading CLAUDE.md..."
@@ -119,9 +164,9 @@ done
 
 echo ""
 echo "Installed:"
-echo "  Binary:  $BIN_DIR/workslate"
-echo "  Config:  $CLAUDE_DIR/CLAUDE.md"
-echo "  Rules:   $RULES_DIR/claude-agent-kit--*.md"
+echo "  Binaries: $BIN_DIR/workslate, $BIN_DIR/aside"
+echo "  Config:   $CLAUDE_DIR/CLAUDE.md"
+echo "  Rules:    $RULES_DIR/claude-agent-kit--*.md"
 echo ""
 
 # PATH check
@@ -147,16 +192,29 @@ case ":$PATH:" in
         echo "" ;;
 esac
 
-# Register MCP server
+# Register MCP servers
 if command -v claude >/dev/null 2>&1; then
-    echo "Registering workslate MCP server..."
-    claude mcp add workslate -s user --transport stdio -- workslate 2>/dev/null && \
-        echo "  MCP server registered." || \
-        echo "  MCP registration failed. Add manually: claude mcp add workslate -s user --transport stdio -- workslate"
+    for srv in workslate aside; do
+        echo "Registering $srv MCP server..."
+        claude mcp add "$srv" -s user --transport stdio -- "$srv" 2>/dev/null && \
+            echo "  $srv registered." || \
+            echo "  $srv registration failed. Add manually: claude mcp add $srv -s user --transport stdio -- $srv"
+    done
 else
-    echo "Claude Code CLI not found. Register MCP server manually:"
+    echo "Claude Code CLI not found. Register MCP servers manually:"
     echo "  claude mcp add workslate -s user --transport stdio -- workslate"
+    echo "  claude mcp add aside -s user --transport stdio -- aside"
 fi
+
+# Aside preferences configuration (interactive)
+echo ""
+scripts_tmp=$(mktemp -d)
+download "$RAW_BASE/scripts/configure-aside.sh" "$scripts_tmp/configure-aside.sh"
+download "$RAW_BASE/scripts/claude-agent-kit--aside-prefs.md.tmpl" "$scripts_tmp/aside-prefs.tmpl"
+CLAUDE_DIR="$CLAUDE_DIR" RULES_DIR="$RULES_DIR" MANIFEST="$MANIFEST" \
+    TEMPLATE_SRC="$scripts_tmp/aside-prefs.tmpl" \
+    sh "$scripts_tmp/configure-aside.sh"
+rm -rf "$scripts_tmp"
 
 echo ""
 echo "To uninstall:"

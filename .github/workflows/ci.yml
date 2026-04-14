@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    name: Build + test (workslate, aside)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo build
+        run: cargo build --release -p workslate -p aside
+
+      - name: cargo test
+        run: cargo test --release -p workslate -p aside
+
+      - name: cargo fmt (check)
+        run: cargo fmt --all -- --check
+        continue-on-error: true
+
+  shellcheck:
+    name: shellcheck (install.sh, configure-aside.sh)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Check install.sh
+        run: shellcheck -s sh install.sh || true
+      - name: Check configure-aside.sh
+        run: shellcheck -s sh scripts/configure-aside.sh || true
