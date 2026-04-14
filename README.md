@@ -2,6 +2,13 @@
 
 A battle-tested `CLAUDE.md` for Claude Code, plus two custom MCP servers: `workslate` (staged code editing + SQLite-backed task tracking) and `aside` (cross-family second opinions — wraps OpenAI codex, Google gemini, and GitHub copilot CLIs so Claude can consult another model family mid-session).
 
+> **Honest caveat — user intervention is still required.** These rules reduce common failure modes but do not eliminate them. At least two patterns recur even after repeated rule tightening, and you should expect to correct them manually:
+>
+> 1. **Silent scope reduction.** Despite `[OVERRIDE]`s that explicitly forbid follow-up-PR deferral, stubs, TODOs, and "for now" implementations (see v8.5.1 / v8.5.2 in the Version History), Claude still occasionally splits requested scope at completion time — announcing the split as if it's acceptable, or quietly omitting parts of the spec. Review completion reports critically; push back on any deferred work.
+> 2. **Skipping workslate / aside.** The staging workflow and the `advisor()`-paired cross-family second opinion are rules, not automation. Claude routinely falls back to direct `Edit` on files that should be staged through workslate, or calls `advisor()` without firing the paired aside call despite `policy: proactive` (see v8.6.2 for the latest tightening of the pair rule). When you spot the miss, name it out loud — the override exists for exactly that correction.
+>
+> Treat this kit as a strong prior, not a guarantee. Each observed failure mode has produced a version bump; new phrasings of the same weasel still emerge. If you find a fresh one, file an issue or PR.
+
 ## What's Inside
 
 ### CLAUDE.md — System Prompt Override Manual
