@@ -73,7 +73,7 @@ impl Aside {
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
-    #[tool(description = "Ask OpenAI's codex CLI for a second opinion. include_transcript defaults to true — the current Claude conversation is forwarded automatically, same shape as the built-in advisor(). Pass include_transcript=false for decontextualised questions. Sandbox is read-only and approvals are skipped; codex cannot edit files or run shells while answering. Costs third-party API quota.")]
+    #[tool(description = "Ask OpenAI's codex CLI for a second opinion. include_transcript defaults to true — the current Claude conversation is forwarded automatically, but in REDACTED form (text blocks pass through; tool_use / tool_result / thinking blocks become placeholders). If your question depends on tool output, embed the relevant excerpt in `question` or `context` — the transcript alone will not carry it. See claude-agent-kit--aside.md 'Transcript redaction' section for the full rule. Pass include_transcript=false for decontextualised questions. Sandbox is read-only and approvals are skipped; codex cannot edit files or run shells while answering. Costs third-party API quota.")]
     async fn aside_codex(
         &self,
         Parameters(params): Parameters<AskParams>,
@@ -82,7 +82,7 @@ impl Aside {
         self.dispatch(Backend::Codex, params, ctx.ct).await
     }
 
-    #[tool(description = "Ask Google's gemini CLI for a second opinion. include_transcript defaults to true (forwards the current Claude conversation). --approval-mode plan keeps gemini in read-only mode — no file edits, no tool calls. reasoning_effort is accepted for API symmetry but currently ignored (no gemini CLI flag consumes it). Costs third-party API quota.")]
+    #[tool(description = "Ask Google's gemini CLI for a second opinion. include_transcript defaults to true — current conversation is forwarded in REDACTED form (tool_use / tool_result / thinking blocks become placeholders; only text passes through). If your question depends on tool output, embed the relevant excerpt in `question` or `context`. See claude-agent-kit--aside.md 'Transcript redaction' section. --approval-mode plan keeps gemini in read-only mode — no file edits, no tool calls. reasoning_effort is accepted for API symmetry but currently ignored (no gemini CLI flag consumes it). Costs third-party API quota.")]
     async fn aside_gemini(
         &self,
         Parameters(params): Parameters<AskParams>,
@@ -91,7 +91,7 @@ impl Aside {
         self.dispatch(Backend::Gemini, params, ctx.ct).await
     }
 
-    #[tool(description = "Ask GitHub's standalone copilot CLI for a second opinion. include_transcript defaults to true. Runs with --allow-all-tools (required by copilot for non-interactive mode) + --available-tools= (empty list → pure Q&A, no tools available). reasoning_effort maps to copilot --effort (low/medium/high/xhigh). Costs third-party API quota.")]
+    #[tool(description = "Ask GitHub's standalone copilot CLI for a second opinion. include_transcript defaults to true — current conversation is forwarded in REDACTED form (tool_use / tool_result / thinking blocks become placeholders; only text passes through). If your question depends on tool output, embed the relevant excerpt in `question` or `context`. See claude-agent-kit--aside.md 'Transcript redaction' section. Runs with --allow-all-tools (required by copilot for non-interactive mode) + --available-tools= (empty list → pure Q&A, no tools available). reasoning_effort maps to copilot --effort (low/medium/high/xhigh). Costs third-party API quota.")]
     async fn aside_copilot(
         &self,
         Parameters(params): Parameters<AskParams>,
@@ -233,11 +233,16 @@ impl ServerHandler for Aside {
             "Cross-family second-opinion tools. Wraps locally-installed codex / gemini / copilot \
              CLIs as MCP tools so Claude can ask another model family for a second opinion. \
              include_transcript defaults to true — the current conversation is forwarded \
-             automatically, mirroring the built-in advisor() tool. Set include_transcript=false \
-             for decontextualised questions. Each call consumes the user's third-party API \
-             quota; see claude-agent-kit--aside.md for the usage policy and \
-             claude-agent-kit--aside-prefs.md for user preferences (preferred backend, default \
-             models, reasoning effort).",
+             automatically, but in REDACTED form: text blocks pass through, while tool_use / \
+             tool_result / thinking blocks are replaced with placeholders. This differs from the \
+             built-in advisor(), which receives the full unredacted transcript. If your question \
+             depends on tool output (file contents, grep results, command output, staged diffs), \
+             you MUST embed the relevant excerpt in the `question` or `context` parameter — the \
+             transcript alone will not carry it. Set include_transcript=false for decontextualised \
+             questions. Each call consumes the user's third-party API quota; see \
+             claude-agent-kit--aside.md for the usage policy (including the full 'Transcript \
+             redaction' section) and claude-agent-kit--aside-prefs.md for user preferences \
+             (preferred backend, default models, reasoning effort).",
         )
     }
 

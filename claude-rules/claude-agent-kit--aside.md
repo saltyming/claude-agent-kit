@@ -12,7 +12,7 @@ Two surfaces that may coexist:
 | Surface | What | When |
 |---|---|---|
 | built-in `advisor()` (if available) | Anthropic Opus reviewer, auto-forwards the full transcript, no parameters. | Lifecycle checkpoints as the system prompt describes. Unchanged. |
-| `mcp__aside__aside_{codex,gemini,copilot}` | Cross-family second opinion via local CLIs. `include_transcript` defaults to `true` (same behavior as `advisor()` — the current conversation is forwarded automatically). Hits paid third-party APIs. | Per the user's preference file (see below). Trigger list for `proactive` policy below. |
+| `mcp__aside__aside_{codex,gemini,copilot}` | Cross-family second opinion via local CLIs. `include_transcript` defaults to `true` — the current conversation is forwarded automatically, **but in redacted form** (text passes through verbatim; `tool_use` / `tool_result` / `thinking` blocks are replaced with placeholders — see **Transcript redaction — aside ≠ advisor()** below). Hits paid third-party API quota. | Per the user's preference file (see below). Trigger list for `proactive` policy below. |
 
 ## Decision rules
 
@@ -48,6 +48,43 @@ If both surfaces exist, both run by default on these triggers. If only aside exi
 - Otherwise, read the default from `claude-agent-kit--aside-prefs.md` for that backend and pass it as `model`.
 - If neither is set, omit `model` so the CLI uses its own default.
 - Same flow for `reasoning_effort` (codex / copilot only — gemini CLI currently ignores it).
+
+## Transcript redaction — aside ≠ advisor()
+
+`include_transcript=true` forwards the session's `.jsonl` transcript, but the aside renderer (`mcp-servers/aside/src/transcript.rs::render_content`) redacts tool-related content before it reaches the third-party CLI:
+
+| Content block | What the aside backend actually sees |
+|---|---|
+| `text` (user / assistant message body) | Original text, verbatim |
+| `tool_use` (you called a tool) | `[tool_use: <tool_name>]` — name only. **Arguments / inputs are stripped.** |
+| `tool_result` (the tool's output) | `[tool_result]` — placeholder. **The result body is not forwarded.** |
+| `thinking` | `[thinking]` — content stripped (no CoT leak to third-party backends). |
+
+This redaction is intentional: tool results routinely contain file contents, grep output, command stdout, API responses, and secrets. Forwarding them raw to OpenAI / Google / GitHub CLIs crosses a trust boundary, and a single large tool output would blow the 100 KB transcript budget anyway.
+
+**Built-in `advisor()` is different.** `advisor()` is an Anthropic-internal reviewer and receives the full transcript including tool inputs and outputs. When the same session is sent to `advisor()` and aside, **they see fundamentally different things**. Do not assume an aside backend has any of the substance your tool calls produced just because the transcript was "forwarded."
+
+### HARD RULE: embed tool-derived context in `question` / `context`
+
+If your question to an aside backend depends on **what a tool produced** — the file you just read, the grep match you located, the command output you saw, the diff you staged, the line range you inspected — you **must** include the relevant excerpt in the `question` or `context` parameter. The transcript alone will not carry it.
+
+- **`question`** — the actual ask (required).
+- **`context`** — tool-derived substance the backend needs: file excerpts, relevant line ranges, command output, diff hunks. Keep it scoped to what the question needs; do not dump whole files.
+
+Example — **bad** (question relies on a file the agent already Read):
+> `question`: "Is the locking in `acquire_lock` correct?"
+> `include_transcript`: `true`, no `context` passed.
+>
+> The backend sees `[tool_use: Read]` followed by `[tool_result]` and zero bytes of the function. The answer will be hallucinated or refused.
+
+Example — **good**:
+> `question`: "Is the locking in `acquire_lock` correct — specifically the ordering between `lock_a` and `lock_b`?"
+> `context`: the ~20 lines of `acquire_lock` pasted as a fenced code block, plus the surrounding callers if relevant.
+
+### What this does not change
+
+- The aside-first-then-advisor() sequencing rule (above) still holds. `advisor()` still sees the full transcript when it runs in the subsequent turn, so it will pick up both the aside exchange and the original tool inputs/outputs — the pairing remains meaningful.
+- `include_transcript=false` is still the right choice for fully decontextualised questions ("what is 2+2", "give me idiomatic Rust for X"). Do not pass a redacted transcript when the question doesn't need session context at all — it only wastes tokens.
 
 ## Cost awareness
 
