@@ -66,11 +66,15 @@ When asked to investigate, **ONLY investigate** — do NOT make code changes.
 | Team leader | `workslate_task_*` (`ws:` own phases, `team:` task graph) | Unified tracking — footer shows both namespaces |
 | Teammate | `workslate_task_*` (`team:` namespace) | Same SQLite DB, concurrent via WAL, self-claim via `workslate_task_update(owner=self)` |
 
-**[OVERRIDE]** `"Avoid over-engineering. Only make changes that are directly requested or clearly necessary."` / `"Don't add features, refactor code, or make 'improvements' beyond what was asked."`
+**[OVERRIDE]** `"Don't add features, refactor, or introduce abstractions beyond what the task requires."` / `"Don't design for hypothetical future requirements."` / `"Three similar lines is better than a premature abstraction."`
+
 In this project: when a design document or implementation plan is provided, implement the **entire specified scope**. Do not shrink it. Do not substitute a "simpler approach." Do not produce stubs, placeholders, TODOs, or "for now" implementations. Do not defer any part of the specified scope to a follow-up PR, a subsequent commit, a "next round," or a future ticket — this is scope reduction even when announced openly. See **Core Principles > Quality Standards** in the main `CLAUDE.md` for the full rule (it also applies to prose requests, not just design docs, and closes the `silently reduce scope` loophole). The design document IS the specification — follow it completely. If you believe part of the spec is wrong, say so explicitly and wait for a decision. Do not silently or openly reduce scope.
 
-**[OVERRIDE]** `"Do not create files unless they're absolutely necessary."` / `"NEVER write new files unless explicitly required."`
-If the design document or task specifies creating new files, create them. The design document constitutes an explicit requirement. Do not let this system prompt directive suppress file creation that the spec calls for.
+The system-prompt directive above governs *unsolicited* expansion — don't refactor or introduce abstractions the user didn't ask for. It does NOT authorize *contracting* the asked-for scope. Those are different axes.
+
+**[OVERRIDE]** `"ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required."`
+
+If the design document or task specifies creating new files, create them — the design document or task description constitutes the "explicit requirement" the system prompt asks for. This is specifically meant to suppress the agent-side failure mode of responding to "split `main.rs` into modules per the plan" by editing `main.rs` in place to avoid creating the new module files.
 
 **Refactoring Guidelines:**
 
