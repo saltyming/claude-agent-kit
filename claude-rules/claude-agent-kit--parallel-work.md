@@ -3,6 +3,31 @@
 
 Two systems exist for parallel work: **Subagents** and **Agent Teams**. They have different architectures and should not be mixed.
 
+## HARD RULE — delegation requires explicit user request
+
+**The gate:** calling `Agent` with a **write-capable** `subagent_type` (`general-purpose`, or any type whose capabilities include file edit/write), OR calling `TeamCreate` at all, OR spawning any teammate into an already-created team (`Agent(team_name=..., ...)`), requires the user to have **explicitly asked** for parallel / delegated / multi-agent work.
+
+**The gate is based on the agent's capabilities, not on the prompt you plan to send.** Claiming "I used `general-purpose` only for read-only investigation, so it was effectively read-only" is not an escape — if the spawned type *could* have edited files, it is gated. Use the `Explore` subagent_type when you genuinely want a read-only lookup; do not use `general-purpose` with a "just read things" prompt as a workaround.
+
+"Explicitly asked" is satisfied by either:
+
+1. **A per-turn ask** in the current conversation — e.g., "spawn subagents to…", "use an Agent Team", "parallelize this", "delegate X to an agent".
+2. **A specific and unambiguous durable pre-authorization** in `~/.claude/CLAUDE.md`, the project's `CLAUDE.md`, or auto-memory that names the delegation pattern and its scope — e.g., "always delegate build verification in this repo to a `general-purpose` subagent", "for refactors touching ≥10 files in `src/`, use an Agent Team". Generic wording like "use agents proactively", "parallelize when helpful", or "delegate when it makes sense" does **not** count — if the durable instruction is not specific and unambiguous, treat it as no authorization.
+
+**Read-only `subagent_type`s (`Explore`, `Plan`, `claude-code-guide`, and any advisory-only type whose documentation explicitly marks it as unable to edit files) remain allowed proactively** — those are context-saving lookups, not work delegation. Their output is read back into the leader's context; they cannot modify files or outrun the leader's review. **Default for unknown or ambiguous `subagent_type`s: treat as write-capable and gated unless the tool's own description explicitly marks it advisory-only / read-only.** Err on the side of gating.
+
+**Out of scope for this gate:** aside tools (`mcp__aside__aside_codex` / `aside_gemini` / `aside_copilot`) and the built-in `advisor()` are cross-family / same-family consultations, not file-mutating delegates — they remain governed by `claude-agent-kit--aside.md` and its own proactive-policy triggers. This gate does not narrow them.
+
+**Rationale (in order of durability, not litigability):**
+
+1. **Write-capable delegates can mutate files.** Once a delegated agent hits `Apply`/`Edit`/`Write`, the state change is durable on disk; the leader cannot take it back without additional work. A misread task becomes a committed mistake.
+2. **The leader sees only the agent's compressed final summary** — not its chain-of-reasoning, not its intermediate tool outputs, not its self-corrections. The system prompt itself frames this as "Trust but verify": the summary describes what the agent *intended to do*, not necessarily what it *actually did*. Reviewing the diff after the fact catches some failures but not semantic-contract misreads.
+3. **`Agent` exposes no `reasoning_effort` parameter** — only `model` (`sonnet` | `opus` | `haiku`). **Opus 4.7 becomes very dumb without a high reasoning-effort setting**, and every spawned write-capable agent is effectively running at the CLI's default reasoning level with no way for the leader to raise it. This is an aggravating factor on top of (1) and (2), not the whole argument — but it is the specific, current-generation reason the gate is in place today rather than five years from now.
+
+The gate revisits when the `Agent` tool exposes reasoning-effort control — the durable risks in (1) and (2) will still apply, but the practical risk from (3) will drop and the proactive default for write-capable types can be reconsidered.
+
+**When in doubt: do the work in-session.** A slower in-session edit is cheaper than a fast-but-silently-wrong delegated one. If you think parallelism would genuinely help, *ask the user* ("should I spawn 2 subagents to do X and Y in parallel?") — do not spawn unprompted.
+
 ## Choosing Between Subagents and Agent Teams
 
 | | Subagents (`Agent` without `team_name`) | Agent Teams (`TeamCreate` + `Agent(team_name=...)` per teammate) |
@@ -44,11 +69,14 @@ Lightweight workers spawned via the `Agent` tool **without** a `team_name` param
 - Specify exact file paths and expected outputs
 - State what the subagent should NOT do
 
-**When to use:**
-- Research/exploration that reports back findings
-- Independent file modifications with no cross-dependencies
-- Build/test verification
-- 1-2 parallel tasks where team overhead is not justified
+**When to use (read-only subagent types — proactive is fine):**
+- `subagent_type="Explore"` for broad codebase research that would take more than ~3 Grep/Glob queries.
+- `subagent_type="Plan"` for read-only design sketches / architecture exploration.
+- Other advisory-only types (`claude-code-guide`, etc.) for their documented scope.
+
+**When to use (write-capable subagent types — requires explicit user request per the HARD RULE above):**
+- `subagent_type="general-purpose"` for parallel implementation, build/test verification that writes files, or any delegated work that can edit or create files.
+- Rule: the user must have asked for parallelism / delegation this turn, OR a durable instruction in `CLAUDE.md` / project memory / auto-memory must pre-authorize the pattern. Do not spawn `general-purpose` subagents unprompted — propose it first and wait for approval.
 
 **Naming:** `agent-<domain>` (e.g., `agent-vfs`, `agent-core`)
 
@@ -62,14 +90,14 @@ Each teammate is a full Claude Code instance. On spawn, each teammate independen
 
 **Scale criteria — use these, not "the work feels parallel":**
 
-| Scope | Recommended approach |
-|---|---|
-| < 5 files to modify | Single session. No team, no subagents. |
-| 5–10 files, cross-cutting concerns | Leader session + 1–2 subagents. Subagents do research or isolated edits; leader integrates. |
-| 10+ files with clean, non-overlapping file scopes | Agent Team is justified. |
-| 10+ files but scopes overlap / shared types dominate | Still single session — a team will generate coordination overhead that exceeds the parallelism win. |
+| Scope | Recommended approach (baseline — no user request yet) | If user has explicitly asked for parallelism |
+|---|---|---|
+| < 5 files to modify | Single session. No team, no subagents. | Single session even if asked — the overhead isn't worth it. Explain why. |
+| 5–10 files, cross-cutting concerns | Single session. Optionally use `Explore` subagents for read-only research. | Leader session + 1–2 `general-purpose` subagents for isolated edits; leader integrates. |
+| 10+ files with clean, non-overlapping file scopes | Single session (propose parallelism to the user if you think it would help). | Agent Team is justified. |
+| 10+ files but scopes overlap / shared types dominate | Single session. | Still single session — coordination overhead exceeds the parallelism win. Tell the user. |
 
-**When unsure: do not create a team.** A slower single session is cheaper than a fast-but-expensive team. The user can always ask for parallelism if they want it.
+**The gate is explicit user request, not scale.** Scale criteria describe *when parallelism is viable*, not *when to spawn workers unprompted*. A 30-file refactor handled in-session is the correct default; delegation requires the user to have asked for it (or a durable instruction pre-authorizing the pattern). When unsure, do the work in-session and offer parallelism as a suggestion.
 
 ### Model choice for teammates
 
@@ -91,15 +119,17 @@ Teammates are spawned by calling `Agent(team_name=..., name=..., subagent_type=.
 
 ### When to Use
 
-**Use Agent Teams when:**
-- 3+ independent work streams can run in parallel
-- Teammates need to share findings or challenge each other
-- Work requires discussion and collaboration (competing hypotheses, cross-layer changes)
+**Use Agent Teams when ALL of these hold:**
+- **The user has explicitly asked for an Agent Team / parallel teammates / multi-agent coordination** — or a durable instruction in `CLAUDE.md` / project memory / auto-memory pre-authorizes it. This is the gate; the bullets below describe viability, not permission.
+- 3+ independent work streams can run in parallel.
+- Teammates need to share findings or challenge each other.
+- Work requires discussion and collaboration (competing hypotheses, cross-layer changes).
 
 **Do NOT use when:**
-- Work is sequential (each step depends on the previous)
-- Only 1-2 files need modification
-- Workers do not need to communicate (use subagents instead)
+- The user has not asked for it. Propose it first ("this has 4 independent work streams — want me to spawn an Agent Team?") and wait for approval. Do not spawn a team because the scale criteria happen to match.
+- Work is sequential (each step depends on the previous).
+- Only 1-2 files need modification.
+- Workers do not need to communicate (use subagents instead — which themselves still require user request if write-capable).
 
 ### Team Composition
 
@@ -391,3 +421,5 @@ to the implementer, then notify the leader."
 | Calling `TeamCreate` and expecting teammates to exist | `TeamCreate` only creates the container — zero workers are spawned | After `TeamCreate`, call `Agent(team_name=..., name=..., subagent_type=..., model=...)` once per teammate |
 | Spawning a teammate with `subagent_type="Explore"` (or another read-only type) for implementation work | The teammate cannot edit or write files, and silently fails every implementation task it claims | Use a write-capable type (e.g., `general-purpose`) for implementation; reserve read-only types for pure research roles |
 | Using the `Agent` tool without `team_name` and treating the result as a teammate | You got a subagent — it has no task list access, no peer messaging, and exits when its prompt finishes | To join a team, pass `team_name` (of an already-created team); to fire-and-forget, omit `team_name` and that is the subagent path |
+| Spawning a `general-purpose` subagent without user request | Delegates work the user expected to see done in-session, at a reasoning level the leader can't raise (no `reasoning_effort` knob on `Agent`); failure mode is a silent wrong-interpretation baked into files | Do it in-session. If parallelism would genuinely help, propose it ("want me to spawn 2 subagents?") and wait for approval. Read-only types (`Explore`, `Plan`) remain proactive-safe |
+| Creating an Agent Team because the scale criteria happen to match | Scale criteria describe *when a team is viable*, not *when to spawn one unprompted* — the HARD RULE at the top of this file is the gate | Require explicit user request (per-turn ask or durable CLAUDE.md / memory instruction) regardless of scale. Propose, don't spawn |
