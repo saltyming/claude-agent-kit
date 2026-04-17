@@ -1526,7 +1526,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let restored = server.load_buffers_from_db();
         if !restored.is_empty() {
             tracing::info!("Restored {} buffer(s) from SQLite", restored.len());
-            let mut buffers = server.buffers.blocking_write();
+            let mut buffers = server.buffers.write().await;
             *buffers = restored;
         }
     }
