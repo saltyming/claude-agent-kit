@@ -73,7 +73,7 @@ impl Aside {
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
-    #[tool(description = "Ask OpenAI's codex CLI for a second opinion. include_transcript defaults to true — the current Claude conversation is forwarded automatically, but in REDACTED form (text blocks pass through; tool_use / tool_result / thinking blocks become placeholders). If your question depends on tool output, embed the relevant excerpt in `question` or `context` — the transcript alone will not carry it. See claude-agent-kit--aside.md 'Transcript redaction' section for the full rule. Pass include_transcript=false for decontextualised questions. Sandbox is read-only and approvals are skipped; codex cannot edit files or run shells while answering. Costs third-party API quota.")]
+    #[tool(description = "Ask OpenAI's codex CLI for a second opinion. include_transcript defaults to true — the current Claude conversation is forwarded automatically, but in REDACTED form (text blocks pass through; tool_use / tool_result / thinking blocks become placeholders). codex runs in `-s read-only` sandbox: it CAN read files and grep the workspace itself, but cannot write or exec shells. **Prefer passing file paths in `question` / `context` and let codex read them** (this is cheaper and avoids the transcript's 100 KB cap); embed an excerpt only when you want to focus codex on a specific line range OR when the data is transient tool output (command stdout, API response) that isn't on disk. Pass include_transcript=false for decontextualised questions. See claude-agent-kit--aside.md 'Transcript redaction' section. Costs third-party API quota.")]
     async fn aside_codex(
         &self,
         Parameters(params): Parameters<AskParams>,
@@ -82,7 +82,7 @@ impl Aside {
         self.dispatch(Backend::Codex, params, ctx.ct).await
     }
 
-    #[tool(description = "Ask Google's gemini CLI for a second opinion. include_transcript defaults to true — current conversation is forwarded in REDACTED form (tool_use / tool_result / thinking blocks become placeholders; only text passes through). If your question depends on tool output, embed the relevant excerpt in `question` or `context`. See claude-agent-kit--aside.md 'Transcript redaction' section. --approval-mode plan keeps gemini in read-only mode — no file edits, no tool calls. reasoning_effort is accepted for API symmetry but currently ignored (no gemini CLI flag consumes it). Costs third-party API quota.")]
+    #[tool(description = "Ask Google's gemini CLI for a second opinion. include_transcript defaults to true — current conversation is forwarded in REDACTED form (tool_use / tool_result / thinking blocks become placeholders; only text passes through). `--approval-mode plan` keeps gemini strictly read-only: NO edits, NO shell exec, NO approval prompts — but read / grep / web tools ARE available, so gemini CAN inspect files and search the workspace itself (reads are restricted to the spawn cwd workspace). **Prefer passing file paths in `question` / `context`** and let gemini read them; embed an excerpt only for focused line-range questions or for off-disk tool output. reasoning_effort is accepted for API symmetry but currently ignored (no gemini CLI flag consumes it). See claude-agent-kit--aside.md 'Transcript redaction' section. Costs third-party API quota.")]
     async fn aside_gemini(
         &self,
         Parameters(params): Parameters<AskParams>,
@@ -91,7 +91,7 @@ impl Aside {
         self.dispatch(Backend::Gemini, params, ctx.ct).await
     }
 
-    #[tool(description = "Ask GitHub's standalone copilot CLI for a second opinion. include_transcript defaults to true — current conversation is forwarded in REDACTED form (tool_use / tool_result / thinking blocks become placeholders; only text passes through). If your question depends on tool output, embed the relevant excerpt in `question` or `context`. See claude-agent-kit--aside.md 'Transcript redaction' section. Runs with --allow-all-tools (required by copilot for non-interactive mode) + --available-tools= (empty list → pure Q&A, no tools available). reasoning_effort maps to copilot --effort (low/medium/high/xhigh). Costs third-party API quota.")]
+    #[tool(description = "Ask GitHub's standalone copilot CLI for a second opinion. include_transcript defaults to true — current conversation is forwarded in REDACTED form (tool_use / tool_result / thinking blocks become placeholders; only text passes through). Runs with --allow-all-tools + --available-tools=view,rg,glob,web_fetch — a read-only whitelist that lets copilot inspect files (view), grep the workspace (rg), pattern-match file paths (glob), and fetch URL bodies (web_fetch). NO shell exec, NO file mutation (bash/write_bash/task/sql and other mutating tools are excluded). **Prefer passing file paths in `question` / `context`** and let copilot read them; embed an excerpt only for focused line-range questions or for off-disk tool output. reasoning_effort maps to copilot --effort (low/medium/high/xhigh). See claude-agent-kit--aside.md 'Transcript redaction' section. Costs third-party API quota.")]
     async fn aside_copilot(
         &self,
         Parameters(params): Parameters<AskParams>,
@@ -235,14 +235,20 @@ impl ServerHandler for Aside {
              include_transcript defaults to true — the current conversation is forwarded \
              automatically, but in REDACTED form: text blocks pass through, while tool_use / \
              tool_result / thinking blocks are replaced with placeholders. This differs from the \
-             built-in advisor(), which receives the full unredacted transcript. If your question \
-             depends on tool output (file contents, grep results, command output, staged diffs), \
-             you MUST embed the relevant excerpt in the `question` or `context` parameter — the \
-             transcript alone will not carry it. Set include_transcript=false for decontextualised \
-             questions. Each call consumes the user's third-party API quota; see \
-             claude-agent-kit--aside.md for the usage policy (including the full 'Transcript \
-             redaction' section) and claude-agent-kit--aside-prefs.md for user preferences \
-             (preferred backend, default models, reasoning effort).",
+             built-in advisor(), which receives the full unredacted transcript. All three \
+             backends run in read-only configurations that let them inspect files themselves: \
+             codex uses `-s read-only`; gemini uses `--approval-mode plan` (read/grep/web tools \
+             available, no edits, no exec); copilot uses `--available-tools=view,rg,glob,web_fetch`. \
+             PREFER passing file paths in the `question` / `context` parameter and letting the \
+             backend read them — this is cheaper than embedding, avoids the transcript's 100 KB \
+             cap, and lets the backend pull in related files it decides it needs. Embed an \
+             excerpt only when you want to focus the backend on a specific line range, or when \
+             the data is transient tool output (command stdout, API response, staged diff) that \
+             is not on disk. Set include_transcript=false for decontextualised questions. Each \
+             call consumes the user's third-party API quota; see claude-agent-kit--aside.md for \
+             the usage policy (including the full 'Transcript redaction' section) and \
+             claude-agent-kit--aside-prefs.md for user preferences (preferred backend, default \
+             models, reasoning effort).",
         )
     }
 

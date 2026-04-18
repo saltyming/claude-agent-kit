@@ -170,7 +170,8 @@ fn build_command(
     match backend {
         Backend::Codex => {
             // codex -s read-only -a never [-m MODEL] [-c model_reasoning_effort=EFF] exec "<PROMPT>"
-            //   -s read-only: sandbox prevents file writes / shell side effects
+            //   -s read-only: sandbox blocks file writes / shell side effects but ALLOWS reads,
+            //                 so codex can open files the caller references by path.
             //   -a never:     skip approval prompts (non-interactive)
             //   -c ...:       TOML config override for reasoning effort
             //   exec:         non-interactive subcommand; prompt is the positional arg
@@ -189,9 +190,11 @@ fn build_command(
         }
         Backend::Gemini => {
             // gemini -p "<PROMPT>" --approval-mode plan -o text [-m MODEL]
-            //   -p:             non-interactive with prompt; appends stdin
-            //   --approval-mode plan: read-only mode (no edits, no tools)
-            //   -o text:        plain text output
+            //   -p:                  non-interactive with prompt; appends stdin
+            //   --approval-mode plan: plan mode — read / grep / web tools remain available to the
+            //                         model, but NO edits, NO shell exec, NO approval prompts.
+            //                         File reads are restricted to the spawn cwd workspace.
+            //   -o text:             plain text output
             let mut cmd = Command::new("gemini");
             cmd.arg("-p").arg(prompt);
             cmd.arg("--approval-mode").arg("plan");
@@ -203,17 +206,26 @@ fn build_command(
             cmd
         }
         Backend::Copilot => {
-            // copilot -p "<PROMPT>" --allow-all-tools --available-tools= -s --no-color
-            //         [--model MODEL] [--effort EFF]
+            // copilot -p "<PROMPT>" --allow-all-tools --available-tools=view,rg,glob,web_fetch
+            //         -s --no-color [--model MODEL] [--effort EFF]
             //   -p:                  non-interactive prompt via argv
-            //   --allow-all-tools:   required for non-interactive mode per help
-            //   --available-tools= : empty list → pure Q&A, no tools available
+            //   --allow-all-tools:   required for non-interactive mode per help (auto-approve
+            //                        whatever is in --available-tools; no approval prompts)
+            //   --available-tools=…: read-only tool whitelist so copilot can inspect files the
+            //                        caller references by path:
+            //                          view      — read file contents
+            //                          rg        — ripgrep across the workspace
+            //                          glob      — file path pattern match
+            //                          web_fetch — fetch URL bodies for docs / spec lookups
+            //                        Intentionally excludes bash / write_bash / read_bash / task
+            //                        / skill / sql / store_memory / report_intent, which would
+            //                        let copilot exec shells or mutate state — aside is Q&A only.
             //   -s:                  silent (stdout contains only the response)
             //   --no-color:          strip ANSI for clean capture
             let mut cmd = Command::new("copilot");
             cmd.arg("-p").arg(prompt);
             cmd.arg("--allow-all-tools");
-            cmd.arg("--available-tools=");
+            cmd.arg("--available-tools=view,rg,glob,web_fetch");
             cmd.arg("-s");
             cmd.arg("--no-color");
             if let Some(m) = model {
