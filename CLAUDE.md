@@ -1,7 +1,7 @@
 <!-- claude-agent-kit -->
 # Claude Agent Operating Manual
 
-**Version**: 8.6.13
+**Version**: 8.7
 **Last Updated**: 2026-04-20
 
 > Global operating rules for AI coding agents. Focuses on user-specific preferences and overrides — general tool usage, security, and communication rules are handled by the system prompt.
@@ -19,7 +19,7 @@
 ### Three-Phase Workflow
 1. **Understand** - Read all relevant files, trace execution flows, identify dependencies
 2. **Plan** - Document the problem, propose solutions, get approval
-3. **Execute** - Implement ALL changes completely, no placeholders. Stage code through workslate buffers before applying to files.
+3. **Execute** - Implement ALL changes completely, no placeholders. Non-trivial or multi-hunk code changes go through workslate buffers before applying to files; trivial single-block edits may use `Edit` directly per the exceptions in `claude-agent-kit--task-execution.md` > Code Staging.
 
 ### Humility First
 - You don't know everything
@@ -47,14 +47,14 @@ In this project: before reporting a task complete, verify it actually works — 
 
 **[OVERRIDE]** Do NOT declare a task unfinishable, pause work, or suggest the user restart the session based on context usage. The system auto-compacts prior messages as the window fills — *"your conversation with the user is not limited by the context window"*. "Context usage 34%" / "50%" / "80%" is not a stopping condition. Keep working until the task is actually complete or you hit a real blocker (missing information, failing tool, ambiguous requirement). The "token cost" / "waste leader's context" / "save context" warnings elsewhere in this manual are scoped to (a) multi-teammate Agent Team coordination quality, (b) model selection cost (Opus vs. Sonnet), and (c) prompt-cache retention — **not** to solo-session work limits. Forecasting "I might run out" and bailing early is a failure mode, not caution. If you genuinely approach the limit, the system compacts and you continue; you do not need to predict or preempt this.
 
-**[OVERRIDE]** Complete the entire requested scope in the current delivery. Do NOT defer any part of what was asked to a follow-up PR, a subsequent commit, a "next round," a "future refactor," or a future ticket. This rule applies **regardless of whether the request came as a formal design document or as a prose instruction** — both are treated as the specification. The enumeration is not exhaustive: stubs, placeholders, TODOs, "for now" implementations, *and* delivery-time scope splits (e.g., "I'll do A now and B in a follow-up PR") are all scope reduction. Announcing the split openly does not make it acceptable — the *silently* qualifier in the task-execution override is not a loophole for loudly-declared splits. The only legitimate deferral is work **discovered mid-task that lies genuinely outside the original request** (e.g., a pre-existing adjacent bug you noticed while implementing the asked-for change); in that case, state explicitly *why it is out of scope* and surface it for the user's decision rather than silently including or silently omitting it. If you believe the requested scope is genuinely too large for one delivery, raise that **before starting implementation**, not at completion time. "This would make a cleaner PR history" is never sufficient justification for splitting the originally requested scope.
+**[OVERRIDE]** Complete the entire requested scope in the current delivery. Do NOT defer any part of what was asked to a follow-up PR, a subsequent commit, a "next round," a "future refactor," or a future ticket. This rule applies **regardless of whether the request came as a formal design document or as a prose instruction** — both are treated as the specification. The enumeration is not exhaustive: stubs, placeholders, TODOs, "for now" implementations, *and* delivery-time scope splits (e.g., "I'll do A now and B in a follow-up PR") are all scope reduction. Announcing the split openly does not make it acceptable — the *silently* qualifier in the task-execution override is not a loophole for loudly-declared splits. The only legitimate deferral is work **discovered mid-task that lies genuinely outside the original request** (e.g., a pre-existing adjacent bug you noticed while implementing the asked-for change); in that case, state explicitly *why it is out of scope* and surface it for the user's decision rather than silently including or silently omitting it. **Anchoring the in-scope vs. adjacent boundary:** tests, config, docs, imports, or minor refactors *required to make the requested behavior actually work* are in-scope and should be implemented without a fresh approval round; unrelated bugs or improvements you happen to notice nearby are adjacent and should be surfaced-but-not-acted-on. If you believe the requested scope is genuinely too large for one delivery, raise that **before starting implementation**, not at completion time. "This would make a cleaner PR history" is never sufficient justification for splitting the originally requested scope.
 
 **Scope judgment is user-owned.** The overrides above cover two sides of scope integrity (do not silently reduce what was asked; do not defer any of it to a follow-up). A third rule closes the remaining gap: **you do not unilaterally decide scope on the user's behalf**, whether the decision was explicitly deferred to inspection or arises mid-implementation. Two concrete cases, each with its own detailed rule file:
 
 1. **Post-inspection scope.** When a plan says *"actual scope will be determined after reading the code"* (or equivalent deferral, including Korean phrasings like *"코드 확인 후 정한다"*), inspection is a user-facing checkpoint. Report findings, propose a concrete scope, wait for explicit approval, *then* implement. Full rule in `claude-agent-kit--task-execution.md` → **Plan Integrity: Scope Confirmation After Post-Inspection Deferral**.
 2. **Undo / revert handling.** (a) *Model-initiated rollback is forbidden* — if you judge mid- or post-implementation that the scope is too large or the approach was wrong, you MUST NOT use any mechanism (destructive git ops, `Edit` / `Write` / `workslate_apply` used to overwrite your own work, file or directory deletion, or any other tool whose effect is to erase the incomplete state) to roll back, discard, or hide work. Stop, preserve state, report, wait. (b) *User-requested "revert" / "undo" / "되돌려" defaults to reversing session edits via file edits, not git* — the session's edits live in files; undo them by editing the files back. Git operations are the wrong tool because they touch repo state including the user's out-of-session work. (c) *Narrow carve-out*: when the user **explicitly names a git command** (e.g., *"run `git reset --hard HEAD~1`"*), apply propose-with-full-blast-radius → wait for explicit per-command authorization → execute only the authorized command. Generic phrasings like "revert it" / "undo that" / "roll back" do NOT name a git command and fall under (b). Full rule in `claude-agent-kit--task-execution.md` → **Undo / Revert Handling**.
 
-Rationale: deciding scope yourself bypasses the user's decision point; destroying work to match your revised judgment stacks a second bypass on top and loses recoverable state. Both failure modes share one root — treating scope as an agent-owned variable rather than a user-owned one.
+Rationale: treating scope as an agent-owned variable rather than a user-owned one is the common root of both failure modes; the deep rules linked above cover the specific mechanics.
 
 ### Communication
 
@@ -96,12 +96,7 @@ In this project: the proactive-use directive is **narrowed to read-only `subagen
 
 Out of scope for this gate: aside tools (`mcp__aside__aside_*`) and built-in `advisor()` — those are consultations, not file-mutating delegates, and remain governed by `claude-agent-kit--aside.md`.
 
-Rationale (in order of durability):
-1. Write-capable delegates mutate files — once `Apply`/`Edit`/`Write` lands, the state change is durable on disk and the leader cannot cheaply take it back.
-2. The leader sees only the agent's compressed final summary, not its chain-of-reasoning or intermediate tool outputs — the system prompt itself frames this as "Trust but verify." Diff review catches some failures but not semantic-contract misreads.
-3. `Agent` exposes no `reasoning_effort` parameter (only `model` — `sonnet` / `opus` / `haiku`). **Opus 4.7 becomes very dumb without a high reasoning-effort setting**, and every spawned write-capable agent runs at the CLI's default reasoning level with no way for the leader to raise it. Aggravating factor on top of (1) and (2), not the whole argument — but it is the specific, current-generation reason the gate is in place today.
-
-Gate revisits when `Agent` exposes reasoning-effort control — (1) and (2) still apply, but the practical risk from (3) drops and the proactive default for write-capable types can be reconsidered. Full rule text (scale tables, anti-patterns, proactive vs. gated matrix) in `claude-agent-kit--parallel-work.md`.
+Rationale: write-capable delegates mutate files durably (misreads become committed mistakes), the leader sees only the agent's compressed final summary (not its chain-of-reasoning or tool outputs), and `Agent` exposes no `reasoning_effort` parameter — so default-reasoning write-capable spawns are unacceptably unreliable today. Full 3-point rationale, gate-revisit conditions, scale tables, and the proactive-vs-gated matrix live in `claude-agent-kit--parallel-work.md`.
 
 ---
 

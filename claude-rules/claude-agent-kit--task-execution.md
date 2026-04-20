@@ -15,6 +15,7 @@
 - [ ] Identify dependencies and patterns
 - [ ] Verify correct path/directory
 - [ ] Create plan covering full scope
+- [ ] If target files already contain user-owned local changes (check `git status` / `git diff`), read them and plan to preserve — do NOT assume a clean baseline
 
 ## Investigation Mode
 
@@ -51,7 +52,7 @@ When a plan explicitly defers scope determination to post-inspection review, the
 - "코드 확인 후 정한다" / "보고 정하자"
 - "Figure out what needs changing and we'll go from there"
 
-The same rule applies whenever, during or after inspection, you come to believe that the task requires touching **more** files / modules / behaviors than the plan named, or **fewer** — any time your inspection shifts the scope boundary relative to what was approved.
+The same rule applies when inspection reveals that the approved plan itself reserved scope selection as a post-inspection decision point (the deferral phrasings above are explicit instances; equivalent phrasings also qualify). It does **NOT** apply to *supporting work required to make the approved behavior actually work* — tests, config, imports, minor refactors needed to satisfy the spec are in-scope and proceed without a fresh approval round. *Scope change* means you want to touch files, modules, or behaviors the plan did not name **and** those changes are not required to deliver what was already approved. If uncertain which side a change falls on, ask before acting — but do not paralyze execution on routine supporting work that is clearly required to satisfy the approved deliverable.
 
 You MUST NOT, after completing inspection:
 
@@ -87,6 +88,8 @@ Rationale: the plan's "scope TBD" annotation is a gate, not a waiver. Treating i
 6. **Risk Assessment** - What could go wrong?
 
 **Task tracking trigger (solo work):** When implementing changes that touch 2+ files or produce 2+ distinct deliverables, call `workslate_task_init` and create tasks BEFORE writing any code. This is the first implementation action. If you realize mid-work that you skipped this, stop and initialize immediately.
+
+**Preserve user-owned local changes.** Before editing any file, check `git status` / `git diff` for uncommitted changes. Any hunk the model did not make in this session is **user-owned**: do NOT overwrite it, do NOT assume a clean baseline, and do NOT incorporate it into your own edit without explicit authorization. If an edit you are about to make would touch or clobber a user-owned hunk, stop and ask. This applies even when the file itself is "in scope" for the current task — the user's uncommitted work has its own ownership independent of the task's file scope.
 
 **Execution Requirements:**
 - Complete task **ENTIRELY** - no partial solutions
@@ -151,6 +154,8 @@ Required procedure when the trigger fires:
 
 **Distinct from normal iteration.** Fixing a bug you introduced earlier in the session, refactoring code you just wrote, or correcting typos inside the same approved scope is NOT rollback — it is normal forward development and is fine. Rollback is when you judge the *direction itself* was wrong and want to erase the work to start over or give up; that requires user direction, not self-judgment.
 
+**Observable test for the trigger.** If the net effect of the action you are about to take is to *remove* or *blank out* code / files you created earlier in this session **without replacing them with the approved deliverable**, that action is rollback — regardless of how you label it internally ("cleanup", "simplification", "refactor", "try a different approach"). Forward iteration always moves toward the approved deliverable; rollback moves away from it. Use this test to catch intent-mislabeling in yourself.
+
 ### B. User-requested revert / undo: reverse session edits via file edits
 
 When the user says "revert", "undo", "discard these changes", "roll this back", "되돌려", or anything equivalent in the context of work done during this session, the default interpretation is:
@@ -162,11 +167,12 @@ Why: the edits made in the session are edits. They live in the files on disk. Un
 Required procedure:
 
 1. **Identify what edits the model made in this session.** Sources, in order of reliability: the `Edit` / `Write` / `workslate_apply` tool uses visible in the conversation history; workslate buffer / task records (`workslate_task_sessions`, `workslate_diff` against disk); the conversation's narration of what was changed.
-2. **Confirm scope with the user.** Which edits specifically — all of them, just the most recent, a specific file, a specific hunk? If the user's phrasing is ambiguous, ask before touching anything.
-3. **Reverse the edits via `Edit` / `Write` / `workslate_edit` / `workslate_apply`.** Write the inverse operation: delete the lines you added, restore the lines you replaced, remove the files you created in this session.
-4. **Do NOT reach for git.** Not `checkout --`, not `restore`, not `revert`, not `reset`, not `stash`, not any other git command. None of those are the right tool for undoing your own session edits.
-5. **If a session edit was already committed during this session** and the user wants the commit removed as part of the undo, that is a separate explicit git request — route it through subsection C and confirm with the user before treating a session-edit undo as implying a commit removal.
-6. **If the undo would require touching files the model did NOT edit in this session**, stop and clarify. Those files' state is user-owned, not session-owned; you need explicit authorization before changing them.
+2. **Confirm reconstructibility.** If you cannot reconstruct the pre-edit content with high confidence — long session with compacted history, direct `Edit` calls not captured in workslate, auto-cleared workslate buffers, or changes whose exact prior content the conversation did not preserve — do NOT perform an approximate undo. Report exactly which parts you are and are not confident about, and ask the user whether to inspect `git diff` / file history or to name an explicit git command.
+3. **Confirm scope with the user.** Which edits specifically — all of them, just the most recent, a specific file, a specific hunk? If the user's phrasing is ambiguous, ask before touching anything.
+4. **Reverse the edits via `Edit` / `Write` / `workslate_edit` / `workslate_apply`.** Write the inverse operation: delete the lines you added, restore the lines you replaced, remove the files you created in this session.
+5. **Do NOT reach for git for session-edit undo.** Not `checkout --`, not `restore`, not `revert`, not `reset`, not `stash`, not any other git command. None of those are the right tool for undoing session edits. (See step 6 for the case where the user's request is actually about a commit / branch / ref, not session edits.)
+6. **If the user identifies a commit / branch / ref** (e.g., *"revert commit abc123"*, *"undo what's on main since yesterday"*, *"remove the commit you just made"*), stop and clarify which git operation they want — this is NOT session-edit undo regardless of whether the commit came from this session. Do not reinterpret it as file-edit undo. Subsection C applies once the user names a specific git command.
+7. **If the undo would require touching files the model did NOT edit in this session**, stop and clarify. Those files' state is user-owned, not session-owned; you need explicit authorization before changing them.
 
 ### C. Explicit git-command requests (narrow carve-out, HARD RULE)
 
@@ -175,7 +181,7 @@ A destructive git operation may be run ONLY when the user **explicitly names the
 When a git command is explicitly named, apply this pre-flight before running it:
 
 1. **Identify the named command exactly.** Same command, same arguments, no substitution.
-2. **Inspect surrounding state.** Run `git status` and `git stash list` to enumerate every file / commit / stash / branch the candidate command would affect.
+2. **Inspect surrounding state.** Run `git status` and `git stash list` for working-tree state. **For commands that affect commit history** (`reset`, `rebase`, `revert`, `cherry-pick`, `branch -D`, `push --force*`), also run `git log --oneline` / `git log --graph` / `git reflog` as needed to enumerate every commit / branch / ref the candidate command would change. `git status` alone is insufficient for commit-graph-affecting commands.
 3. **Propose the command with its full blast radius**, including:
    - the exact command line,
    - every file / commit / stash / branch it would change (not just what the user named),
@@ -184,13 +190,15 @@ When a git command is explicitly named, apply this pre-flight before running it:
 4. **Wait for explicit per-command authorization.** A "yes, run it" / "go ahead" against a specific proposed command counts; a generic "just run it" against an ambiguous earlier phrasing does not — re-propose until there is a specific authorized command.
 5. **Execute only the authorized command.** Do NOT substitute a different command even if it seems equivalent or safer. If the proposed command's blast radius worries you, say so in the proposal — but do not unilaterally switch commands.
 
+**Project-mandatory flags.** If project rules (see `claude-agent-kit--git-workflow.md` > Commit Rules) require specific flags on the named command — for example the standing `--no-gpg-sign` requirement on `git commit` / `git commit --amend` / `git revert` / `git cherry-pick` — surface the modified command in your proposal (e.g., propose `git revert HEAD --no-gpg-sign`, not `git revert HEAD`) and get explicit authorization for the actual invocation. Silently appending mandatory flags to the user's exact phrasing is substitution; *surfacing* them in the proposal is not.
+
 If the surgical option the user named does not exist, or if the user's named command would destroy more than they seem to intend, stop and describe exactly what else will be affected. Wait for the user to either authorize the broader blast radius explicitly or supply an alternative command.
 
 The user owns **what** to undo, **which specific command** runs, and **when** it runs. The model's role is to surface the option space and the blast radius of each candidate — not to choose or execute on the user's behalf.
 
 ## Code Staging
 
-**All code generation goes through workslate first.** The review step before application catches chain-of-thought leaking into comments and unintentional scope reduction, both of which occur frequently with direct edits. **Never call `workslate_apply` without first reviewing the diff** — the diff step is the entire point.
+**Non-trivial or multi-hunk code changes go through workslate first.** Trivial single-block edits may use direct `Edit` per the exceptions below. For everything else, the review step before application catches chain-of-thought leaking into comments and unintentional scope reduction, both of which occur frequently with direct edits. **Never call `workslate_apply` without first reviewing the diff** — the diff step is the entire point.
 
 Three staging modes exist — all return the diff for review:
 
@@ -238,7 +246,7 @@ Targeting options (apply to all position modes except append):
 - `line_start: N` (+ optional `line_end: M`) — target by line range instead of old_string. 1-based, inclusive. old_string is not needed.
 
 **When to use Edit directly (exceptions):**
-- Single contiguous change of any size (single-block replacement)
+- Small single contiguous change (single-block replacement, NOT a full-file rewrite — rewrites must still go through workslate)
 - Import additions/removals
 - String/message literal updates
 - Renaming (use `replace_all`)
@@ -337,5 +345,5 @@ These rules prevent catastrophic loss of staged work. The code enforces the firs
 - [ ] Tests pass (if applicable) — **actually verified, not assumed**
 - [ ] No regression in related features
 - [ ] Linting/type checking passes (if applicable)
-- [ ] Workslate buffers cleared (`workslate_clear`) — no stale state left behind
+- [ ] No live workslate buffers remain — successful `workslate_apply` auto-clears on success; only abandoned buffers need explicit `workslate_clear(name=...)`
 - [ ] Outcome reported faithfully — failures disclosed, not hidden
