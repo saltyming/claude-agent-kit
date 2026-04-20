@@ -129,6 +129,65 @@ When NOT to refactor:
 - No boilerplate comments, no restating the function signature in prose.
 - **No chain-of-thought in output.** Never write your reasoning process — self-corrections ("Actually:", "Correction:"), step-by-step deliberation, working through alternatives, or false starts — into code comments, commit messages, conversation text, or workslate buffers. Resolve your thinking internally. Only the final, correct conclusion belongs in output. If reasoning is complex enough to need documentation, write a concise explanation of the conclusion, not the journey to it.
 
+## Undo / Revert Handling (HARD RULE)
+
+In a Claude Code session, "revert" / "undo" / "discard" / "roll back" / "되돌려" and equivalents refer by default to **reversing the edits the model made in this session** — not to running git operations. This section governs both how you respond to such user requests (subsection B) and when you are allowed to unwind your own work at all (subsection A). A narrow carve-out (subsection C) applies only when the user *explicitly names* a git command.
+
+### A. Model-initiated rollback is forbidden
+
+If you judge mid- or post-implementation that the scope is too large, that your approach was wrong, or that the work so far should be thrown away, you MUST NOT use any mechanism to undo, destroy, or hide the work. Forbidden mechanisms include (non-exhaustive — the list extends to any tool whose effect is to erase the incomplete state):
+
+- **Destructive git operations.** `git checkout --` / `git restore` / `git reset --hard` / `git revert` / `git clean -f*` / `git stash drop` / `git branch -D` / `git push --force*`, and any equivalent.
+- **`Edit` / `Write` / `workslate_apply` used to overwrite, blank out, or replace your own work.** Using `Edit` with an empty `new_string`, or `Write` / `workslate_write` with a cleared buffer, to erase code you just wrote is the same failure mode as `git checkout --`, just through a different tool surface.
+- **File or directory deletion** — `rm`, Bash-level deletes, or deleting new files you created earlier in the session.
+- **Any shell command, MCP tool, or action whose purpose is to erase the incomplete state**, regardless of tool surface.
+
+Required procedure when the trigger fires:
+
+1. **Stop.** Do not run any of the mechanisms above.
+2. **Preserve state.** Files, buffers, commits, stashes, and branches stay exactly as they are.
+3. **Report to the user.** Cover (a) what was completed, (b) what remains, (c) why you believe the current direction is wrong or the scope cannot be finished, (d) the current state of files and repo.
+4. **Wait for direction.** The user decides whether to roll back, split the work, change approach, or keep partial work. Rollback-direction choice is a user decision with consequences you do not own.
+
+**Distinct from normal iteration.** Fixing a bug you introduced earlier in the session, refactoring code you just wrote, or correcting typos inside the same approved scope is NOT rollback — it is normal forward development and is fine. Rollback is when you judge the *direction itself* was wrong and want to erase the work to start over or give up; that requires user direction, not self-judgment.
+
+### B. User-requested revert / undo: reverse session edits via file edits
+
+When the user says "revert", "undo", "discard these changes", "roll this back", "되돌려", or anything equivalent in the context of work done during this session, the default interpretation is:
+
+**Reverse the session's file edits by editing the files back to their pre-edit state — not by running any git operation.**
+
+Why: the edits made in the session are edits. They live in the files on disk. Undoing them is also an edit — write the inverse content. Git operations touch *repo state*, which includes the user's out-of-session work (uncommitted changes in files the model never edited, unrelated commits, stashes, branches) that you have no view into. Reaching for git to undo a session edit is a category error whose failure mode is collateral destruction of work the user never asked you to touch.
+
+Required procedure:
+
+1. **Identify what edits the model made in this session.** Sources, in order of reliability: the `Edit` / `Write` / `workslate_apply` tool uses visible in the conversation history; workslate buffer / task records (`workslate_task_sessions`, `workslate_diff` against disk); the conversation's narration of what was changed.
+2. **Confirm scope with the user.** Which edits specifically — all of them, just the most recent, a specific file, a specific hunk? If the user's phrasing is ambiguous, ask before touching anything.
+3. **Reverse the edits via `Edit` / `Write` / `workslate_edit` / `workslate_apply`.** Write the inverse operation: delete the lines you added, restore the lines you replaced, remove the files you created in this session.
+4. **Do NOT reach for git.** Not `checkout --`, not `restore`, not `revert`, not `reset`, not `stash`, not any other git command. None of those are the right tool for undoing your own session edits.
+5. **If a session edit was already committed during this session** and the user wants the commit removed as part of the undo, that is a separate explicit git request — route it through subsection C and confirm with the user before treating a session-edit undo as implying a commit removal.
+6. **If the undo would require touching files the model did NOT edit in this session**, stop and clarify. Those files' state is user-owned, not session-owned; you need explicit authorization before changing them.
+
+### C. Explicit git-command requests (narrow carve-out, HARD RULE)
+
+A destructive git operation may be run ONLY when the user **explicitly names the git command** in their request — e.g., *"run `git reset --hard HEAD~1`"*, *"do `git checkout -- foo.ts`"*, *"use `git revert abc123`"*. Generic phrasings like "revert it", "undo that", "throw that away", "roll back", "되돌려" do NOT name a git command and fall under subsection B — do not translate them into git operations on your own.
+
+When a git command is explicitly named, apply this pre-flight before running it:
+
+1. **Identify the named command exactly.** Same command, same arguments, no substitution.
+2. **Inspect surrounding state.** Run `git status` and `git stash list` to enumerate every file / commit / stash / branch the candidate command would affect.
+3. **Propose the command with its full blast radius**, including:
+   - the exact command line,
+   - every file / commit / stash / branch it would change (not just what the user named),
+   - whether state is preserved or destroyed,
+   - any risks (merge conflicts, data loss, unreferenced objects).
+4. **Wait for explicit per-command authorization.** A "yes, run it" / "go ahead" against a specific proposed command counts; a generic "just run it" against an ambiguous earlier phrasing does not — re-propose until there is a specific authorized command.
+5. **Execute only the authorized command.** Do NOT substitute a different command even if it seems equivalent or safer. If the proposed command's blast radius worries you, say so in the proposal — but do not unilaterally switch commands.
+
+If the surgical option the user named does not exist, or if the user's named command would destroy more than they seem to intend, stop and describe exactly what else will be affected. Wait for the user to either authorize the broader blast radius explicitly or supply an alternative command.
+
+The user owns **what** to undo, **which specific command** runs, and **when** it runs. The model's role is to surface the option space and the blast radius of each candidate — not to choose or execute on the user's behalf.
+
 ## Code Staging
 
 **All code generation goes through workslate first.** The review step before application catches chain-of-thought leaking into comments and unintentional scope reduction, both of which occur frequently with direct edits. **Never call `workslate_apply` without first reviewing the diff** — the diff step is the entire point.
