@@ -84,8 +84,25 @@ Required procedure when you hit the trigger:
 
 Scope of this rule — what it does NOT cover:
 
-- **User-requested rollback.** When the user explicitly says "revert my last commit" / "reset this branch to origin/main" / "discard these changes," execute the requested command. The trigger is your own scope judgment, not a user instruction.
+- **User-requested rollback (with blast-radius check).** When the user explicitly requests a rollback, the "your own scope judgment" gate above no longer fires — but you still do NOT automatically have license to run any destructive op whose phrasing technically covers the request. The user named *what* to roll back; you still own choosing *which operation* so that the effect stays inside the named target. See **Blast-radius check for user-requested rollbacks (HARD RULE)** below for the required pre-flight procedure before any destructive op runs.
 - **User-approved plan steps.** If a pre-approved plan contains one of these operations as a natural step (e.g., the plan itself says "revert the experimental commit after verifying the new approach"), run it. Approval of the plan is approval of its steps.
 - **Pre-implementation scope concerns.** `CLAUDE.md` Core Principles > Quality Standards already requires: *"if you believe the requested scope is genuinely too large for one delivery, raise that before starting implementation, not at completion time."* That override covers the *pre-implementation* case; this rule covers the *mid- and post-implementation* case. Both hold together.
 
 Rationale: once you have already started implementing, destroying the work to match a revised scope judgment compounds the scope-bypass with loss of recoverable state. The user owns the scope decision AND the rollback decision; silently doing both for them is two distinct failure modes stacked.
+
+### Blast-radius check for user-requested rollbacks (HARD RULE)
+
+The **User-requested rollback** carve-out above opens the gate; this check decides which destructive operation actually runs. Without it, a broad destructive op fired in response to a narrowly-scoped rollback request can collaterally destroy adjacent work the user did not name — the specific failure mode the rollback carve-out must not become a cover for.
+
+Required pre-flight before running any destructive operation, even with explicit user authorization:
+
+1. **Identify the named target.** Be precise about what the user actually said to roll back — a commit SHA, a file path, a specific hunk, a branch.
+2. **Inspect the surrounding state.** Run `git status` and `git stash list`. Note every uncommitted file, every staged change, every stash, and (for branch-wide ops) every commit on the branch that the user did not name.
+3. **Pick the most surgical operation** whose effect stays inside the named target:
+   - *"revert my last commit"* with uncommitted work in the tree → `git revert HEAD` (creates a revert commit, preserves the working tree). Do NOT use `git reset --hard HEAD~1` — it wipes the uncommitted work too.
+   - *"undo the change to foo.ts"* with `bar.ts` / `baz.ts` also dirty → `git checkout -- foo.ts` or `git restore foo.ts`. Do NOT use `git checkout .` or `git restore .` — it wipes the other files too.
+   - *"reset this branch to origin/main"* with local commits the user did not name → list every commit `git reset --hard origin/main` would discard, then wait for confirmation.
+   - *"discard these changes"* — "these" is ambiguous. Enumerate the exact files / hunks you would discard, wait for confirmation, then run only against the confirmed set.
+4. **If the surgical option does not exist, or the destructive op's blast radius still exceeds the user's named target**, stop, describe what else will be affected, and wait. Do NOT default to the broader op because the narrower one is impractical — the user must authorize the broader blast radius explicitly, or supply an alternative.
+
+"The user said revert, so any revert-ish command is authorized" is the specific failure mode this rule exists to prevent. The user named **what** to roll back; you still own choosing **how** so that the operation does not destroy adjacent work they did not mention.

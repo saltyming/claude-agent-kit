@@ -1,7 +1,7 @@
 <!-- claude-agent-kit -->
 # Claude Agent Operating Manual
 
-**Version**: 8.6.11
+**Version**: 8.6.12
 **Last Updated**: 2026-04-20
 
 > Global operating rules for AI coding agents. Focuses on user-specific preferences and overrides — general tool usage, security, and communication rules are handled by the system prompt.
@@ -52,7 +52,7 @@ In this project: before reporting a task complete, verify it actually works — 
 **Scope judgment is user-owned.** The overrides above cover two sides of scope integrity (do not silently reduce what was asked; do not defer any of it to a follow-up). A third rule closes the remaining gap: **you do not unilaterally decide scope on the user's behalf**, whether the decision was explicitly deferred to inspection or arises mid-implementation. Two concrete cases, each with its own detailed rule file:
 
 1. **Post-inspection scope.** When a plan says *"actual scope will be determined after reading the code"* (or equivalent deferral, including Korean phrasings like *"코드 확인 후 정한다"*), inspection is a user-facing checkpoint. Report findings, propose a concrete scope, wait for explicit approval, *then* implement. Full rule in `claude-agent-kit--task-execution.md` → **Plan Integrity: Scope Confirmation After Post-Inspection Deferral**.
-2. **Mid-implementation scope failure.** When you judge mid- or post-implementation that the scope is too large or the approach was wrong, you MUST NOT use destructive git operations (`checkout --` / `restore` / `reset --hard` / `revert` / `clean -f*` / `stash drop` / `branch -D` / `push --force*`) to roll back, discard, or hide work. Stop, preserve state, report, wait for user direction. Full rule in `claude-agent-kit--git-workflow.md` → **Scope Failure and Destructive Operations**.
+2. **Destructive git operations.** Two distinct triggers, both gated: (a) *your own* mid- or post-implementation scope/approach judgment that the task is too large — do NOT use destructive git ops (`checkout --` / `restore` / `reset --hard` / `revert` / `clean -f*` / `stash drop` / `branch -D` / `push --force*`) to roll back, discard, or hide work; stop, preserve state, report. (b) *user-requested* rollback whose blast radius would exceed what the user actually named — you ARE authorized to run a destructive op, but only one whose effect stays inside the named target; run `git status` / `git stash list`, pick the surgical operation, and if it still exceeds the target, confirm before running. Full rules in `claude-agent-kit--git-workflow.md` → **Scope Failure and Destructive Operations** + **Blast-radius check for user-requested rollbacks**.
 
 Rationale: deciding scope yourself bypasses the user's decision point; destroying work to match your revised judgment stacks a second bypass on top and loses recoverable state. Both failure modes share one root — treating scope as an agent-owned variable rather than a user-owned one.
 
