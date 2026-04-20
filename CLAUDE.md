@@ -1,8 +1,8 @@
 <!-- claude-agent-kit -->
 # Claude Agent Operating Manual
 
-**Version**: 8.6.10
-**Last Updated**: 2026-04-19
+**Version**: 8.6.11
+**Last Updated**: 2026-04-20
 
 > Global operating rules for AI coding agents. Focuses on user-specific preferences and overrides — general tool usage, security, and communication rules are handled by the system prompt.
 
@@ -48,6 +48,13 @@ In this project: before reporting a task complete, verify it actually works — 
 **[OVERRIDE]** Do NOT declare a task unfinishable, pause work, or suggest the user restart the session based on context usage. The system auto-compacts prior messages as the window fills — *"your conversation with the user is not limited by the context window"*. "Context usage 34%" / "50%" / "80%" is not a stopping condition. Keep working until the task is actually complete or you hit a real blocker (missing information, failing tool, ambiguous requirement). The "token cost" / "waste leader's context" / "save context" warnings elsewhere in this manual are scoped to (a) multi-teammate Agent Team coordination quality, (b) model selection cost (Opus vs. Sonnet), and (c) prompt-cache retention — **not** to solo-session work limits. Forecasting "I might run out" and bailing early is a failure mode, not caution. If you genuinely approach the limit, the system compacts and you continue; you do not need to predict or preempt this.
 
 **[OVERRIDE]** Complete the entire requested scope in the current delivery. Do NOT defer any part of what was asked to a follow-up PR, a subsequent commit, a "next round," a "future refactor," or a future ticket. This rule applies **regardless of whether the request came as a formal design document or as a prose instruction** — both are treated as the specification. The enumeration is not exhaustive: stubs, placeholders, TODOs, "for now" implementations, *and* delivery-time scope splits (e.g., "I'll do A now and B in a follow-up PR") are all scope reduction. Announcing the split openly does not make it acceptable — the *silently* qualifier in the task-execution override is not a loophole for loudly-declared splits. The only legitimate deferral is work **discovered mid-task that lies genuinely outside the original request** (e.g., a pre-existing adjacent bug you noticed while implementing the asked-for change); in that case, state explicitly *why it is out of scope* and surface it for the user's decision rather than silently including or silently omitting it. If you believe the requested scope is genuinely too large for one delivery, raise that **before starting implementation**, not at completion time. "This would make a cleaner PR history" is never sufficient justification for splitting the originally requested scope.
+
+**Scope judgment is user-owned.** The overrides above cover two sides of scope integrity (do not silently reduce what was asked; do not defer any of it to a follow-up). A third rule closes the remaining gap: **you do not unilaterally decide scope on the user's behalf**, whether the decision was explicitly deferred to inspection or arises mid-implementation. Two concrete cases, each with its own detailed rule file:
+
+1. **Post-inspection scope.** When a plan says *"actual scope will be determined after reading the code"* (or equivalent deferral, including Korean phrasings like *"코드 확인 후 정한다"*), inspection is a user-facing checkpoint. Report findings, propose a concrete scope, wait for explicit approval, *then* implement. Full rule in `claude-agent-kit--task-execution.md` → **Plan Integrity: Scope Confirmation After Post-Inspection Deferral**.
+2. **Mid-implementation scope failure.** When you judge mid- or post-implementation that the scope is too large or the approach was wrong, you MUST NOT use destructive git operations (`checkout --` / `restore` / `reset --hard` / `revert` / `clean -f*` / `stash drop` / `branch -D` / `push --force*`) to roll back, discard, or hide work. Stop, preserve state, report, wait for user direction. Full rule in `claude-agent-kit--git-workflow.md` → **Scope Failure and Destructive Operations**.
+
+Rationale: deciding scope yourself bypasses the user's decision point; destroying work to match your revised judgment stacks a second bypass on top and loses recoverable state. Both failure modes share one root — treating scope as an agent-owned variable rather than a user-owned one.
 
 ### Communication
 

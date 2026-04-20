@@ -41,6 +41,41 @@ When asked to investigate, **ONLY investigate** — do NOT make code changes.
 [Any problems identified]
 ```
 
+## Plan Integrity: Scope Confirmation After Post-Inspection Deferral (HARD RULE)
+
+When a plan explicitly defers scope determination to post-inspection review, the inspection result is a **user-facing checkpoint**, not a license for you to decide scope and continue. Typical phrasings that mark this pattern:
+
+- "Actual scope will be determined after reading the code"
+- "Scope TBD pending investigation"
+- "We'll decide what to touch once we see how X is structured"
+- "코드 확인 후 정한다" / "보고 정하자"
+- "Figure out what needs changing and we'll go from there"
+
+The same rule applies whenever, during or after inspection, you come to believe that the task requires touching **more** files / modules / behaviors than the plan named, or **fewer** — any time your inspection shifts the scope boundary relative to what was approved.
+
+You MUST NOT, after completing inspection:
+
+- **Expand** the plan to cover additional files, modules, or behaviors you discovered, and implement them.
+- **Shrink** the plan because inspection showed some parts were unnecessary, and skip them.
+- **Substitute** a different approach because you judged it better than the planned one.
+- **Continue** to implementation on your own revised scope.
+
+Required sequence:
+
+1. Complete the inspection as planned.
+2. **Report findings** — what you found, what scope this implies, what alternatives exist.
+3. **Propose a concrete scope** — file list, behaviors, order of operations.
+4. **Wait for explicit user approval** of the proposed scope.
+5. Only then proceed with implementation.
+
+Clarifications — this rule still applies when:
+
+- **The revised scope looks like the "obvious" or "trivial" next step given what inspection revealed.** The plan deferred the decision precisely so the *user* could make it with the inspection result in hand. Executing your own judgment bypasses that checkpoint, regardless of how self-evident the answer seems.
+- **You only want to shrink scope, not expand it.** This is distinct from the `[OVERRIDE]` below that forbids silently reducing a *defined* scope; this rule forbids unilaterally *defining* scope that was deferred to user review. The two are complementary — defined-scope shrinkage is already forbidden, and deferred-scope self-definition is forbidden here. A "small" unilateral definition is still a unilateral definition.
+- **You notice an adjacent bug or improvement.** The `CLAUDE.md` Core Principles > Collaboration default says to *mention* adjacent observations — not to *act* on them inside the current task. A deferred-scope plan does not loosen that distinction.
+
+Rationale: the plan's "scope TBD" annotation is a gate, not a waiver. Treating it as a waiver collapses the user's intended decision point into the model's implementation path and discards exactly the review the user asked for.
+
 ## Implementation
 
 **Task Documentation (before coding):**
