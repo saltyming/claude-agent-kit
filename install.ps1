@@ -32,6 +32,11 @@ function Do-Uninstall {
         Write-Host "No manifest found. Nothing to uninstall."
         return
     }
+    # Remove PreToolUse doorbell hooks while the binary still exists
+    $workslateExe = Join-Path $BinDir "workslate.exe"
+    if (Test-Path $workslateExe) {
+        try { & $workslateExe --uninstall-hooks 2>$null } catch {}
+    }
     $customList = @()
     foreach ($f in Get-Content $Manifest) {
         if (Test-Path $f) {
@@ -120,6 +125,15 @@ foreach ($bin in $Binaries) {
     Add-Content $Manifest $binDest
     Remove-Item $tmp.FullName -Force
     Remove-Item $extractDir -Recurse -Force
+}
+
+# Register PreToolUse doorbell hooks in settings.json
+$workslateExe = Join-Path $BinDir "workslate.exe"
+try {
+    & $workslateExe --install-hooks
+    if ($LASTEXITCODE -ne 0) { throw }
+} catch {
+    Write-Host "  Hook registration failed. Run manually: $workslateExe --install-hooks"
 }
 
 # CLAUDE.md
