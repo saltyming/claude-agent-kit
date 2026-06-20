@@ -24,6 +24,9 @@ uninstall() {
         echo "No manifest found. Nothing to uninstall."
         exit 0
     fi
+    if [ -x "$BIN_DIR/workslate" ]; then
+        "$BIN_DIR/workslate" --uninstall-hooks 2>/dev/null || true
+    fi
     custom_list_file="$(mktemp)"
     while IFS= read -r f; do
         if [ -f "$f" ]; then
@@ -149,6 +152,9 @@ mkdir -p "$RULES_DIR" "$BIN_DIR"
 # Binaries from latest GitHub Release
 install_binary workslate
 install_binary aside
+
+# Register PreToolUse doorbell hooks in settings.json
+"$BIN_DIR/workslate" --install-hooks || echo "  Hook registration failed. Run manually: $BIN_DIR/workslate --install-hooks"
 
 # CLAUDE.md
 echo "Downloading CLAUDE.md..."

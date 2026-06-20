@@ -34,6 +34,8 @@ install: build
 		fi; \
 		echo $(BIN_DIR)/$$bin >> $(MANIFEST); \
 	done
+	@# Register PreToolUse doorbell hooks in settings.json
+	@$(BIN_DIR)/workslate --install-hooks || echo "  Hook registration failed. Run manually: $(BIN_DIR)/workslate --install-hooks"
 	@# Register both MCP servers
 	@if command -v claude >/dev/null 2>&1; then \
 		for srv in workslate aside; do \
@@ -68,6 +70,8 @@ uninstall:
 		echo "No manifest found at $(MANIFEST). Nothing to uninstall."; \
 		exit 0; \
 	fi
+	@# Remove PreToolUse doorbell hooks while the binary still exists
+	@[ -x $(BIN_DIR)/workslate ] && $(BIN_DIR)/workslate --uninstall-hooks 2>/dev/null || true
 	@# First pass: remove core-signed files; collect custom-signed ones.
 	@custom_list=""; \
 	while IFS= read -r f; do \

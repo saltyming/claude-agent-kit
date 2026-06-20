@@ -1,8 +1,8 @@
 <!-- claude-agent-kit -->
 # Claude Agent Operating Manual
 
-**Version**: 8.7
-**Last Updated**: 2026-04-20
+**Version**: 8.9
+**Last Updated**: 2026-06-20
 
 > Global operating rules for AI coding agents. Focuses on user-specific preferences and overrides — general tool usage, security, and communication rules are handled by the system prompt.
 
@@ -90,9 +90,9 @@ These directives govern scope of *action*, and that is fine — do not silently 
 
 **[OVERRIDE]** `"If the agent description mentions that it should be used proactively, then you should try your best to use it without the user having to ask for it first."` / `"When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you."`
 
-**This override applies to delegation tools only** (`Agent` / `TeamCreate` and their write-capable `subagent_type`s). It does not narrow unrelated tools.
+**This override applies to delegation tools only** (`Agent` and its write-capable `subagent_type`s, including backgrounded teammates). It does not narrow unrelated tools.
 
-In this project: the proactive-use directive is **narrowed to read-only `subagent_type`s only** — `Explore`, `Plan`, `claude-code-guide`, and any advisory-only type whose documentation explicitly marks it as unable to edit files. Calling `Agent` with a **write-capable** `subagent_type` (`general-purpose`, or any type whose capabilities include file edit/write), OR calling `TeamCreate` at all, OR spawning any teammate into a team (`Agent(team_name=..., ...)`), requires the user to have **explicitly asked** for parallel / delegated / multi-agent work — either per-turn ("spawn 2 subagents to…", "use an Agent Team") or via a specific, unambiguous durable instruction in this `CLAUDE.md` / project memory / auto-memory that names the delegation pattern and its scope. Both satisfy the gate; generic wording ("use agents proactively", "parallelize when helpful") does not. The gate is based on the agent's **capabilities**, not the prompt you plan to send — do not pick `general-purpose` with a "just read things" prompt as a workaround for wanting `Explore`. Default for unknown / ambiguous subagent_types: treat as write-capable and gated.
+In this project: the proactive-use directive is **narrowed to read-only `subagent_type`s only** — `Explore`, `Plan`, `claude-code-guide`, and any advisory-only type whose documentation explicitly marks it as unable to edit files. Calling `Agent` with a **write-capable** `subagent_type` (`general-purpose`, or any type whose capabilities include file edit/write) — whether fire-and-forget OR as a backgrounded teammate (`Agent(name=..., run_in_background=true, ...)`) — requires the user to have **explicitly asked** for parallel / delegated / multi-agent work — either per-turn ("spawn 2 subagents to…", "use an Agent Team") or via a specific, unambiguous durable instruction in this `CLAUDE.md` / project memory / auto-memory that names the delegation pattern and its scope. Both satisfy the gate; generic wording ("use agents proactively", "parallelize when helpful") does not. The gate is based on the agent's **capabilities**, not the prompt you plan to send — do not pick `general-purpose` with a "just read things" prompt as a workaround for wanting `Explore`. Default for unknown / ambiguous subagent_types: treat as write-capable and gated.
 
 Out of scope for this gate: aside tools (`mcp__aside__aside_*`) and built-in `advisor()` — those are consultations, not file-mutating delegates, and remain governed by `claude-agent-kit--aside.md`.
 
@@ -130,18 +130,17 @@ User Request
    ├─ User did NOT explicitly ask for parallelism/delegation?
    │  └─ Single session. Optionally spawn read-only subagents (Explore for >3-query research, Plan for design sketches).
    │     If you think parallelism would genuinely help → propose it ("want me to spawn 2 subagents for X and Y?") and wait.
-   │     Do NOT spawn general-purpose subagents or an Agent Team unprompted.
+   │     Do NOT spawn general-purpose subagents or background teammates unprompted.
    └─ User explicitly asked for parallelism/delegation (per-turn OR durable CLAUDE.md / memory instruction)?
       ├─ Workers independent, no communication needed?
-      │  └─ Subagents → Agent(subagent_type="general-purpose", prompt=..., ...) — no team_name, self-contained prompts
-      └─ Workers need collaboration/discussion?
-         └─ Agent Team (two-step spawn: TeamCreate, then Agent(team_name=...) per teammate)
-            ├─ TeamCreate(team_name=...) — creates empty team container
-            ├─ Agent(team_name=..., name=..., subagent_type=..., model="sonnet", prompt=<role-only>) per teammate
+      │  └─ Subagents → Agent(subagent_type="general-purpose", prompt=..., ...) — fire-and-forget, self-contained prompts
+      └─ Workers need collaboration/discussion or mid-task steering?
+         └─ Teammates — single implicit team (no TeamCreate; Agent's team_name is deprecated/ignored)
+            ├─ Agent(name=..., subagent_type=..., model="sonnet", run_in_background=true, prompt=<role-only>) per teammate
             ├─ Design task graph (blockedBy, leader-reserved) in team: namespace
-            ├─ Teammates self-claim eligible tasks
+            ├─ Teammates self-claim eligible tasks; steer mid-task via workslate_msg_send doorbell
             ├─ Leader: monitor, build & verify
-            └─ Shutdown teammates (shutdown_request) → TeamDelete
+            └─ Shutdown teammates (shutdown_request) — no TeamDelete
 ```
 
 ---

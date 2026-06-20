@@ -23,7 +23,7 @@ Claude Code ships with system prompt directives optimized for casual Q&A — not
 | (no verification required) | Verify before claiming completion. Never fake a green result. |
 
 Also includes:
-- **Agent Teams workflow** — self-claim policy, leader intervention patterns, teammate communication triggers, **token cost criteria** (when a team is actually worth it vs. single session), and a **HARD RULE completion report format** that caps per-report tokens
+- **Teammates workflow** (single implicit team — `Agent` with `name` + `run_in_background`, no `TeamCreate`) — self-claim policy, leader intervention patterns, teammate communication triggers, **token cost criteria** (when a team is actually worth it vs. single session), and a **HARD RULE completion report format** that caps per-report tokens
 - **Code Staging via workslate** — staged editing workflow that prevents chain-of-thought leakage and scope reduction, with safety rules for `workslate_clear`, stale-buffer handling, and buffer naming across solo/leader/teammate contexts
 - **Unified task system** — all contexts (solo, leader, teammate) use `workslate_task_*` with `ws:`/`team:` namespaces, sharing a single SQLite DB via WAL concurrency
 - **Quality guardrails** — false claims mitigation, comment discipline, verification requirement before claiming completion
@@ -41,7 +41,7 @@ An MCP server for Claude Code that provides:
 - **Pattern search** — find patterns (substring or regex) in files, returns matches with context and a summary of line numbers for precise `workslate_edit` targeting.
 - **SQLite-backed task tracking** — project-scoped tasks stored in `workslate.db` with WAL mode for concurrent access by multiple agents. Supports `ws:` (personal) and `team:` (coordination) namespaces with cross-namespace dependencies.
 - **Named task sessions** — `workslate_task_init("auth-refactor")` isolates tasks per work context. Multiple sessions coexist in SQLite, resumable across restarts.
-- **Auto-footer** — every tool response appends a footer showing active session, task progress by namespace (`ws:[3/5] team:[1/3]`), and a `── Buffers: N staged (names) ──` line when any buffers are live. You never lose sight of what's done, what's next, or what's left in staging.
+- **Auto-footer** — a `PostToolUse` doorbell hook injects a footer after each tool call (so it reflects that tool's own effect) showing the active session and task progress by namespace (`ws:[3/5] team:[1/3]`). Staged buffers are not in the footer (the hook is a separate process and cannot see in-memory buffers) — use `workslate_list` to see what's staged.
 - **Project root guard** — all file operations are restricted to the current working directory tree. The server refuses to read or write outside the project root, even via symlinks.
 
 #### Tools

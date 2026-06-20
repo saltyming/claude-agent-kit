@@ -1,5 +1,6 @@
 mod buffer;
 mod file;
+mod hooks;
 mod lenient;
 mod task;
 
@@ -29,9 +30,10 @@ use buffer::{
 };
 use file::{MAX_FILE_SIZE, format_numbered_line, is_binary, validate_path};
 use task::{
-    Namespace, TaskClearParams, TaskCreateParams, TaskDoneParams, TaskId, TaskInitParams,
-    TaskListParams, TaskStatus, TaskUpdateParams, load_tasks, migrate_db,
-    recompute_blocked_status, render_task_footer, serialize_depends_on, SCHEMA_SQL,
+    InboxReadParams, MsgSendParams, Namespace, RegisterParams, TaskClearParams, TaskCreateParams,
+    TaskDoneParams, TaskId, TaskInitParams, TaskListParams, TaskStatus, TaskUpdateParams,
+    load_tasks, migrate_db, recompute_blocked_status, resolve_sender, serialize_depends_on,
+    SCHEMA_SQL,
 };
 
 // ── Content hashing ───────────────────────────────────────
@@ -68,6 +70,11 @@ struct Workslate {
     tasks_dir: PathBuf,
     project_root: PathBuf,
     active_session: Arc<RwLock<Option<String>>>,
+    /// This session's registered role (set by workslate_register, seeded by
+    /// workslate_task_init from the DB). The default sender for msg_send — under the
+    /// composite (session_id, agent_id) identity the env session id alone cannot
+    /// disambiguate a subagent from its parent, so the role is cached in-process.
+    active_role: Arc<RwLock<Option<String>>>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -81,6 +88,7 @@ impl Workslate {
             tasks_dir,
             project_root,
             active_session: Arc::new(RwLock::new(None)),
+            active_role: Arc::new(RwLock::new(None)),
             tool_router: Self::tool_router(),
         }
     }
@@ -969,10 +977,11 @@ impl Workslate {
             vec![]
         };
 
-        let conn = match self.lock_db() { Ok(c) => c, Err(e) => return Ok(e) };
+        let mut conn = match self.lock_db() { Ok(c) => c, Err(e) => return Ok(e) };
 
-        conn.execute_batch("BEGIN").ok();
-
+        // Validate dependencies BEFORE opening a transaction: an early return
+        // inside an open transaction would leak it onto the shared connection
+        // and corrupt later writes from this and other agent instances.
         for dep in &deps {
             let exists: bool = conn.query_row(
                 "SELECT COUNT(*) > 0 FROM tasks WHERE session = ? AND namespace = ? AND id = ?",
@@ -986,30 +995,36 @@ impl Workslate {
             }
         }
 
-        conn.execute(
+        let status = if deps.is_empty() { "pending" } else { "blocked" };
+        let deps_json = serialize_depends_on(&deps);
+
+        // RAII transaction: any early return below drops `tx`, rolling back.
+        let tx = conn
+            .transaction()
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+
+        tx.execute(
             "INSERT OR IGNORE INTO task_counters (session, namespace, next_id) VALUES (?, ?, 1)",
             rusqlite::params![session, ns.as_str()],
         ).ok();
-        let id: u32 = conn.query_row(
+        let id: u32 = tx.query_row(
             "SELECT next_id FROM task_counters WHERE session = ? AND namespace = ?",
             rusqlite::params![session, ns.as_str()],
             |row| row.get(0),
         ).map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
-        let status = if deps.is_empty() { "pending" } else { "blocked" };
-        let deps_json = serialize_depends_on(&deps);
-
-        conn.execute(
+        tx.execute(
             "INSERT INTO tasks (session, namespace, id, name, description, status, owner, depends_on) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             rusqlite::params![session, ns.as_str(), id, params.name, params.description, status, params.owner, deps_json],
         ).map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
-        conn.execute(
+        tx.execute(
             "UPDATE task_counters SET next_id = ? WHERE session = ? AND namespace = ?",
             rusqlite::params![id + 1, session, ns.as_str()],
         ).ok();
 
-        conn.execute_batch("COMMIT").ok();
+        tx.commit()
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
         if let Err(e) = recompute_blocked_status(&conn, &session) {
             tracing::warn!("Failed to recompute blocked status: {}", e);
@@ -1262,6 +1277,42 @@ impl Workslate {
 
         *self.active_session.write().await = Some(params.name.clone());
 
+        // Record this Claude session's task_session in session_context so the
+        // doorbell hooks can resolve it even before workslate_register sets a
+        // role. Keeps any existing role. Best-effort: skipped when
+        // CLAUDE_CODE_SESSION_ID is unset (e.g. not running under Claude Code).
+        if let Some(claude_sid) = params
+            .session_id
+            .clone()
+            .filter(|s| !s.is_empty())
+            .or_else(current_claude_session_id)
+        {
+            let agent_id = params.agent_id.clone().unwrap_or_default();
+            // Scope the DB guard so it drops before the async active_role write below
+            // (a std MutexGuard held across .await makes the tool future !Send).
+            let preserved: Option<String> = if let Ok(conn) = self.lock_db() {
+                conn.execute(
+                    "INSERT INTO session_context (claude_session_id, agent_id, task_session, role, updated_at) \
+                     VALUES (?, ?, ?, NULL, datetime('now')) \
+                     ON CONFLICT(claude_session_id, agent_id) DO UPDATE SET \
+                         task_session = excluded.task_session, updated_at = datetime('now')",
+                    rusqlite::params![claude_sid, agent_id, params.name],
+                ).ok();
+                conn.query_row(
+                    "SELECT role FROM session_context WHERE claude_session_id = ? AND agent_id = ?",
+                    rusqlite::params![claude_sid, agent_id],
+                    |row| row.get::<_, Option<String>>(0),
+                ).ok().flatten()
+            } else {
+                None
+            };
+            // Seed active_role from a role preserved across an MCP restart so msg_send
+            // sender attribution survives a task_init that does not re-call register.
+            if let Some(r) = preserved {
+                *self.active_role.write().await = Some(r);
+            }
+        }
+
         let msg = if task_count > 0 {
             format!("Switched to session '{}' ({} tasks)", params.name, task_count)
         } else {
@@ -1306,6 +1357,134 @@ impl Workslate {
         }
 
         Ok(CallToolResult::success(vec![Content::text(lines.join("\n"))]))
+    }
+
+    // ── Team messaging tools ──────────────────────────────
+
+    #[tool(description = "Register your role name for the active task session so the inbox/task doorbell hooks can resolve which agent this Claude session is. Teammates call this once on startup (with the same session name the leader used), alongside workslate_inbox_read.")]
+    async fn workslate_register(
+        &self,
+        Parameters(params): Parameters<RegisterParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Err(e) = self.require_session().await { return Ok(e); }
+        let session = self.active_session.read().await.clone().unwrap();
+        let claude_sid = match params
+            .session_id
+            .clone()
+            .filter(|s| !s.is_empty())
+            .or_else(current_claude_session_id)
+        {
+            Some(s) => s,
+            None => {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "No session id: pass session_id (the value from the workslate SessionStart hint) or run under Claude Code.".to_string(),
+                )]));
+            }
+        };
+        let agent_id = params.agent_id.clone().unwrap_or_default();
+        {
+            // Scope the DB guard so it is released before the async active_role write.
+            let conn = match self.lock_db() { Ok(c) => c, Err(e) => return Ok(e) };
+            conn.execute(
+                "INSERT INTO session_context (claude_session_id, agent_id, task_session, role, updated_at) \
+                 VALUES (?, ?, ?, ?, datetime('now')) \
+                 ON CONFLICT(claude_session_id, agent_id) DO UPDATE SET \
+                     task_session = excluded.task_session, role = excluded.role, updated_at = datetime('now')",
+                rusqlite::params![claude_sid, agent_id, session, params.role],
+            ).map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        }
+        *self.active_role.write().await = Some(params.role.clone());
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Registered as '{}' in session '{}' (session id: {}, agent_id: {})",
+            params.role, session, claude_sid,
+            if agent_id.is_empty() { "<main>" } else { agent_id.as_str() }
+        ))]))
+    }
+
+    #[tool(description = "Send a message to a teammate's role inbox in the active task session. The recipient sees a one-line doorbell on their next tool call and reads the body with workslate_inbox_read. Set urgent=true for mid-task steering that should interrupt.")]
+    async fn workslate_msg_send(
+        &self,
+        Parameters(params): Parameters<MsgSendParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Err(e) = self.require_session().await { return Ok(e); }
+        let session = self.active_session.read().await.clone().unwrap();
+        let urgent: i64 = if params.urgent.unwrap_or(false) { 1 } else { 0 };
+        // Read the active_role fallback BEFORE locking the DB: the async RwLock read
+        // must not happen while the std MutexGuard is held (that makes the future !Send).
+        let active_role_fallback = self.active_role.read().await.clone();
+        // Resolve THIS caller's composite identity. The passed session_id (from the
+        // SessionStart/SubagentStart hint) is what keys session_context; the env id is
+        // a degraded fallback that does not match those rows. agent_id tells a teammate
+        // apart from the leader within one shared MCP server process.
+        let claude_sid = params
+            .session_id
+            .clone()
+            .filter(|s| !s.is_empty())
+            .or_else(current_claude_session_id);
+        let agent_id = params.agent_id.clone().unwrap_or_default();
+        let conn = match self.lock_db() { Ok(c) => c, Err(e) => return Ok(e) };
+        // Sender attribution via the composite (session_id, agent_id) identity, not a
+        // single in-process role cache (last-writer-wins when leader + teammates share
+        // this one server process). Falls back to active_role, then NULL.
+        let sender = resolve_sender(
+            &conn,
+            params.sender,
+            claude_sid.as_deref(),
+            &agent_id,
+            active_role_fallback,
+        );
+        conn.execute(
+            "INSERT INTO messages (task_session, recipient_role, sender, subject, body, urgent) \
+             VALUES (?, ?, ?, ?, ?, ?)",
+            rusqlite::params![session, params.recipient, sender, params.subject, params.body, urgent],
+        ).map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Message sent to '{}': {}", params.recipient, params.subject
+        ))]))
+    }
+
+    #[tool(description = "Read and mark-read all unread messages addressed to your role in the active task session. Call on startup and whenever the inbox doorbell reports unread messages. Atomic: concurrent reads will not double-deliver.")]
+    async fn workslate_inbox_read(
+        &self,
+        Parameters(params): Parameters<InboxReadParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if let Err(e) = self.require_session().await { return Ok(e); }
+        let session = self.active_session.read().await.clone().unwrap();
+        let conn = match self.lock_db() { Ok(c) => c, Err(e) => return Ok(e) };
+
+        // Single atomic UPDATE ... RETURNING: marks unread messages read and
+        // returns them in one statement, so two concurrent readers of the same
+        // role cannot both receive the same message.
+        let mut stmt = conn.prepare(
+            "UPDATE messages SET read_at = datetime('now') \
+             WHERE task_session = ? AND recipient_role = ? AND read_at IS NULL \
+             RETURNING id, sender, subject, body, urgent, created_at",
+        ).map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        let mut msgs: Vec<(i64, Option<String>, String, String, i64, String)> = stmt
+            .query_map(rusqlite::params![session, params.role], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
+            })
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(stmt);
+        msgs.sort_by_key(|m| m.0);
+
+        if msgs.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "No unread messages for '{}'", params.role
+            ))]));
+        }
+
+        let mut out = format!("{} unread message(s) for '{}':\n", msgs.len(), params.role);
+        for (_, sender, subject, body, urgent, created) in &msgs {
+            let flag = if *urgent != 0 { "🚨 " } else { "" };
+            let from = sender.as_deref().unwrap_or("unknown");
+            out.push_str(&format!(
+                "\n{}[{}]  from {}  ({})\n{}\n", flag, subject, from, created, body
+            ));
+        }
+        Ok(CallToolResult::success(vec![Content::text(out)]))
     }
 }
 
@@ -1394,39 +1573,6 @@ impl Workslate {
         }
         Ok(())
     }
-
-    async fn append_task_footer(&self, result: &mut CallToolResult) {
-        let session = self.active_session.read().await;
-        let session_name = match &*session {
-            Some(s) => s.clone(),
-            None => return,
-        };
-        drop(session);
-
-        // Snapshot buffers BEFORE acquiring the SQLite mutex.
-        // Holding a std::sync::MutexGuard across an await makes the
-        // tool future !Send, which the rmcp handler rejects.
-        let buffer_names: Vec<String> = {
-            let buffers = self.buffers.read().await;
-            buffers.keys().cloned().collect()
-        };
-
-        let conn = match self.db.lock() {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-        let tasks = match load_tasks(&conn, &session_name, None) {
-            Ok(t) => t,
-            Err(_) => return,
-        };
-        drop(conn);
-
-        if tasks.is_empty() && buffer_names.is_empty() {
-            return;
-        }
-        let footer = render_task_footer(&tasks, &session_name, &buffer_names);
-        result.content.push(Content::text(footer));
-    }
 }
 
 // ── ServerHandler (manual, replaces #[tool_handler]) ──────
@@ -1441,7 +1587,9 @@ impl ServerHandler for Workslate {
              Use workslate_read with file_path to view files with line numbers. \
              Use workslate_search to find patterns and get line numbers for workslate_edit. \
              SQLite-backed task tracking with ws: and team: namespaces. \
-             Task status is shown automatically in all tool responses.",
+             Team messaging: workslate_register (map your session to a role), workslate_msg_send, \
+             and workslate_inbox_read. When the PreToolUse doorbell hooks are installed, task status \
+             and unread-message alerts are injected before every tool call.",
         )
     }
 
@@ -1464,7 +1612,6 @@ impl ServerHandler for Workslate {
             }
         }
 
-        self.append_task_footer(&mut result).await;
         Ok(result)
     }
 
@@ -1487,8 +1634,56 @@ impl ServerHandler for Workslate {
 
 // ── main ──────────────────────────────────────────────────
 
+/// The Claude Code session id this MCP server process is serving, read from
+/// the `CLAUDE_CODE_SESSION_ID` env var Claude Code injects when it spawns the
+/// server. Keys `session_context` so the doorbell hooks (which receive the same
+/// session id on their stdin) can resolve this session to a role.
+fn current_claude_session_id() -> Option<String> {
+    std::env::var("CLAUDE_CODE_SESSION_ID")
+        .ok()
+        .filter(|s| !s.is_empty())
+}
+
+/// Resolve the workslate data directory for the current project.
+///
+/// Shared by the MCP server (launched in the project cwd) and the hook
+/// subcommands (spawned by Claude Code with an arbitrary cwd). Both anchor on
+/// `CLAUDE_PROJECT_DIR` so the path stays stable even if the session cwd
+/// diverges from the MCP's launch cwd; `fallback` (current_dir for the server,
+/// hook-input cwd for hooks) is used only when `CLAUDE_PROJECT_DIR` is unset.
+/// The path encoding matches the historical current_dir-based layout, so
+/// existing databases are found unchanged when CLAUDE_PROJECT_DIR == cwd.
+pub(crate) fn resolve_tasks_dir(fallback: &std::path::Path) -> PathBuf {
+    let project_dir = std::env::var("CLAUDE_PROJECT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| fallback.to_path_buf());
+    let project_path = project_dir.to_string_lossy().replace('/', "-");
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir());
+    home.join(".claude")
+        .join("projects")
+        .join(&project_path)
+        .join("workslate")
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // `workslate --hook=task|inbox`: PreToolUse doorbell. Sync, prints hook
+    // JSON to stdout and exits without starting the MCP server.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(mode) = hooks::parse_hook_mode(&args) {
+        hooks::run(mode);
+        return Ok(());
+    }
+    if args.iter().any(|a| a == "--install-hooks") {
+        return hooks::install_hooks();
+    }
+    if args.iter().any(|a| a == "--uninstall-hooks") {
+        return hooks::uninstall_hooks();
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
@@ -1498,16 +1693,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let cwd = std::env::current_dir()?;
-    let project_path = cwd.to_string_lossy().replace('/', "-");
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| std::env::temp_dir());
-    let tasks_dir = home
-        .join(".claude")
-        .join("projects")
-        .join(&project_path)
-        .join("workslate");
+    let tasks_dir = resolve_tasks_dir(&cwd);
     tokio::fs::create_dir_all(&tasks_dir).await?;
 
     let old_db_path = tasks_dir.join("workslate-tasks.db");
@@ -1515,10 +1701,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if old_db_path.exists() && !db_path.exists() {
         std::fs::rename(&old_db_path, &db_path).ok();
     }
-    let conn = rusqlite::Connection::open(&db_path)?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")?;
+    let mut conn = rusqlite::Connection::open(&db_path)?;
+    // busy_timeout first so the WAL-mode switch below waits out a concurrent
+    // writer instead of failing with "database is locked" — multiple teammate
+    // MCP servers can open this DB at the same moment.
+    conn.execute_batch("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;")?;
     conn.execute_batch(SCHEMA_SQL)?;
-    migrate_db(&conn)?;
+    migrate_db(&mut conn)?;
 
     let project_root = cwd.canonicalize()?;
     let server = Workslate::new(conn, tasks_dir, project_root);

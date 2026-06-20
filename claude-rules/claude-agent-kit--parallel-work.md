@@ -1,11 +1,11 @@
 <!-- claude-agent-kit -->
 # Parallel Work
 
-Two systems exist for parallel work: **Subagents** and **Agent Teams**. They have different architectures and should not be mixed.
+Two ways to use the `Agent` tool exist for parallel work: fire-and-forget **subagents** and persistent **teammates**. They are not separate systems — both spawn through the same `Agent` tool into a **single implicit team**. This Claude Code version has no `TeamCreate` step (`Agent`'s `team_name` parameter is deprecated and ignored); the difference is lifecycle: a subagent runs once and returns its result, while a teammate is **named** and run **in the background** (`run_in_background: true`) so it keeps running, shares the task list, and exchanges messages with peers.
 
 ## HARD RULE — delegation requires explicit user request
 
-**The gate:** calling `Agent` with a **write-capable** `subagent_type` (`general-purpose`, or any type whose capabilities include file edit/write), OR calling `TeamCreate` at all, OR spawning any teammate into an already-created team (`Agent(team_name=..., ...)`), requires the user to have **explicitly asked** for parallel / delegated / multi-agent work.
+**The gate:** calling `Agent` with a **write-capable** `subagent_type` (`general-purpose`, or any type whose capabilities include file edit/write) — whether as a fire-and-forget subagent OR as a backgrounded teammate (`Agent(name=..., run_in_background=true, ...)`) — requires the user to have **explicitly asked** for parallel / delegated / multi-agent work.
 
 **The gate is based on the agent's capabilities, not on the prompt you plan to send.** Claiming "I used `general-purpose` only for read-only investigation, so it was effectively read-only" is not an escape — if the spawned type *could* have edited files, it is gated. Use the `Explore` subagent_type when you genuinely want a read-only lookup; do not use `general-purpose` with a "just read things" prompt as a workaround.
 
@@ -28,9 +28,9 @@ The gate revisits when the `Agent` tool exposes reasoning-effort control — the
 
 **When in doubt: do the work in-session.** A slower in-session edit is cheaper than a fast-but-silently-wrong delegated one. If you think parallelism would genuinely help, *ask the user* ("should I spawn 2 subagents to do X and Y in parallel?") — do not spawn unprompted.
 
-## Choosing Between Subagents and Agent Teams
+## Choosing Between Subagents and Teammates
 
-| | Subagents (`Agent` without `team_name`) | Agent Teams (`TeamCreate` + `Agent(team_name=...)` per teammate) |
+| | Subagents (`Agent`, fire-and-forget) | Teammates (`Agent` with `name` + `run_in_background`, single implicit team) |
 |---|---|---|
 | Communication | Results returned to parent only | Teammates message each other directly |
 | Coordination | Parent manages everything | Shared task list with self-claiming |
@@ -39,29 +39,29 @@ The gate revisits when the `Agent` tool exposes reasoning-effort control — the
 | Best for | Focused, fire-and-forget work | Complex work requiring collaboration |
 | Token cost | Lower | Higher (each teammate is a full Claude instance) |
 
-**Decision rule:** Workers need to communicate with each other? Agent Teams. Just do independent work and report back? Subagents.
+**Decision rule:** Workers need to communicate with each other, or be steered mid-task? Teammates (named + `run_in_background`). Just do independent work and report back once? Subagents.
 
 ## Spawn mechanism (read this before picking a parallel tool)
 
-The `Agent` tool is the **spawn mechanism for both** subagents and teammates. The discriminator is the `team_name` parameter:
+The `Agent` tool is the **spawn mechanism for both** subagents and teammates. The discriminator is **`run_in_background` + `name`**, not `team_name` (which is deprecated and ignored — there is one implicit team per session):
 
 | Invocation | What you get |
 |---|---|
-| `Agent(subagent_type=..., prompt=..., ...)` — no `team_name` | A **subagent**. Fire-and-forget, own context window, no shared task list, no peer messaging. Result returns to the parent when done. |
-| `TeamCreate(team_name=..., ...)` **followed by** `Agent(team_name=..., name=..., subagent_type=..., model=..., prompt=...)` for each worker | A **teammate** joined to the team created by `TeamCreate`. Has shared task list access (`workslate_task_*`), can send/receive `SendMessage` to peers, runs until `shutdown_request`. |
+| `Agent(subagent_type=..., prompt=..., ...)` | A **subagent**. Fire-and-forget, own context window, no peer messaging. The result returns to the parent when it finishes. |
+| `Agent(name=..., subagent_type=..., model=..., run_in_background=true, prompt=...)` | A **teammate** in the implicit team. Named (peers address it by name via `SendMessage`) and backgrounded (it keeps running across the leader's turns, can be steered mid-task, and is resumable via `SendMessage` to its name/ID). Shares the task list (`workslate_task_*`), runs until `shutdown_request`. |
 
 Key facts that the rest of this document builds on:
 
-- **`TeamCreate` alone spawns zero workers.** It only creates the team container (config file + empty task list directory). If you call `TeamCreate` and stop there, you have an empty team. You must make a separate `Agent(team_name=...)` call for every teammate you want.
+- **There is no team container to create.** The implicit team always exists; you populate it by calling `Agent(name=..., run_in_background=true, ...)` once per teammate. Add more teammates mid-run with additional such calls — there is no `TeamCreate` / `TeamDelete`.
+- **`run_in_background=true` is what makes a teammate steerable.** Without it, even a named `Agent` call runs to completion before returning, so the leader cannot message it mid-task. Backgrounding is required for the mid-turn doorbell steering described below.
 - **`subagent_type` controls what the spawned agent can do.** Read-only types (e.g., `Explore`, `Plan`) cannot edit or write files — never assign them implementation work, whether as a subagent or a teammate. Use a full-capability type (e.g., `general-purpose`) for teammates that must modify code.
 - **`model` controls cost.** Default teammates to `model="sonnet"`; escalate to `opus` only where documented below.
-- **The leader does not use `TeamCreate` to add teammates mid-run.** Extra teammates are added by additional `Agent(team_name=..., ...)` calls against the already-created team.
 
-Whenever this document says "spawn a teammate," read that as "call `Agent` with `team_name` set." Whenever it says "spawn a subagent," read that as "call `Agent` without `team_name`." The rest of the rules (role-only creation prompts, self-claiming, completion report format, etc.) are behavioral and apply on top of the same underlying tool call.
+Whenever this document says "spawn a teammate," read that as "call `Agent` with `name` set and `run_in_background=true`." Whenever it says "spawn a subagent," read that as "call `Agent` fire-and-forget (no `name` / not backgrounded)." The rest of the rules (role-only creation prompts, self-claiming, completion report format, etc.) are behavioral and apply on top of the same underlying tool call.
 
 ## Subagents
 
-Lightweight workers spawned via the `Agent` tool **without** a `team_name` parameter. Execute a task and return a result — no inter-agent communication, no shared task list.
+Lightweight workers spawned via the `Agent` tool fire-and-forget (no `name`, not backgrounded). Execute a task and return a result — no inter-agent communication, no mid-task steering.
 
 **Prompt rules:**
 - Prompts must be **self-contained** — include all necessary context inline
@@ -101,21 +101,22 @@ Each teammate is a full Claude Code instance. On spawn, each teammate independen
 
 ### Model choice for teammates
 
-Teammates are spawned by calling `Agent(team_name=..., name=..., subagent_type=..., model=..., prompt=...)` once per teammate, after the team has been created with `TeamCreate` (see **Spawn mechanism** above). The `model` parameter (`sonnet` | `opus` | `haiku`) is the single biggest lever on team cost after team size — pick deliberately. The `subagent_type` parameter is equally load-bearing: pick wrong and the teammate cannot perform its role.
+Teammates are spawned by calling `Agent(name=..., subagent_type=..., model=..., run_in_background=true, prompt=...)` once per teammate (see **Spawn mechanism** above — there is no `TeamCreate`). The `model` parameter (`sonnet` | `opus` | `haiku`) is the single biggest lever on team cost after team size — pick deliberately. The `subagent_type` parameter is equally load-bearing: pick wrong and the teammate cannot perform its role.
 
-- **Default teammates to Sonnet** — `Agent(team_name=..., name=..., model="sonnet", ...)`. Teammate work is well-scoped: claim an unblocked task, edit files inside an assigned scope, produce a completion report. Sonnet handles this reliably at a fraction of Opus token cost, and the leader (on Opus) is where cross-teammate reasoning happens anyway.
+- **Default teammates to Sonnet** — `Agent(name=..., model="sonnet", run_in_background=true, ...)`. Teammate work is well-scoped: claim an unblocked task, edit files inside an assigned scope, produce a completion report. Sonnet handles this reliably at a fraction of Opus token cost, and the leader (on Opus) is where cross-teammate reasoning happens anyway.
 - **Leader stays on Opus** — inherited from the current session, no override needed. The leader designs the task graph, reconciles conflicting assumptions between teammates, and owns integration/verification. Weakening the leader to save tokens usually costs more in rework.
 - **Escalate a specific teammate to Opus only for genuine reasoning load** — e.g., a `verifier-review` / semantic reviewer that must catch subtle contract mismatches across modules, or an `arch-designer` making cross-cutting design calls. Note the exception in the creation prompt so future readers know why that teammate is not on the default.
 - **Model choice does not license scope shrinkage.** Sonnet teammates are still bound by the "task scope is non-negotiable" rule — if a Sonnet teammate cannot complete the task as specified, they report to the leader rather than silently trimming it.
 - **Pick `subagent_type` to match the role.** Implementation teammates need a full-capability agent type (e.g., `general-purpose`) — read-only types like `Explore` or `Plan` literally cannot edit or write files, so handing them an implementation task produces silent failure. A `verifier-build` teammate that only runs build/test can use `general-purpose` (it needs Bash). A pure-research teammate with no file edits can use `Explore`. When in doubt, default to `general-purpose` — it is the only built-in type that can both read and write.
 
-**How Agent Teams actually work (system-level guarantees):**
+**How teammates work (system-level guarantees):**
 - Teammates load **CLAUDE.md, MCP servers, and skills** automatically (same as any Claude Code session)
 - Teammates do NOT inherit the leader's conversation history
-- The shared task list supports **self-claiming** with file locking to prevent races
-- Task dependencies resolve **automatically** — when a blocking task completes, dependent tasks unblock without manual intervention
-- Messages between teammates are delivered **automatically** (no polling)
-- Task assignment via `TaskUpdate` is delivered to the teammate automatically by the system
+- Messages between teammates are delivered **automatically** (no polling) — this is built-in `SendMessage`, which we use
+
+**Two task systems — keep them distinct:**
+- **Claude Code's built-in Agent Team task list** (`TaskCreate` / `TaskList` / `TaskUpdate`, with `blockedBy`) is a *separate* system with native file-locking self-claim, automatic dependency unblock, and system-delivered assignment. **This project does NOT use it for team coordination.**
+- **`workslate_task_*`** (`ws:` / `team:` namespaces, `depends_on`) is our coordination + tracking system — and the one the **doorbell footer surfaces on every tool call**. Here self-claim is *behavioral* (see Task Claiming Policy below — not a system file-lock), dependency unblock is handled by workslate, and a teammate sees a new assignment via the doorbell, not via built-in auto-delivery.
 
 ### When to Use
 
@@ -156,16 +157,14 @@ Both namespaces appear in the footer. The leader sees `ws:[2/4] team:[8/12]` at 
 
 ```
 1. workslate_task_init                           → Create a named session for this team effort
-2. TeamCreate(team_name=..., ...)                → Create the (empty) team container — config file + task list directory. NO teammates exist yet.
-3. Agent(team_name=..., name=..., subagent_type=..., model="sonnet", prompt=<role-only>)
-                                                 → Spawn each teammate. Call Agent once per teammate. Teammates explore their scope while waiting — see Creation Prompt below.
-4. workslate_task_create(namespace="team")       → Design task graph with depends_on and owner
-5. Teammates work                                → Self-claim eligible tasks via workslate_task_update(owner=self)
-6. Monitor                                       → Footer shows team progress; intervene only when stuck
-7. Build & verify                                → After all teammates complete
-8. Fix integration                               → Missing imports, visibility, mod declarations
-9. Shutdown                                      → shutdown_request to each teammate
-10. TeamDelete                                   → Clean up team resources (fails if any teammate still alive — finish step 9 first)
+2. Agent(name=..., subagent_type=..., model="sonnet", run_in_background=true, prompt=<role-only>)
+                                                 → Spawn each teammate into the implicit team (no TeamCreate). Call Agent once per teammate. Teammates explore their scope while waiting — see Creation Prompt below.
+3. workslate_task_create(namespace="team")       → Design task graph with depends_on and owner
+4. Teammates work                                → Self-claim eligible tasks via workslate_task_update(owner=self)
+5. Monitor                                       → Footer shows team progress; intervene only when stuck
+6. Build & verify                                → After all teammates complete
+7. Fix integration                               → Missing imports, visibility, mod declarations
+8. Shutdown                                      → shutdown_request to each teammate (no TeamDelete — the implicit team needs no teardown)
 ```
 
 **Creation prompt rules:**
@@ -183,21 +182,21 @@ Read and understand the code in your scope while waiting for task assignments."
 
 **Leader responsibilities:**
 1. Create team with **role-only creation prompts** (no specific tasks in the prompt)
-2. **Design the task graph** — proper scope, `blockedBy` dependencies, leader-reserved marking
-3. Mark shared types / integration / cross-scope tasks as **leader-reserved** (assign owner to leader via `TaskUpdate`)
+2. **Design the task graph** — proper scope, `depends_on` dependencies, leader-reserved marking
+3. Mark shared types / integration / cross-scope tasks as **leader-reserved** (assign owner to leader via `workslate_task_update`)
 4. **Run build & tests** — teammates may lack Bash permissions
 5. Fix integration issues after all teammates complete
-6. Shutdown all teammates before `TeamDelete`
+6. Shutdown all teammates (`shutdown_request`) when the work is done
 
 **Leader checklist:**
 - [ ] Teammates spawned with `model="sonnet"` unless a specific role justifies Opus (document the exception in the creation prompt)
 - [ ] Teammates spawned with a `subagent_type` that matches the role — implementation teammates MUST use a write-capable type (e.g., `general-purpose`); never `Explore` or `Plan` for implementation work
 - [ ] Creation prompts contain role/scope only (no implementation instructions)
-- [ ] Task graph designed with proper `blockedBy` dependencies
+- [ ] Task graph designed with proper `depends_on` dependencies
 - [ ] Shared types / integration / public interface tasks reserved to leader (owner = leader)
 - [ ] Each teammate's file scope does not overlap
 - [ ] Build executed after teammates report completion
-- [ ] All teammates shut down before cleanup
+- [ ] All teammates shut down (`shutdown_request`) when done
 
 ### Leader Intervention
 
@@ -216,7 +215,7 @@ The leader does NOT need to review every completion report in detail. Skim repor
 
 > **Teammates read this section directly** — CLAUDE.md is loaded by all teammates.
 
-**When you are a teammate in an Agent Team, follow this work loop:**
+**When you are a teammate in the implicit team, follow this work loop:**
 
 1. **On creation:** Read and explore code within your assigned scope. **Do NOT start implementing anything.** Wait until tasks appear in the task list.
 2. **Self-claim** an eligible task (see Task Claiming Policy below).
@@ -266,7 +265,7 @@ Long, narrative completion reports waste the leader's context and delay the next
 > **This section is enforced via CLAUDE.md behavioral rules, not by the system.** The system allows any teammate to claim any unblocked task. These rules constrain that.
 
 **Teammates may self-claim a task when ALL of these conditions are met:**
-1. The task is **unblocked** (all `blockedBy` dependencies completed)
+1. The task is **unblocked** (all `depends_on` dependencies completed)
 2. The task is **unassigned** (no owner set)
 3. The task is **within the teammate's assigned file scope**
 4. The task does **NOT** modify shared files, shared types, or public interfaces
@@ -277,10 +276,10 @@ Long, narrative completion reports waste the leader's context and delay the next
 - Cross-scope tasks that touch multiple teammates' files
 - Any task where ownership is ambiguous
 
-Leaders mark these as reserved by assigning owner to themselves via `TaskUpdate`. Teammates must not claim tasks that already have an owner.
+Leaders mark these as reserved by assigning owner to themselves via `workslate_task_update`. Teammates must not claim tasks that already have an owner.
 
 **When multiple eligible tasks are available, prioritize in this order:**
-1. Tasks on the **critical path** — tasks that other tasks are `blockedBy` (unblocking others has the highest throughput impact)
+1. Tasks on the **critical path** — tasks that other tasks list in their `depends_on` (unblocking others has the highest throughput impact)
 2. Tasks with the **most dependents** — prefer unblocking 3 teammates over unblocking 1
 3. Tasks **relevant to current work context** — minimize context switching as a tiebreaker
 
@@ -289,8 +288,25 @@ Leaders mark these as reserved by assigning owner to themselves via `TaskUpdate`
 **Cardinal rule: no two teammates modify the same file.**
 
 - Each teammate's file scope is defined in their creation prompt
-- Shared dependencies (types, constants) get their own task; other tasks depend on it via `blockedBy`
+- Shared dependencies (types, constants) get their own task; other tasks depend on it via `depends_on`
 - If two teammates must touch the same file, assign it to exactly one
+
+### Mid-Turn Steering & Team Messaging (workslate)
+
+The built-in `SendMessage` delivers to a teammate only at its **next turn boundary** — a teammate part-way through a long multi-tool-call turn does not see the message until it finishes, by which point it may have completed work in the wrong direction. workslate adds a messaging layer with a **per-tool-call doorbell** to close this gap.
+
+**Tools:**
+- `workslate_register(role, session_id, agent_id)` — map this Claude session to your role name (e.g. `"backend-dev"`). Pass `session_id` **and** `agent_id` = the values from the workslate `SubagentStart` hint (`[workslate] agent_id=… session_id=…`). A subagent shares its parent's `session_id`, so `agent_id` is what tells the doorbell which agent you are; the MCP server's own env id does NOT match the hook's, so both must come from the hint. Call once on startup.
+- `workslate_msg_send(recipient, subject, body, urgent?, session_id?, agent_id?)` — send a message to a role's inbox in the active task session. `subject` is the one-liner shown in the doorbell; `body` is read on demand; `urgent=true` flags it 🚨. Pass `session_id`/`agent_id` (the same hint values you give `register`/`task_init`) so the sender is attributed to *your* role via the composite `(session_id, agent_id)` identity — without them, sender falls back to a process-shared `active_role` cache that is wrong when a leader and teammates share one MCP server process.
+- `workslate_inbox_read(role)` — return unread messages addressed to your role and mark them read (atomic — concurrent reads never double-deliver).
+
+**How delivery works.** `make install` registers four hooks: a wildcard `PreToolUse` **inbox** doorbell and a wildcard `PostToolUse` **task** doorbell that run on every tool call in every session — including teammates, since a teammate inherits the lead's hook config — a `SessionStart` hook that hands the **main** session its `session_id`, and a `SubagentStart` hook that hands each **subagent** its `agent_id` and `session_id` (subagents do NOT fire `SessionStart`, so this is their only identity hint; see startup sequence). The **inbox doorbell** injects a one-line nudge (`📨 N unread … Latest: "…"`) until you call `workslate_inbox_read`; the **task doorbell** injects the task-status footer (on `PostToolUse`, so it reflects the just-run tool's own effect — e.g. a `workslate_task_done` shows done on that same call, not one later — while the inbox nudge stays on `PreToolUse` so it never misses a call, including ones that error or are denied). The doorbell is only a *notification* — the model still chooses to pull the body via `workslate_inbox_read`. For hard steering, mark the message `urgent`.
+
+**Teammate startup sequence (required):** as a subagent you receive a `SubagentStart` hint `[workslate] agent_id=<A> session_id=<S>` (NOT a `SessionStart` hint — subagents do not fire that, and they share the parent's `session_id`). Pass **both** to: `workslate_task_init(<same session name the leader used>, session_id=<S>, agent_id=<A>)` → `workslate_register(role=<your name>, session_id=<S>, agent_id=<A>)` → `workslate_inbox_read(role=<your name>)`. `agent_id` is required because the parent and every subagent share one `session_id`; the composite `(session_id, agent_id)` is what separates your inbox from the leader's. The leader must propagate the task-session name to teammates in their creation prompt.
+
+**Addressing is by role, not session.** Messages are addressed to the durable role name, so a respawned teammate of the same role still receives prior messages. Assumes **one teammate per role** within a task session — if two live sessions share a role, one `inbox_read` consumes both their messages.
+
+**workslate messaging vs. `SendMessage`:** use `SendMessage` for fire-and-forget peer notes that can wait for a turn boundary; use workslate `msg_send` + the doorbell when you need the recipient nudged mid-turn, durable delivery across respawns, or leader→teammate steering.
 
 ### Communication
 
@@ -318,7 +334,7 @@ Leaders mark these as reserved by assigning owner to themselves via `TaskUpdate`
 
 **Pattern 1: Parallel Module Decomposition**
 ```
-Leader creates tasks: types (T1), core (T2 blockedBy T1), io (T3 blockedBy T1), misc (T4)
+Leader creates tasks: types (T1), core (T2 depends_on T1), io (T3 depends_on T1), misc (T4)
 ├── teammate-types  → Claims T1, extracts shared types
 ├── teammate-core   → T1 completes → auto-unblocks T2 → claims T2
 ├── teammate-io     → T1 completes → auto-unblocks T3 → claims T3
@@ -336,7 +352,7 @@ Leader creates investigation tasks, one per hypothesis
 
 **Pattern 3: Cross-Layer Feature**
 ```
-Leader creates tasks: api (T1), ui (T2 blockedBy T1), tests (T3 blockedBy T1,T2)
+Leader creates tasks: api (T1), ui (T2 depends_on T1), tests (T3 depends_on T1,T2)
 ├── teammate-backend  → Claims T1
 ├── teammate-frontend → Waits for T1, then claims T2
 └── teammate-tests    → Waits for T1+T2, then claims T3
@@ -344,7 +360,7 @@ Leader creates tasks: api (T1), ui (T2 blockedBy T1), tests (T3 blockedBy T1,T2)
 
 **Pattern 4: Verification Teammate**
 ```
-Leader creates implementation tasks + verification tasks (blockedBy implementation)
+Leader creates implementation tasks + verification tasks (depends_on implementation)
 ├── teammate-core     → Claims T1 (implement module)
 ├── teammate-io       → Claims T2 (implement I/O layer)
 └── teammate-verify   → Waits for T1,T2 → runs build, tests, reviews diffs
@@ -399,7 +415,7 @@ to the implementer, then notify the leader."
 
 - **No session resume** — `/resume` and `/rewind` do not restore in-process teammates
 - **Task status can lag** — teammates sometimes fail to mark tasks complete, blocking dependents. Leader should check and update manually if stuck
-- **One team per session** — clean up before starting a new team
+- **One implicit team per session** — there is no separate team to create or delete; teammates are spawned into it directly and shut down with `shutdown_request`
 - **No nested teams** — teammates cannot create their own teams
 - **Leader is fixed** — cannot transfer leadership
 
@@ -407,7 +423,7 @@ to the implementer, then notify the leader."
 
 | Anti-Pattern | Problem | Fix |
 |-------------|---------|-----|
-| Using SendMessage for dependency coordination | Redundant; races with auto-unblock | Use `blockedBy` in TaskCreate |
+| Using SendMessage for dependency coordination | Redundant; races with auto-unblock | Use `depends_on` in `workslate_task_create` |
 | Overlapping file scope | Overwrites, lost work | One teammate per file |
 | 6+ teammates | Coordination overhead dominates | Cap at 5 |
 | Leader dispatches every task manually | Leader bottleneck, teammates idle | Let teammates self-claim; leader designs task graph |
@@ -418,8 +434,8 @@ to the implementer, then notify the leader."
 | Teammate claims shared/integration task | Architectural inconsistency | Leader reserves these (owner = leader) |
 | Teammate claims out-of-scope task | File conflicts | CLAUDE.md scope rules + clear creation prompts |
 | Teammate silently reduces task scope | Incomplete deliverable, downstream breakage | Task scope is non-negotiable; report concerns to leader before starting |
-| Calling `TeamCreate` and expecting teammates to exist | `TeamCreate` only creates the container — zero workers are spawned | After `TeamCreate`, call `Agent(team_name=..., name=..., subagent_type=..., model=...)` once per teammate |
+| Spawning a teammate without `run_in_background=true` and trying to steer it mid-task | A foreground `Agent` call runs to completion before returning — the leader cannot message it mid-turn | Spawn steerable teammates with `Agent(name=..., run_in_background=true, ...)`; foreground `Agent` is for fire-and-forget subagents |
 | Spawning a teammate with `subagent_type="Explore"` (or another read-only type) for implementation work | The teammate cannot edit or write files, and silently fails every implementation task it claims | Use a write-capable type (e.g., `general-purpose`) for implementation; reserve read-only types for pure research roles |
-| Using the `Agent` tool without `team_name` and treating the result as a teammate | You got a subagent — it has no task list access, no peer messaging, and exits when its prompt finishes | To join a team, pass `team_name` (of an already-created team); to fire-and-forget, omit `team_name` and that is the subagent path |
+| Looking for a `TeamCreate` / `TeamDelete` step | Those tools do not exist in this Claude Code version; `team_name` is deprecated and ignored | There is one implicit team — spawn teammates directly with `Agent(name=..., run_in_background=true, ...)`, shut them down with `shutdown_request` |
 | Spawning a `general-purpose` subagent without user request | Delegates work the user expected to see done in-session, at a reasoning level the leader can't raise (no `reasoning_effort` knob on `Agent`); failure mode is a silent wrong-interpretation baked into files | Do it in-session. If parallelism would genuinely help, propose it ("want me to spawn 2 subagents?") and wait for approval. Read-only types (`Explore`, `Plan`) remain proactive-safe |
 | Creating an Agent Team because the scale criteria happen to match | Scale criteria describe *when a team is viable*, not *when to spawn one unprompted* — the HARD RULE at the top of this file is the gate | Require explicit user request (per-turn ask or durable CLAUDE.md / memory instruction) regardless of scale. Propose, don't spawn |

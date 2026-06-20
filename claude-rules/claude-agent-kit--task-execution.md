@@ -308,11 +308,11 @@ These rules prevent catastrophic loss of staged work. The code enforces the firs
   - Teammate: `<teammate-name>-<file>` — e.g., `posix-libs-at-rs`, `backend-api-routes`
 - **`workslate_apply` auto-clears the applied buffer on success** — both from memory and from SQLite. You do not need (and should not) call `workslate_clear` after a successful apply. If apply fails (write error, stale buffer without `force`, unapplied dependency), the buffer is preserved so you can retry. `workslate_clear(name=...)` is only for abandoning a buffer you decided not to apply.
 - **Stale buffer detection is on by default.** When `workslate_edit` or `workslate_write` loads a file from disk, the current SHA-256 is recorded. At apply time, if the disk file has changed, apply refuses with an error pointing at `workslate_diff`. If you intentionally want to overwrite the changed file, pass `force=true`. Do not habitually pass `force=true` — it defeats the safety net. Investigate the divergence first.
-- **The footer shows staged buffer state.** After each tool call, the footer includes `── Buffers: N staged (names) ──` when any buffer is live. Use this to notice buffers left behind from a prior task and clean them up before starting new work.
+- **Track staged buffers with `workslate_list`.** The task footer is rendered by the doorbell hook, which runs in a separate process and cannot see the MCP server's in-memory buffers — so staged buffers do **not** appear in the footer. Call `workslate_list` to see live buffers, and clean up any left behind from a prior task before starting new work.
 
 ## Task Sessions
 
-**`workslate_task_init(name)` is mandatory before using any task tool.** Tasks are stored in SQLite (`workslate.db`) and shared across all agent instances in the same project. This replaces built-in TaskCreate/TaskUpdate entirely.
+**`workslate_task_init(name)` is mandatory before using any task tool.** Tasks are stored in SQLite (`workslate.db`) and shared across all agent instances in the same project. The project standardizes on `workslate_task_*` for both solo and team tracking — only it is surfaced by the doorbell footer on every tool call and shared cross-session via the DB. The built-in `TaskCreate` / `TaskList` / `TaskUpdate` tools also exist under the single implicit team (with native self-claiming), but `workslate_task_*` is the system of record here — do not split coordination across both.
 
 **Namespaces:** Tasks use `ws:` (personal) or `team:` (team coordination) prefixes:
 - `workslate_task_create("Fix auth", namespace="ws")` → creates `ws:1`
@@ -337,6 +337,10 @@ These rules prevent catastrophic loss of staged work. The code enforces the firs
 - Restarting the MCP server clears the active session — call `workslate_task_init` again to resume
 - Buffers are shared across sessions (not scoped)
 - Multiple agent instances can read/write the same session concurrently (SQLite WAL mode)
+
+## Team Messaging Tools (Agent Teams)
+
+For multi-agent coordination, workslate exposes `workslate_register(role, session_id, agent_id)`, `workslate_msg_send(recipient, subject, body, urgent?, session_id?, agent_id?)`, and `workslate_inbox_read(role)`. These enable **mid-turn steering** of running teammates via per-tool-call doorbell hooks (a `PreToolUse` inbox nudge and a `PostToolUse` task footer). Pass `session_id`/`agent_id` to `msg_send` too, so the sender is attributed to your role via the composite identity (the process-shared `active_role` fallback mis-attributes it when a leader and teammates share one MCP server). (`session_id` + `agent_id` for `register` / `task_init` come from the `SubagentStart` `[workslate]` hint — a subagent shares its parent's `session_id`, so `agent_id` is the disambiguator, and the MCP server's env id does not match the hook's, so the agent must pass both.) The full workflow (startup sequence, role addressing, role-uniqueness invariant) lives in `claude-agent-kit--parallel-work.md` → **Mid-Turn Steering & Team Messaging**. Note: task status is now surfaced by the doorbell hook on every tool call (installed by `make install`), not appended to workslate tool results.
 
 ## After Completion
 
