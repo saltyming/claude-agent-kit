@@ -42,6 +42,7 @@ An MCP server for Claude Code that provides:
 - **SQLite-backed task tracking** — project-scoped tasks stored in `workslate.db` with WAL mode for concurrent access by multiple agents. Supports `ws:` (personal) and `team:` (coordination) namespaces with cross-namespace dependencies.
 - **Named task sessions** — `workslate_task_init("auth-refactor")` isolates tasks per work context. Multiple sessions coexist in SQLite, resumable across restarts.
 - **Auto-footer** — a `PostToolUse` doorbell hook injects a footer after each tool call (so it reflects that tool's own effect) showing the active session and task progress by namespace (`ws:[3/5] team:[1/3]`). Staged buffers are not in the footer (the hook is a separate process and cannot see in-memory buffers) — use `workslate_list` to see what's staged.
+- **Team messaging + mid-turn steering** — a `PreToolUse` inbox doorbell nudges a running teammate the moment a role-addressed message arrives (`workslate_msg_send` → `workslate_inbox_read`), letting an Agent Teams leader redirect a teammate *before* its current turn ends instead of at the next turn boundary. Messages are addressed by durable role, so a respawned teammate of the same role still receives them; identity is the composite `(session_id, agent_id)` supplied by the `SessionStart` / `SubagentStart` hooks.
 - **Project root guard** — all file operations are restricted to the current working directory tree. The server refuses to read or write outside the project root, even via symlinks.
 
 #### Tools
@@ -68,8 +69,16 @@ An MCP server for Claude Code that provides:
 | `workslate_task_update(id, status?, description?, owner?)` | Update task status, description, or owner. |
 | `workslate_task_list(namespace?)` | List tasks. Optional namespace filter: `ws`, `team`, or omit for all. |
 | `workslate_task_clear(namespace?)` | Clear tasks. Optional namespace filter. |
-| `workslate_task_init(name)` | Switch to a named task session (SQLite-backed). |
+| `workslate_task_init(name, session_id?, agent_id?)` | Switch to a named task session (SQLite-backed). `session_id` / `agent_id` (from the `SessionStart` / `SubagentStart` hint) tie the session to the doorbell identity. |
 | `workslate_task_sessions()` | List all sessions with per-namespace counters. |
+
+**Team messaging (Agent Teams):**
+
+| Tool | Description |
+|------|-------------|
+| `workslate_register(role, session_id?, agent_id?)` | Map this Claude session to a durable role name (e.g. `backend-dev`) so role-addressed messages reach it. Pass `session_id` / `agent_id` from the `SessionStart` / `SubagentStart` hint so the composite `(session_id, agent_id)` identity is recorded. |
+| `workslate_msg_send(recipient, subject, body, urgent?, session_id?, agent_id?)` | Send a message to a role's inbox in the active task session. `subject` shows in the doorbell nudge; `body` is read on demand; `urgent=true` flags it. Pass `session_id` / `agent_id` so the sender is attributed to your role via the composite identity. |
+| `workslate_inbox_read(role)` | Return unread messages for a role and mark them read atomically — concurrent reads never double-deliver. |
 
 **Parameter type notes.** Array fields (`depends_on`), boolean fields (`dry_run`,
 `force`, `summary`, `regex`, `line_numbers`, `all`) and integer fields
@@ -133,7 +142,7 @@ irm https://raw.githubusercontent.com/saltyming/claude-agent-kit/main/install.ps
 irm https://raw.githubusercontent.com/saltyming/claude-agent-kit/main/install.ps1 -OutFile install.ps1; .\install.ps1 -Uninstall
 ```
 
-Downloads the pre-built `workslate` and `aside` binaries from GitHub Releases, `CLAUDE.md`, and rule files. No Rust toolchain required. On macOS, the installer automatically re-signs binaries with `codesign` to prevent endpoint security software (e.g. Kaspersky) from blocking them. The installer registers both MCP servers with Claude Code (if `claude` CLI is available) and then runs an interactive configuration step for `aside` — you'll be prompted for preferred backend / default models / reasoning effort / auto-call policy, and optionally a directory of your own custom rule files to install alongside. All prompts accept ENTER for the documented default, and `ASIDE_*` env vars skip them entirely (useful for CI / automation). If `~/.local/bin` is not in your PATH, the installer will print instructions to add it.
+Downloads the pre-built `workslate` and `aside` binaries from GitHub Releases, `CLAUDE.md`, and rule files. No Rust toolchain required. On macOS, the installer automatically re-signs binaries with `codesign` to prevent endpoint security software (e.g. Kaspersky) from blocking them. The installer registers both MCP servers with Claude Code (if `claude` CLI is available), registers workslate's doorbell hooks (`PreToolUse` inbox + `PostToolUse` task footer) in `~/.claude/settings.json`, and then runs an interactive configuration step for `aside` — you'll be prompted for preferred backend / default models / reasoning effort / auto-call policy, and optionally a directory of your own custom rule files to install alongside. All prompts accept ENTER for the documented default, and `ASIDE_*` env vars skip them entirely (useful for CI / automation). If `~/.local/bin` is not in your PATH, the installer will print instructions to add it.
 
 ### From source (requires Rust)
 
@@ -143,7 +152,7 @@ cd claude-agent-kit
 make install
 ```
 
-This builds both binaries (`workslate`, `aside`), copies `CLAUDE.md` to `~/.claude/`, rule files to `~/.claude/rules/`, and the binaries to `~/.local/bin/`. On macOS, binaries are re-signed with `codesign` for endpoint security compatibility. A manifest is written to `~/.claude/.claude-agent-kit-manifest` for safe uninstall. The install step ends with an interactive prompt to configure `aside` preferences (see above); re-run anytime with `make configure`.
+This builds both binaries (`workslate`, `aside`), copies `CLAUDE.md` to `~/.claude/`, rule files to `~/.claude/rules/`, and the binaries to `~/.local/bin/`. It also registers workslate's doorbell hooks (`PreToolUse` inbox + `PostToolUse` task footer) in `~/.claude/settings.json`. On macOS, binaries are re-signed with `codesign` for endpoint security compatibility. A manifest is written to `~/.claude/.claude-agent-kit-manifest` for safe uninstall. The install step ends with an interactive prompt to configure `aside` preferences (see above); re-run anytime with `make configure`.
 
 ```bash
 make uninstall    # removes kit-owned files; prompts before removing user-owned ones
