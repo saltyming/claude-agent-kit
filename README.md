@@ -163,6 +163,8 @@ Uninstall uses signatures on the first line of each `.md` to branch:
 - `<!-- claude-agent-kit -->` → kit-owned, removed unconditionally.
 - `<!-- claude-agent-kit-custom... -->` → user-owned (the generated `aside-prefs.md` and any ingested custom rules). Preserved by default; you get an interactive `[y/N]` prompt to remove them. Non-interactive runs honor `ASIDE_UNINSTALL_KEEP_PREFS=yes|no`.
 
+Uninstall also unregisters workslate's doorbell hooks from `~/.claude/settings.json` before removing the binary — surgically, so only workslate's own hook entries are removed and any other hooks you've added are preserved (`settings.json` is not tracked in the manifest).
+
 The main `CLAUDE.md` contains core principles and quick reference (~125 lines). Detailed rules live in `claude-rules/` (task-execution, parallel-work, git-workflow, framework-conventions, aside) and are auto-loaded by Claude Code from `.claude/rules/`.
 
 ### Manual install
