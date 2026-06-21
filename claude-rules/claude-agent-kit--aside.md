@@ -21,20 +21,22 @@ Two surfaces that may coexist:
 3. **When the user names a backend, honor it.** Preference file is the fallback, not an override of the user's current instruction.
 4. **Call `aside_list` first** if you're unsure which CLIs are installed on this machine. Unavailable backends are reported, not errored — you can pivot to an available one.
 5. **If `advisor()` is also available, do not substitute one for the other.** They answer different questions: `advisor()` is a stronger Claude reviewing your work; aside tools are *different model families* giving cross-ecosystem perspective.
+6. **A current-turn explicit user instruction scoping the consultation to one surface overrides Decision rule 5 and the Proactive policy below — in both directions.** It applies *only* when the user's latest message directly names a surface/backend **and** uses exclusivity or prohibition language — e.g. "only aside", "only `advisor()`", "ask codex, not advisor", "skip/no/don't call aside", "don't pair them", "use both", "use neither". It does **not** apply to: merely naming one backend ("ask codex"), asking for "a second opinion", cost / privacy / risk concerns the agent infers on its own, or the agent's own reassessment of how high-stakes the work is. When it applies, honor it and do **not** fire the other surface. When the scoping is ambiguous, ask or follow prefs — never treat ambiguity as license to skip a required proactive pair. (Self-generated doubt is governed by the Proactive policy's re-audit ban, not by this rule.)
+   - Directional / boundary cases: **only aside** → fire aside, do not call `advisor()`. **only `advisor()`** → call `advisor()`, do not fire aside ("I was about to call `advisor()`" is not a reason to fire aside against an explicit instruction not to). **use both** → run both, sequenced aside-first (the no-concurrency rule still holds). **use neither** → run neither for that decision. **"get a second opinion"** with no surface named → not exclusive; pick per prefs. **"ask codex"** without only/not/skip → names a backend but does not suppress `advisor()` pairing if it is independently triggered.
 
 ## Proactive policy (when prefs sets `policy: proactive`)
 
-When the user's `claude-agent-kit--aside-prefs.md` sets `policy: proactive`, you **SHOULD** call the preferred backend on the triggers below. "SHOULD", not "may" — these are active instructions, not permissions. The call is required whether or not built-in `advisor()` also exists in this environment.
+When the user's `claude-agent-kit--aside-prefs.md` sets `policy: proactive`, you **SHOULD** call the preferred backend on the triggers below. "SHOULD", not "may" — these are active instructions, not permissions. The call is required whether or not built-in `advisor()` also exists in this environment (unless the user explicitly scoped the request to one surface — Decision rule 6).
 
 ### Triggers (proactive mode — non-exhaustive)
 
-Fire one aside call to the preferred backend when ANY of these happen, regardless of whether the user asked:
+Fire one aside call to the preferred backend when ANY of these happen, regardless of whether the user asked (unless the user explicitly scoped the work to one surface — Decision rule 6):
 
 - Architecture decisions spanning 3+ modules, or introducing a new core abstraction that other code will build against.
 - API / wire-protocol / schema / public contract changes visible to callers outside the change set.
 - Concurrency, locking, invariant, or ordering-assumption changes.
 - Security-sensitive code: authentication, authorisation, crypto, access control, input sanitisation, privilege boundaries.
-- **Whenever you are about to call `advisor()`, fire the aside call FIRST — before `advisor()` runs, not alongside it.** The act of deciding to call `advisor()` is itself the signal that you want a second opinion — pairing is the whole point.
+- **Whenever you are about to call `advisor()` — *and the user has not scoped the work to one surface (Decision rule 6)* — fire the aside call FIRST, before `advisor()` runs, not alongside it.** The act of *proactively* deciding to call `advisor()` is itself the signal that you want a second opinion — pairing is the whole point; but an explicit current-turn instruction to use only one surface overrides this in both directions (Decision rule 6).
 
   **HARD RULE — no concurrency.** Do NOT call aside and `advisor()` in the same turn, in the same tool-use block, or otherwise concurrently. The Claude Code harness currently breaks `advisor()` when an aside tool call is running at the same time (aside's stdio transport interferes with `advisor()`'s transcript forwarding), so the two must be strictly sequenced.
 
@@ -45,13 +47,15 @@ Fire one aside call to the preferred backend when ANY of these happen, regardles
 
   **Do NOT re-audit the decision to pair.** Once you've decided to call `advisor()`, aside fires — full stop. The other triggers above (architecture / API / concurrency / security) gate the *other* proactive calls, not this one. *"I decided this isn't really high-stakes after all"* is a failure mode, not caution.
 
-  **Legitimate reasons to skip aside here:** the user's prefs set `policy: conservative` or `policy: preference-only`, OR no aside backend is installed on this machine (`aside_list` reports all unavailable).
+  **Explicit user scoping overrides this pair — see Decision rule 6.** The re-audit ban directly above targets *your own* second-guessing; it does **not** override a direct, current-turn user instruction. If the user this turn scoped the work to one surface ("only aside" / "only `advisor()`" / "skip the aside call" / "use neither"), honor that per Decision rule 6 and do not fire the other surface.
+
+  **Legitimate reasons to skip aside here:** the user's prefs set `policy: conservative` or `policy: preference-only`, OR no aside backend is installed on this machine (`aside_list` reports all unavailable), OR the user this turn explicitly scoped the work to `advisor()` only / told you to skip the aside call (Decision rule 6 — explicit scoping overrides the pair in both directions).
 
 Announce the call briefly when you fire it ("I'm also asking gemini because this is a Next.js routing question") so the user sees the reasoning.
 
 ### In proactive mode, aside is not optional for the scope above
 
-If both surfaces exist, both run by default on these triggers. If only aside exists, aside alone still runs. The earlier "they supplement" framing applies to `conservative` and `preference-only` policies, not to `proactive`.
+If both surfaces exist, both run by default on these triggers, unless the user explicitly scoped the work to one surface (Decision rule 6). If only aside exists, aside alone still runs. The earlier "they supplement" framing applies to `conservative` and `preference-only` policies, not to `proactive`.
 
 ## Passing model and reasoning_effort
 
@@ -138,7 +142,7 @@ Example — **good** (off-disk data, exception 2):
 Every aside call consumes the user's third-party API quota. Rules:
 - Single question per call. No loops. No duplicate calls for the same question.
 - Consolidate multiple questions into one prompt when they share context.
-- **A call fired by a `proactive` trigger in the user's prefs is NOT speculative — it's required.** Budget expectation: ~1–2 such calls per advisor-paired decision or other triggered scope. "No speculative calls" applies to routine work outside the trigger list, not to the trigger-fired calls themselves.
+- **A call fired by a `proactive` trigger in the user's prefs is NOT speculative — it's required (unless the user explicitly scoped the work to one surface — Decision rule 6).** Budget expectation: ~1–2 such calls per advisor-paired decision or other triggered scope. "No speculative calls" applies to routine work outside the trigger list, not to the trigger-fired calls themselves.
 - In `conservative` / `preference-only` modes: if the user didn't ask for a cross-family opinion, don't volunteer one for routine work.
 
 ## Reporting

@@ -106,7 +106,7 @@ Rationale: the plan's "scope TBD" annotation is a gate, not a waiver. Treating i
 
 **[OVERRIDE]** `"Don't add features, refactor, or introduce abstractions beyond what the task requires."` / `"Don't design for hypothetical future requirements."` / `"Three similar lines is better than a premature abstraction."`
 
-In this project: when a design document or implementation plan is provided, implement the **entire specified scope**. Do not shrink it. Do not substitute a "simpler approach." Do not produce stubs, placeholders, TODOs, or "for now" implementations. Do not defer any part of the specified scope to a follow-up PR, a subsequent commit, a "next round," or a future ticket — this is scope reduction even when announced openly. See **Core Principles > Quality Standards** in the main `CLAUDE.md` for the full rule (it also applies to prose requests, not just design docs, and closes the `silently reduce scope` loophole). The design document IS the specification — follow it completely. If you believe part of the spec is wrong, say so explicitly and wait for a decision. Do not silently or openly reduce scope.
+In this project: when a design document or implementation plan is provided, implement the **entire specified scope**. Do not shrink it. Do not substitute a "simpler approach." Do not produce stubs, placeholders, TODOs, or "for now" implementations. Do not defer any part of the specified scope to a follow-up PR, a subsequent commit, a "next round," or a future ticket — this is scope reduction even when announced openly. See **Core Principles > Quality Standards** in the main `CLAUDE.md` for the full rule (it also applies to prose requests, not just design docs, and closes the `silently reduce scope` loophole). The design document IS the specification — follow it completely. If you believe part of the spec is wrong, genuinely impossible, that you must reorder operations to prevent a regression, or that you need a design that deviates from the approved plan, do **not** act on that judgment — stop and re-request explicit approval per **Forced Spec/Plan Deviation: Re-request Approval** below. Do not silently or openly reduce scope.
 
 The system-prompt directive above governs *unsolicited* expansion — don't refactor or introduce abstractions the user didn't ask for. It does NOT authorize *contracting* the asked-for scope. Those are different axes.
 
@@ -132,6 +132,35 @@ When NOT to refactor:
 - No boilerplate comments, no restating the function signature in prose.
 - **No chain-of-thought in output.** Never write your reasoning process — self-corrections ("Actually:", "Correction:"), step-by-step deliberation, working through alternatives, or false starts — into code comments, commit messages, conversation text, or workslate buffers. Resolve your thinking internally. Only the final, correct conclusion belongs in output. If reasoning is complex enough to need documentation, write a concise explanation of the conclusion, not the journey to it.
 
+## Forced Spec/Plan Deviation: Re-request Approval (HARD RULE)
+
+Scope is **NEVER** reduced arbitrarily, and the agent **NEVER** decides a deviation on the user's behalf. This section is a *deviation gate*, not permission to reduce scope: when one of the three triggers below fires, you may only **pause and ask** — you may not implement the deviation, a reduction, or a preferred alternative on your own judgment.
+
+The ONLY three situations that justify deviating from the approved spec/plan — **each REQUIRES you to stop and re-request EXPLICIT user approval before proceeding**:
+
+1. **Genuinely impossible as specified.** The approved spec cannot be satisfied under the actual constraints of the repository, platform, APIs, permissions, or logic, *even with reasonable implementation effort*. "Impossible" does NOT mean expensive, tedious, unfamiliar, risky, time-consuming, hard to test, aesthetically undesirable, or inconvenient.
+   - *Disambiguating tests:* if the original behavior can still be delivered by writing more code, adding required tests/config, or doing the tedious part → it is NOT impossible. If the objection is "too much work" / "messier than expected" / "I prefer another design" → NOT impossible. You must cite a **concrete blocking fact**: missing API capability, mutually contradictory requirements, unavailable permission, invariant conflict, platform limitation, or a failing proof-of-concept. If only part is impossible, identify the **smallest impossible sub-requirement** — do not relabel the whole scope impossible.
+
+2. **Reordering to prevent an ordering-induced regression.** The approved order of operations would itself cause a regression, so operations must be reordered to decouple it. Re-approval is required **only** when the reorder changes the approved delivery sequence, what is delivered or when, integration boundaries / risk, migration safety, test expectations, or user-visible behavior — or when the approved order was itself part of the plan. **Purely internal coding order that preserves the approved deliverable and behavior is ordinary execution and needs no approval.**
+
+3. **A design decision that deviates from the approved plan.** A change to an approved architectural, behavioral, data-model, file-boundary, dependency, API, persistence, concurrency, security, migration, or testing decision. This is **NOT** a license to replace the approved plan with a cleaner, smaller, or preferred design.
+   - *Disambiguating tests:* if a reviewer comparing the approved plan to the implementation would say "this is a different approach" (even with similar behavior) → re-approval. If the change is because the original plan is wrong / unsafe / incompatible with discovered facts → re-approval. If it is local implementation judgment *inside* the approved design with no behavioral / scope / interface / deliverable change → no re-approval.
+
+**Anything outside these three follows the existing no-reduction rule** (see the **Implementation** `[OVERRIDE]` above and `CLAUDE.md` Core Principles > Quality Standards).
+
+**Anti-loophole — "I discovered it mid-way" is not a free pass.** The valid trigger is *new concrete information that was not reasonably knowable before implementation / verification* — not the mere fact that you are mid-work. If the blocking fact was reasonably discoverable during the required pre-implementation reading / planning phase (see **Before Starting** > **Pre-check**), admit the planning miss, stop, and ask; do not present a foreseeable issue as a mid-implementation surprise. Foreseeable "this scope is too large" concerns are still raised **before starting** (per `CLAUDE.md` Quality Standards), not at completion time.
+
+**Required action when a trigger fires:**
+1. **Preserve all work-so-far** — no rollback, deletion, blanking, or hiding of incomplete state (the same prohibition as **Undo / Revert Handling** subsection A below; deviation pressure and rollback pressure are adjacent failure modes).
+2. State the **approved requirement** at issue.
+3. State the **concrete discovered fact** that forces the deviation.
+4. Explain **why** the existing scope cannot / should not proceed unchanged.
+5. **Enumerate what you can still deliver** under the original plan, isolating the single deviation point.
+6. **Propose the smallest concrete deviation** and describe its behavioral / file / test / delivery impact.
+7. **Wait for explicit user approval** before continuing past the deviation point.
+
+This gate is the mirror of the scope-reduction prohibition it sits beside: the prohibition stops you from *quietly shrinking* the work; this gate stops you from *unilaterally changing* it. Both resolve the same way — surface it, propose, wait.
+
 ## Undo / Revert Handling (HARD RULE)
 
 In a Claude Code session, "revert" / "undo" / "discard" / "roll back" / "되돌려" and equivalents refer by default to **reversing the edits the model made in this session** — not to running git operations. This section governs both how you respond to such user requests (subsection B) and when you are allowed to unwind your own work at all (subsection A). A narrow carve-out (subsection C) applies only when the user *explicitly names* a git command.
@@ -155,6 +184,8 @@ Required procedure when the trigger fires:
 **Distinct from normal iteration.** Fixing a bug you introduced earlier in the session, refactoring code you just wrote, or correcting typos inside the same approved scope is NOT rollback — it is normal forward development and is fine. Rollback is when you judge the *direction itself* was wrong and want to erase the work to start over or give up; that requires user direction, not self-judgment.
 
 **Observable test for the trigger.** If the net effect of the action you are about to take is to *remove* or *blank out* code / files you created earlier in this session **without replacing them with the approved deliverable**, that action is rollback — regardless of how you label it internally ("cleanup", "simplification", "refactor", "try a different approach"). Forward iteration always moves toward the approved deliverable; rollback moves away from it. Use this test to catch intent-mislabeling in yourself.
+
+**Adjacent failure mode — deviation pressure.** When the impulse is not "erase the work" but "the scope / approach / order must *change*" (it is impossible as specified, the planned order would cause a regression, or the design must deviate from the plan), that is governed by **Forced Spec/Plan Deviation: Re-request Approval** above — same resolution: stop, preserve state, propose, wait for explicit approval; never act unilaterally.
 
 ### B. User-requested revert / undo: reverse session edits via file edits
 
