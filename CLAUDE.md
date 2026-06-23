@@ -1,8 +1,8 @@
 <!-- claude-agent-kit -->
 # Claude Agent Operating Manual
 
-**Version**: 8.10
-**Last Updated**: 2026-06-21
+**Version**: 8.11
+**Last Updated**: 2026-06-23
 
 > Global operating rules for AI coding agents. Focuses on user-specific preferences and overrides — general tool usage, security, and communication rules are handled by the system prompt.
 
@@ -91,13 +91,13 @@ These directives govern scope of *action*, and that is fine — do not silently 
 
 **[OVERRIDE]** `"If the agent description mentions that it should be used proactively, then you should try your best to use it without the user having to ask for it first."` / `"When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you."`
 
-**This override applies to delegation tools only** (`Agent` and its write-capable `subagent_type`s, including backgrounded teammates). It does not narrow unrelated tools.
+**This override applies to delegation tools only** (`Agent` and its write-capable `subagent_type`s, backgrounded teammates, and the `Workflow` tool). It does not narrow unrelated tools.
 
-In this project: the proactive-use directive is **narrowed to read-only `subagent_type`s only** — `Explore`, `Plan`, `claude-code-guide`, and any advisory-only type whose documentation explicitly marks it as unable to edit files. Calling `Agent` with a **write-capable** `subagent_type` (`general-purpose`, or any type whose capabilities include file edit/write) — whether fire-and-forget OR as a backgrounded teammate (`Agent(name=..., run_in_background=true, ...)`) — requires the user to have **explicitly asked** for parallel / delegated / multi-agent work — either per-turn ("spawn 2 subagents to…", "use an Agent Team") or via a specific, unambiguous durable instruction in this `CLAUDE.md` / project memory / auto-memory that names the delegation pattern and its scope. Both satisfy the gate; generic wording ("use agents proactively", "parallelize when helpful") does not. The gate is based on the agent's **capabilities**, not the prompt you plan to send — do not pick `general-purpose` with a "just read things" prompt as a workaround for wanting `Explore`. Default for unknown / ambiguous subagent_types: treat as write-capable and gated.
+In this project: the proactive-use directive applies **in full to read-only delegation** — `Explore`, `Plan`, `claude-code-guide`, read-only research `Workflow`s — which *reduce* the leader's context cost; use them freely, no need to ask. For **write-capable** delegation (a `general-purpose` subagent, a backgrounded teammate, or a `Workflow` that edits files) the posture is **surface/propose → execute on the user's agreement**: when a task's shape fits, proactively propose the delegate (mechanism + rough cost/scale + the files it would write) and proceed once the user agrees — never spawn a write-capable delegate without that agreement. Keep the **gate** (whether to delegate writes — user agreement) distinct from the **selection** (which mechanism — by dependency structure: independent → subagent, coordinated → team, large mechanical sweep → `Workflow`). The gate is on **capability, not the prompt you plan to send** — do not pick `general-purpose` with a "just read things" prompt as a workaround for wanting `Explore`; default for an unknown/ambiguous `subagent_type`: treat as write-capable.
 
 Out of scope for this gate: aside tools (`mcp__aside__aside_*`) and built-in `advisor()` — those are consultations, not file-mutating delegates, and remain governed by `claude-agent-kit--aside.md`.
 
-Rationale: write-capable delegates mutate files durably (misreads become committed mistakes), the leader sees only the agent's compressed final summary (not its chain-of-reasoning or tool outputs), and `Agent` exposes no `reasoning_effort` parameter — so default-reasoning write-capable spawns are unacceptably unreliable today. Full 3-point rationale, gate-revisit conditions, scale tables, and the proactive-vs-gated matrix live in `claude-agent-kit--parallel-work.md`.
+Rationale: write-capable delegates mutate files durably (a misread becomes a committed mistake), and the leader sees only the agent's compressed summary — not its reasoning or tool outputs — so the user owns the decision to incur that. (Effort/model control differs by surface: the `Agent` tool has no reasoning-effort knob, while `Workflow` `agent()` does — set it explicitly.) Full posture, dependency-structure selection, cost classes, and the Workflow playbook live in `claude-agent-kit--parallel-work.md`.
 
 ---
 
@@ -131,21 +131,14 @@ User Request
 │  └─ STOP → preserve work → propose the ONE deviation → wait for explicit approval
 │     (only: genuine impossibility / reorder-to-prevent-regression / plan-deviating design)
 │
-└─ Complex task that *could* be parallelized?
-   ├─ User did NOT explicitly ask for parallelism/delegation?
-   │  └─ Single session. Optionally spawn read-only subagents (Explore for >3-query research, Plan for design sketches).
-   │     If you think parallelism would genuinely help → propose it ("want me to spawn 2 subagents for X and Y?") and wait.
-   │     Do NOT spawn general-purpose subagents or background teammates unprompted.
-   └─ User explicitly asked for parallelism/delegation (per-turn OR durable CLAUDE.md / memory instruction)?
-      ├─ Workers independent, no communication needed?
-      │  └─ Subagents → Agent(subagent_type="general-purpose", prompt=..., ...) — fire-and-forget, self-contained prompts
-      └─ Workers need collaboration/discussion or mid-task steering?
-         └─ Teammates — single implicit team (no TeamCreate; Agent's team_name is deprecated/ignored)
-            ├─ Agent(name=..., subagent_type=..., model="sonnet", run_in_background=true, prompt=<role-only>) per teammate
-            ├─ Design task graph (blockedBy, leader-reserved) in team: namespace
-            ├─ Teammates self-claim eligible tasks; steer mid-task via workslate_msg_send doorbell
-            ├─ Leader: monitor, build & verify
-            └─ Shutdown teammates (shutdown_request) — no TeamDelete
+└─ Need to delegate (parallelize, or run a large sweep)?
+   ├─ Read-only? (research, design sketch) → spawn Explore / Plan / claude-code-guide freely — reduces context cost, no need to ask
+   └─ Write-capable? → SURFACE/PROPOSE (mechanism + rough cost + files it writes); spawn on the user's agreement, never auto-spawn.
+      Then SELECT by dependency structure:
+      ├─ Independent, non-overlapping subtasks → Subagents → Agent(subagent_type="general-purpose", ...) fire-and-forget, self-contained prompts
+      ├─ Coordinated streams that must talk / be steered → Agent Team (single implicit team; no TeamCreate; team_name deprecated)
+      │     └─ Agent(name=..., subagent_type=..., model="sonnet", run_in_background=true, prompt=<role-only>) per teammate; task graph in team: namespace; steer via workslate_msg_send doorbell; leader builds & verifies; shutdown_request when done
+      └─ Large breadth-first mechanical sweep → Workflow (separate tool; default-off on cost; one writer per target; you verify the synthesis)
 ```
 
 ---

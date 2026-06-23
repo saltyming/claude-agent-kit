@@ -1,32 +1,38 @@
 <!-- claude-agent-kit -->
 # Parallel Work
 
-Two ways to use the `Agent` tool exist for parallel work: fire-and-forget **subagents** and persistent **teammates**. They are not separate systems — both spawn through the same `Agent` tool into a **single implicit team**. This Claude Code version has no `TeamCreate` step (`Agent`'s `team_name` parameter is deprecated and ignored); the difference is lifecycle: a subagent runs once and returns its result, while a teammate is **named** and run **in the background** (`run_in_background: true`) so it keeps running, shares the task list, and exchanges messages with peers.
+Three mechanisms parallelize work — two via the `Agent` tool, one via the separate **`Workflow`** tool:
 
-## HARD RULE — delegation requires explicit user request
+- **Subagents** — `Agent` fire-and-forget: runs once, returns a result.
+- **Teammates** — `Agent` **named** + run **in the background** (`run_in_background: true`): a persistent peer that keeps running, shares the task list, and exchanges messages with other teammates. Subagents and teammates both spawn through the same `Agent` tool into a **single implicit team** (no `TeamCreate`; `team_name` is deprecated/ignored) — the difference is lifecycle, not a separate system.
+- **`Workflow`** — a *separate tool* that runs a deterministic script orchestrating many subagents (fan-out / pipeline) in the background; for large, breadth-first work. It is **not** a `subagent_type`, and is unrelated to this manual's "Three-Phase Workflow" / "Leader Workflow" headings. See *Workflow* below.
 
-**The gate:** calling `Agent` with a **write-capable** `subagent_type` (`general-purpose`, or any type whose capabilities include file edit/write) — whether as a fire-and-forget subagent OR as a backgrounded teammate (`Agent(name=..., run_in_background=true, ...)`) — requires the user to have **explicitly asked** for parallel / delegated / multi-agent work.
+## Delegation: when and how to engage it
 
-**The gate is based on the agent's capabilities, not on the prompt you plan to send.** Claiming "I used `general-purpose` only for read-only investigation, so it was effectively read-only" is not an escape — if the spawned type *could* have edited files, it is gated. Use the `Explore` subagent_type when you genuinely want a read-only lookup; do not use `general-purpose` with a "just read things" prompt as a workaround.
+**Read-only delegation is free — use it proactively.** An `Explore` or `Plan` subagent (or `claude-code-guide`, or a read-only research `Workflow`) reads widely and returns only a summary — it *reduces* the leader's context cost. Reach for these without asking; they are **not** gated. Everything below is only about *write-capable* delegation.
 
-"Explicitly asked" is satisfied by either:
+For write-capable delegation you are a collaborator, not a silent executor. When a task's shape fits, **proactively surface and propose** the delegate — name the mechanism, its rough cost/scale, and which files it would write — and proceed **on the user's agreement**. Don't wait to be asked; and don't spawn a write-capable delegate without that agreement.
 
-1. **A per-turn ask** in the current conversation — e.g., "spawn subagents to…", "use an Agent Team", "parallelize this", "delegate X to an agent".
-2. **A specific and unambiguous durable pre-authorization** in `~/.claude/CLAUDE.md`, the project's `CLAUDE.md`, or auto-memory that names the delegation pattern, its scope, **and is clearly applicable to the current repo / task** — e.g., "always delegate build verification in *this* repo to a `general-purpose` subagent", "for refactors touching ≥10 files in `src/`, use an Agent Team". Generic wording like "use agents proactively", "parallelize when helpful", or "delegate when it makes sense" does **not** count; neither does an instruction authored for a *different* repo or task context that you happen to recall from memory — if the durable instruction is not specific, unambiguous, and clearly applicable to the current repo/task, treat it as no authorization.
+**Keep two things distinct:**
 
-**Read-only `subagent_type`s (`Explore`, `Plan`, `claude-code-guide`, and any advisory-only type whose documentation explicitly marks it as unable to edit files) remain allowed proactively** — those are context-saving lookups, not work delegation. Their output is read back into the leader's context; they cannot modify files or outrun the leader's review. **Default for unknown or ambiguous `subagent_type`s: treat as write-capable and gated unless the tool's own description explicitly marks it advisory-only / read-only.** Err on the side of gating.
+1. **The gate — whether to delegate writes at all.** Any write-capable delegate (a `general-purpose` subagent, an Agent-Team teammate, or a `Workflow` that edits files) spawns only after the user agrees to a concrete proposal: *mechanism + rough cost/scale + the files it will write*. The gate exists because delegated writes are durable on disk, and you see only the delegate's **summary** — not its reasoning or intermediate tool output — so a misread becomes a committed mistake that is costly to take back. The user owns the decision to incur that.
 
-**Out of scope for this gate:** aside tools (`mcp__aside__aside_codex` / `aside_gemini` / `aside_copilot`) and the built-in `advisor()` are cross-family / same-family consultations, not file-mutating delegates — they remain governed by `claude-agent-kit--aside.md` and its own proactive-policy triggers. This gate does not narrow them.
+   The gate is on **capability, not the prompt you plan to send**: if the spawned `subagent_type` *could* edit files, it is gated, even if you intend "just read things." Use `Explore` for a genuine read-only lookup; don't reach for `general-purpose` with a read-only prompt as a workaround. Default for an unknown/ambiguous `subagent_type`: treat as write-capable. (aside / `advisor()` are consultations, not file-mutating delegates — out of scope for this gate; see `claude-agent-kit--aside.md`.)
 
-**Rationale (in order of durability, not litigability):**
+2. **The selection — which mechanism — decided only after the gate, by dependency structure:**
+   - **Independent, non-overlapping, contract-stable subtasks** → fire-and-forget **subagents** (a few per turn).
+   - **Coordinated streams that must talk to each other** → an **Agent Team** (shared `depends_on` graph + teammate messaging + mid-turn steering give the leader live coordination and steering that blind fan-out can't).
+   - **Large, breadth-first, mechanical sweeps** (codebase-wide hunt, N-file migration, cross-checked research) → a **`Workflow`** (see *Workflow* below).
 
-1. **Write-capable delegates can mutate files.** Once a delegated agent hits `Apply`/`Edit`/`Write`, the state change is durable on disk; the leader cannot take it back without additional work. A misread task becomes a committed mistake.
-2. **The leader sees only the agent's compressed final summary** — not its chain-of-reasoning, not its intermediate tool outputs, not its self-corrections. The system prompt itself frames this as "Trust but verify": the summary describes what the agent *intended to do*, not necessarily what it *actually did*. Reviewing the diff after the fact catches some failures but not semantic-contract misreads.
-3. **`Agent` exposes no `reasoning_effort` parameter** — only `model` (`sonnet` | `opus` | `haiku`). **Opus 4.7 becomes very dumb without a high reasoning-effort setting**, and every spawned write-capable agent is effectively running at the CLI's default reasoning level with no way for the leader to raise it. This is an aggravating factor on top of (1) and (2), not the whole argument — but it is the specific, current-generation reason the gate is in place today rather than five years from now.
+   Before calling any split "independent," identify the shared contracts first — public types/APIs, schemas, migration ordering, shared tests, invariants — and keep those leader-owned. Independent-looking files often share a contract.
 
-The gate revisits when the `Agent` tool exposes reasoning-effort control — the durable risks in (1) and (2) will still apply, but the practical risk from (3) will drop and the proactive default for write-capable types can be reconsidered.
+**One writer per final target file.** No two delegates edit the same file; worktree isolation prevents disk clobber but not divergent edits, so a shared file needs one writer, or one explicit merge owner (the leader).
 
-**When in doubt: do the work in-session.** A slower in-session edit is cheaper than a fast-but-silently-wrong delegated one. If you think parallelism would genuinely help, *ask the user* ("should I spawn 2 subagents to do X and Y in parallel?") — do not spawn unprompted.
+**Delegated children inherit the scope rules.** A teammate or `Workflow` child that hits a forced spec/plan deviation stops and reports to the leader, who asks the user — a child never shrinks scope, reinterprets a budget, or substitutes a cleaner design on its own (same rule as `claude-agent-kit--task-execution.md`).
+
+**Effort/model control differs by surface.** The interactive `Agent` tool exposes `model` but no reasoning-effort knob — a delegated `Agent` runs at the CLI's default reasoning level, which the leader can't raise. The `Workflow` `agent()` *does* expose `effort` (and `model`) — set them explicitly (they don't reliably inherit). So a `Workflow` can be the more controllable surface for large fan-out once opted in. This `Agent`-tool gap would only be revisited if the `Agent` tool itself gained effort control; `Workflow` having it does not change the `Agent`-tool calculus.
+
+**When unsure, do the work in-session and propose.** A slower in-session edit beats a fast-but-silently-wrong delegated one. If parallelism would genuinely help, surface it ("this splits into N independent edits — want me to fan out subagents, ~rough cost?") and proceed on agreement.
 
 ## Choosing Between Subagents and Teammates
 
@@ -36,10 +42,10 @@ The gate revisits when the `Agent` tool exposes reasoning-effort control — the
 | Coordination | Parent manages everything | Shared task list with self-claiming |
 | Context | Own window; result summarized to parent | Own window; loads CLAUDE.md, MCP, skills |
 | Task system | None (prompt = task) | `workslate_task_*` with dependencies + SQLite WAL concurrency |
-| Best for | Focused, fire-and-forget work | Complex work requiring collaboration |
+| Best for | **Independent** subtasks (no coordination, no mid-task steering) | **Dependent / coordinated** work (shared `depends_on`, cross-talk, mid-turn steering) |
 | Token cost | Lower | Higher (each teammate is a full Claude instance) |
 
-**Decision rule:** Workers need to communicate with each other, or be steered mid-task? Teammates (named + `run_in_background`). Just do independent work and report back once? Subagents.
+**Decision rule (by dependency structure):** independent, non-overlapping subtasks → **subagents**; coordinated streams that must talk to each other or be steered mid-task → **teammates**; a large breadth-first mechanical sweep (dozens+ of units) → a **`Workflow`** (see below). All three are write-gated identically — surface/propose → agree; the choice is which fits the work's shape, not whether you're allowed.
 
 ## Spawn mechanism (read this before picking a parallel tool)
 
@@ -74,30 +80,30 @@ Lightweight workers spawned via the `Agent` tool fire-and-forget (no `name`, not
 - `subagent_type="Plan"` for read-only design sketches / architecture exploration.
 - Other advisory-only types (`claude-code-guide`, etc.) for their documented scope.
 
-**When to use (write-capable subagent types — requires explicit user request per the HARD RULE above):**
-- `subagent_type="general-purpose"` for parallel implementation, build/test verification that writes files, or any delegated work that can edit or create files.
-- Rule: the user must have asked for parallelism / delegation this turn, OR a durable instruction in `CLAUDE.md` / project memory / auto-memory must pre-authorize the pattern. Do not spawn `general-purpose` subagents unprompted — propose it first and wait for approval.
+**When to use (write-capable subagent types — surface/propose → agree, per *Delegation* above):**
+- `subagent_type="general-purpose"` for parallel implementation, build/test verification that writes files, or any delegated work that can edit or create files — when the subtasks are genuinely **independent**.
+- Rule: surface and propose the fan-out (mechanism + rough cost + the files it will write); spawn on the user's agreement. Don't spawn `general-purpose` subagents silently.
 
 **Naming:** `agent-<domain>` (e.g., `agent-vfs`, `agent-core`)
 
 ## Agent Teams
 
-A coordination system for multiple Claude Code instances that work together via shared task lists and direct messaging. **Experimental feature** — requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`.
+A coordination system for multiple Claude Code instances that work together via shared task lists and direct messaging — the right tool for **dependent, coordinated** work. Requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in settings/env; see *Known Limitations* below for the operational constraints to plan around.
 
-### Agent Teams are expensive — do not reach for them first
+### Agent Teams cost more — match them to coordinated work
 
 Each teammate is a full Claude Code instance. On spawn, each teammate independently loads CLAUDE.md, every MCP server, and every skill. Once running, every completion report, idle notification, and status update flows through the leader's context. A 5-teammate team spends roughly 3–5× the tokens of the same work done in a single session.
 
 **Scale criteria — use these, not "the work feels parallel":**
 
-| Scope | Recommended approach (baseline — no user request yet) | If user has explicitly asked for parallelism |
+| Scope | Default — do in-session, or surface/propose | If the user agrees to the proposal |
 |---|---|---|
 | < 5 files to modify | Single session. No team, no subagents. | Single session even if asked — the overhead isn't worth it. Explain why. |
 | 5–10 files, cross-cutting concerns | Single session. Optionally use `Explore` subagents for read-only research. | Leader session + 1–2 `general-purpose` subagents for isolated edits; leader integrates. |
 | 10+ files with clean, non-overlapping file scopes | Single session (propose parallelism to the user if you think it would help). | Agent Team is justified. |
 | 10+ files but scopes overlap / shared types dominate | Single session. | Still single session — coordination overhead exceeds the parallelism win. Tell the user. |
 
-**The gate is explicit user request, not scale.** Scale criteria describe *when parallelism is viable*, not *when to spawn workers unprompted*. A 30-file refactor handled in-session is the correct default; delegation requires the user to have asked for it (or a durable instruction pre-authorizing the pattern). When unsure, do the work in-session and offer parallelism as a suggestion.
+**Scale informs *what you propose*, not *whether* to spawn unprompted.** The criteria describe when parallelism is viable; the spawn still happens only on the user's agreement to a proposal (per *Delegation* above). A 30-file refactor handled in-session is a fine default; if a team would genuinely help, surface it ("this has N coordinated streams — want me to spawn a team, ~rough cost?") and proceed on agreement.
 
 ### Model choice for teammates
 
@@ -121,16 +127,16 @@ Teammates are spawned by calling `Agent(name=..., subagent_type=..., model=..., 
 ### When to Use
 
 **Use Agent Teams when ALL of these hold:**
-- **The user has explicitly asked for an Agent Team / parallel teammates / multi-agent coordination** — or a durable instruction in `CLAUDE.md` / project memory / auto-memory pre-authorizes it. This is the gate; the bullets below describe viability, not permission.
+- **You surfaced/proposed an Agent Team and the user agreed** (or the user asked for one directly). This is the write-gate; the bullets below describe *viability* — when a team actually fits — not permission.
 - 3+ independent work streams can run in parallel.
 - Teammates need to share findings or challenge each other.
 - Work requires discussion and collaboration (competing hypotheses, cross-layer changes).
 
 **Do NOT use when:**
-- The user has not asked for it. Propose it first ("this has 4 independent work streams — want me to spawn an Agent Team?") and wait for approval. Do not spawn a team because the scale criteria happen to match.
+- You have not surfaced it and gotten agreement. Propose it first ("this has 4 coordinated work streams — want me to spawn an Agent Team, ~rough cost?") and proceed on agreement. Do not spawn a team just because the scale criteria happen to match.
 - Work is sequential (each step depends on the previous).
 - Only 1-2 files need modification.
-- Workers do not need to communicate (use subagents instead — which themselves still require user request if write-capable).
+- Workers do not need to communicate (use subagents instead — which are themselves write-gated the same way: surface/propose → agree).
 
 ### Team Composition
 
@@ -437,5 +443,56 @@ to the implementer, then notify the leader."
 | Spawning a teammate without `run_in_background=true` and trying to steer it mid-task | A foreground `Agent` call runs to completion before returning — the leader cannot message it mid-turn | Spawn steerable teammates with `Agent(name=..., run_in_background=true, ...)`; foreground `Agent` is for fire-and-forget subagents |
 | Spawning a teammate with `subagent_type="Explore"` (or another read-only type) for implementation work | The teammate cannot edit or write files, and silently fails every implementation task it claims | Use a write-capable type (e.g., `general-purpose`) for implementation; reserve read-only types for pure research roles |
 | Looking for a `TeamCreate` / `TeamDelete` step | Those tools do not exist in this Claude Code version; `team_name` is deprecated and ignored | There is one implicit team — spawn teammates directly with `Agent(name=..., run_in_background=true, ...)`, shut them down with `shutdown_request` |
-| Spawning a `general-purpose` subagent without user request | Delegates work the user expected to see done in-session, at a reasoning level the leader can't raise (no `reasoning_effort` knob on `Agent`); failure mode is a silent wrong-interpretation baked into files | Do it in-session. If parallelism would genuinely help, propose it ("want me to spawn 2 subagents?") and wait for approval. Read-only types (`Explore`, `Plan`) remain proactive-safe |
-| Creating an Agent Team because the scale criteria happen to match | Scale criteria describe *when a team is viable*, not *when to spawn one unprompted* — the HARD RULE at the top of this file is the gate | Require explicit user request (per-turn ask or durable CLAUDE.md / memory instruction) regardless of scale. Propose, don't spawn |
+| Spawning a `general-purpose` subagent without surfacing it first | Delegates write-capable work silently, at a reasoning level the leader can't raise (no effort knob on `Agent`); failure mode is a silent wrong-interpretation baked into files | Surface/propose it ("this splits into 2 independent edits — want me to fan out subagents?") and proceed on agreement. Read-only types (`Explore`, `Plan`) are free — use them proactively |
+| Creating an Agent Team because the scale criteria happen to match | Scale describes *when a team is viable*, not *when to spawn one* — the write-gate (*Delegation* above) is the user's agreement to a proposal | Surface/propose; spawn on agreement, regardless of scale |
+| Reaching for `Workflow` by default because a task "looks parallel" | A run costs far more than in-session work, and the scale is the user's to choose | Default to in-session; surface/propose the workflow (+ rough cost), run on a current-turn opt-in — never on stale/inferred `ultracode` |
+| A workflow `agent()` left on default model/effort | Silently downgrades to the agent-type default (e.g. `Explore`→`haiku`), so the delegate runs weak | Set `opts.model` and `opts.effort` explicitly on every non-trivial `agent()` |
+
+## Workflow (the third delegation surface)
+
+The **`Workflow`** tool runs a deterministic JavaScript script that orchestrates many subagents — fanning out (`parallel`), pipelining (`pipeline`), looping, and branching in code rather than by model judgment. The script holds the control flow and the intermediate results; your context gets back only the final synthesized answer. It runs in the background and notifies you on completion. Use it for **large, breadth-first, mechanical** work — a codebase-wide sweep, an N-file migration, a multi-source research question, a panel of independent reviewers — where a single conversation would drown in intermediate output.
+
+The `Workflow` *tool* is unrelated to this manual's "Three-Phase Workflow" (Understand/Plan/Execute) and "Leader Workflow" headings; always code-format `Workflow` when you mean the tool.
+
+### Workflow is a real capability, but not the default
+
+You *can* invoke `Workflow`. By default you do **not** — single-session work is the default — because a run's token cost is high (a single run can spend far more than doing the same work in conversation) and the *scale* is the user's to choose. Treat it like any write-capable delegation: **surface/propose → run on the user's agreement**. That agreement may arrive as any of:
+
+- `ultracode` confirmed for the **current turn** by a system-reminder (the keyword in the user's prompt, or session mode on). The bare word "ultracode" sitting in transcript history, docs, a question ("what is ultracode?"), or a negation does **not** count — only the harness-confirmed signal.
+- The user asking for a workflow in their own words ("use a workflow", "fan out agents", "orchestrate this"), or to run a named/saved workflow.
+- A skill or command whose instructions call `Workflow` — but only when the **user** invoked that skill/command. An auto-selected skill must not smuggle in a `Workflow` call.
+- The user agreeing to a workflow **you** proposed (mechanism + rough cost + what it will touch).
+
+Absent a current-turn signal, default to **not** running one: do the work in-session, or surface/propose it. Never fire a workflow off stale or inferred opt-in.
+
+### Set model and effort explicitly
+
+A `Workflow` `agent()` does **not** reliably inherit the session's model: with a custom `agentType` it follows that type's own default, which can be a weak/cheap model (e.g. `agentType: 'Explore'` → `haiku`), silently downgrading the agent. On every `agent()` doing non-trivial work, set `opts.model` to the intended tier **and** `opts.effort` to the intended level. A silently-downgraded workflow agent is the same failure as a default-effort `Agent` delegate — the control knobs only help if you set them.
+
+### `ultracode` raises thoroughness — it does not loosen the rules
+
+When a system-reminder confirms `ultracode`, the standing posture is to author and run a workflow for substantive tasks and to favor exhaustiveness; multi-phase work becomes several workflows in sequence (understand → design → implement → review) with you in the loop between them. It does **not**:
+
+- **Collapse the approval gate.** A read-only planning/design workflow may run once the workflow itself is opted-in, but a **write-capable implementation workflow still waits for the user's approval** to implement, exactly as in-session implementation does.
+- **License scope reduction.** A workflow that would shrink, defer, or deviate from the approved scope stops and re-requests approval (`claude-agent-kit--task-execution.md`).
+- **Substitute for your verification.** A workflow's internal adversarial-verify stages are good practice, not a substitute for you independently running the build/test on the synthesized result and reporting faithfully.
+- **Make `budget()` semantic.** Budget exhaustion is not completion and not license to defer — stop, report the remaining scope, and ask.
+
+### Quality flow
+
+- **Pipeline by default** (`pipeline`); reach for a barrier (`parallel` between stages) only when a stage genuinely needs all prior results (dedup/merge, zero-count early-exit).
+- **Verify before trusting a finding.** Independent/heterogeneous reviewers catch failure modes that redundant identical ones don't — homogeneous "debate" underperforms a plain majority vote, and extra rounds entrench errors. Diversify the lens, don't just add rounds.
+- **One writer per final target file** carries into workflows: parallel writers use `isolation: 'worktree'` and **you own the merge**; shared contracts/types stay leader-owned. Worktree isolation prevents disk clobber, not divergent edits.
+- **One well-scoped fan-out per workflow.** Read each result and decide the next phase yourself; don't fold understand → design → implement → review into one mega-run.
+- **Guard loops on `budget.total`** for "+Nk"-style directives, and **`log()` any silent cap** (top-N, sampling, no-retry) so truncation never reads as full coverage.
+- **Self-contained agent prompts** — workflow subagents don't inherit your conversation.
+- **No nested orchestration** — a workflow subagent does not spawn its own `Workflow`/`Agent` orchestration (the harness throws on nested `workflow()`); you remain the single integration + verification owner.
+
+### Code staging inside a workflow
+
+Workflow subagents editing files in isolated worktrees use direct `Edit`/`Write` — the workslate staging discipline is impractical across parallel writers (shared SQLite, one-buffer-per-file). This is a **reasoned exception, not a license to skip review**: the review step is supplied by the workflow's own verify stages **plus** your post-hoc diff review of the synthesized output. The chain-of-thought-in-comments ban and the scope-integrity rules still bind workflow agents; and when **you** integrate a workflow's output into the working tree, you follow the normal workslate staging discipline for non-trivial merges.
+
+### aside / advisor inside a workflow
+
+**Workflow subagents do not call aside or `advisor()`.** Reasons, in order of firmness: (a) **cost** — N parallel agents each firing paid third-party aside calls is unbounded quota burn; (b) **coherence** — a second opinion inside a workflow belongs in the workflow's own judge/verify stages, not in scattered consultations; (c) the conservative stdio-transport concurrency hazard that `claude-agent-kit--aside.md` documents. You (the leader) own aside/`advisor()` and run them strictly serialized, per that file.
+
