@@ -9,7 +9,7 @@ Three mechanisms parallelize work — two via the `Agent` tool, one via the sepa
 
 ## Delegation: when and how to engage it
 
-**Read-only delegation is free — use it proactively.** An `Explore` or `Plan` subagent (or `claude-code-guide`, or a read-only research `Workflow`) reads widely and returns only a summary — it *reduces* the leader's context cost. Reach for these without asking; they are **not** gated. Everything below is only about *write-capable* delegation.
+**Read-only *subagents* are free — use them proactively.** An `Explore`, `Plan`, or `claude-code-guide` subagent reads widely and returns only a summary — it *reduces* the leader's context cost. Reach for these without asking; they are **not** gated. This exemption is for read-only *subagents* only: a `Workflow` — even a read-only research one — fans out many agents and is **cost-gated regardless of whether it writes** (see *Workflow* below). So "read-only ⇒ free" holds for subagents, **not** for workflows; everything below applies to *write-capable* delegation **and to any `Workflow`**.
 
 For write-capable delegation you are a collaborator, not a silent executor. When a task's shape fits, **proactively surface and propose** the delegate — name the mechanism, its rough cost/scale, and which files it would write — and proceed **on the user's agreement**. Don't wait to be asked; and don't spawn a write-capable delegate without that agreement.
 

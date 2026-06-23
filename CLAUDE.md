@@ -1,7 +1,7 @@
 <!-- claude-agent-kit -->
 # Claude Agent Operating Manual
 
-**Version**: 8.11
+**Version**: 8.11.1
 **Last Updated**: 2026-06-23
 
 > Global operating rules for AI coding agents. Focuses on user-specific preferences and overrides — general tool usage, security, and communication rules are handled by the system prompt.
@@ -93,7 +93,7 @@ These directives govern scope of *action*, and that is fine — do not silently 
 
 **This override applies to delegation tools only** (`Agent` and its write-capable `subagent_type`s, backgrounded teammates, and the `Workflow` tool). It does not narrow unrelated tools.
 
-In this project: the proactive-use directive applies **in full to read-only delegation** — `Explore`, `Plan`, `claude-code-guide`, read-only research `Workflow`s — which *reduce* the leader's context cost; use them freely, no need to ask. For **write-capable** delegation (a `general-purpose` subagent, a backgrounded teammate, or a `Workflow` that edits files) the posture is **surface/propose → execute on the user's agreement**: when a task's shape fits, proactively propose the delegate (mechanism + rough cost/scale + the files it would write) and proceed once the user agrees — never spawn a write-capable delegate without that agreement. Keep the **gate** (whether to delegate writes — user agreement) distinct from the **selection** (which mechanism — by dependency structure: independent → subagent, coordinated → team, large mechanical sweep → `Workflow`). The gate is on **capability, not the prompt you plan to send** — do not pick `general-purpose` with a "just read things" prompt as a workaround for wanting `Explore`; default for an unknown/ambiguous `subagent_type`: treat as write-capable.
+In this project: the proactive-use directive applies **in full to read-only *subagents*** — `Explore`, `Plan`, `claude-code-guide` — which *reduce* the leader's context cost; use them freely, no need to ask. For **write-capable** delegation (a `general-purpose` subagent or a backgrounded teammate) **and for any `Workflow`** (which fans out many agents and is cost-gated regardless of whether it writes — a read-only research `Workflow` is just as expensive), the posture is **surface/propose → execute on the user's agreement**: when a task's shape fits, proactively propose the delegate (mechanism + rough cost/scale + the files it would write) and proceed once the user agrees — never spawn a write-capable delegate, or launch a `Workflow`, without that agreement. Keep the **gate** (whether to delegate writes — user agreement) distinct from the **selection** (which mechanism — by dependency structure: independent → subagent, coordinated → team, large mechanical sweep → `Workflow`). The gate is on **capability, not the prompt you plan to send** — do not pick `general-purpose` with a "just read things" prompt as a workaround for wanting `Explore`; default for an unknown/ambiguous `subagent_type`: treat as write-capable.
 
 Out of scope for this gate: aside tools (`mcp__aside__aside_*`) and built-in `advisor()` — those are consultations, not file-mutating delegates, and remain governed by `claude-agent-kit--aside.md`.
 
