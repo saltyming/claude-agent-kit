@@ -20,16 +20,14 @@
 #                      otherwise treat as URL and download)
 #
 # Honored env overrides (when set, suppress the corresponding prompt):
-#   ASIDE_PREFERRED         none|codex|gemini|copilot
+#   ASIDE_PREFERRED         none|codex|copilot
 #   ASIDE_CODEX_MODEL       freeform model string or empty
-#   ASIDE_GEMINI_MODEL      freeform model string or empty
 #   ASIDE_COPILOT_MODEL     freeform model string or empty
 #   ASIDE_CODEX_EFFORT      low|medium|high|xhigh or empty
 #   ASIDE_COPILOT_EFFORT    low|medium|high|xhigh or empty
 #   ASIDE_RECONFIGURE       yes|no — override the "existing prefs found, reconfigure?"
 #                           prompt. yes = overwrite; no = keep existing and exit.
 #                           Unset + TTY = ask. Unset + non-TTY = keep (safe default).
-#   (no ASIDE_GEMINI_EFFORT — the gemini CLI does not consume the value)
 #   ASIDE_POLICY            conservative|preference-only|proactive
 #   ASIDE_CUSTOM_RULES_DIR  absolute path or empty
 #
@@ -70,7 +68,7 @@ have_tty() {
 # already set (including empty-string via explicit assignment).
 #
 # Args: <var_name> <env_override_name> <prompt_text> <default_value> [<case_pattern>]
-#   case_pattern: shell `case` pattern, e.g. 'none|codex|gemini|copilot'
+#   case_pattern: shell `case` pattern, e.g. 'none|codex|copilot'
 #                 or 'low|medium|high|xhigh|""' (empty string allowed when
 #                 the pattern contains ""). Empty arg = accept anything.
 prompt_with_default() {
@@ -174,9 +172,9 @@ if [ "$KEEP_PREFS" = "no" ]; then
     echo "" >&2
 
     prompt_with_default PREFERRED_BACKEND ASIDE_PREFERRED \
-        "Preferred third-party advisor [none/codex/gemini/copilot] (default: none):" \
+        "Preferred third-party advisor [none/codex/copilot] (default: none):" \
         "none" \
-        'none|codex|gemini|copilot'
+        'none|codex|copilot'
 
     prompt_with_default CODEX_MODEL ASIDE_CODEX_MODEL \
         "Default model for codex (e.g. \"gpt-5.4\"; blank for CLI default):" \
@@ -186,10 +184,6 @@ if [ "$KEEP_PREFS" = "no" ]; then
         "Default reasoning effort for codex [low/medium/high/xhigh, blank]:" \
         "" \
         'low|medium|high|xhigh|""'
-
-    prompt_with_default GEMINI_MODEL ASIDE_GEMINI_MODEL \
-        "Default model for gemini (e.g. \"gemini-3.1-pro\"; blank for CLI default):" \
-        ""
 
     prompt_with_default COPILOT_MODEL ASIDE_COPILOT_MODEL \
         "Default model for copilot (e.g. \"claude-sonnet-4.6\" or \"gpt-5.4\"; blank for CLI default):" \
@@ -237,7 +231,6 @@ if [ "$KEEP_PREFS" = "no" ]; then
     sed \
         -e "s/{{PREFERRED_BACKEND}}/$(sed_escape "$PREFERRED_BACKEND")/g" \
         -e "s/{{CODEX_MODEL}}/$(sed_escape "$CODEX_MODEL")/g" \
-        -e "s/{{GEMINI_MODEL}}/$(sed_escape "$GEMINI_MODEL")/g" \
         -e "s/{{COPILOT_MODEL}}/$(sed_escape "$COPILOT_MODEL")/g" \
         -e "s/{{CODEX_EFFORT}}/$(sed_escape "$CODEX_EFFORT")/g" \
         -e "s/{{COPILOT_EFFORT}}/$(sed_escape "$COPILOT_EFFORT")/g" \
@@ -314,7 +307,6 @@ else
 Aside preferences configured:
   preferred backend:       $PREFERRED_BACKEND
   codex model / effort:    ${CODEX_MODEL:-<CLI default>} / ${CODEX_EFFORT:-<CLI default>}
-  gemini model:            ${GEMINI_MODEL:-<CLI default>}   (effort: gemini CLI has no knob)
   copilot model / effort:  ${COPILOT_MODEL:-<CLI default>} / ${COPILOT_EFFORT:-<CLI default>}
   auto-call policy:        $POLICY
   custom rules dir:        ${CUSTOM_RULES_DIR:-<none>}

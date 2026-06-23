@@ -1,6 +1,6 @@
 # Claude Agent Kit
 
-A battle-tested `CLAUDE.md` for Claude Code, plus two custom MCP servers: `workslate` (staged code editing + SQLite-backed task tracking) and `aside` (cross-family second opinions — wraps OpenAI codex, Google gemini, and GitHub copilot CLIs so Claude can consult another model family mid-session).
+A battle-tested `CLAUDE.md` for Claude Code, plus two custom MCP servers: `workslate` (staged code editing + SQLite-backed task tracking) and `aside` (cross-family second opinions — wraps OpenAI codex and GitHub copilot CLIs so Claude can consult another model family mid-session).
 
 > **Honest caveat — user intervention is still required.** These rules reduce common failure modes but do not eliminate them. At least two patterns recur even after repeated rule tightening, and you should expect to correct them manually:
 >
@@ -91,11 +91,11 @@ expected JSON shape — so always prefer raw JSON values.
 
 ### Aside MCP Server
 
-Cross-family second opinions via locally-installed third-party CLIs. Complements — never replaces — the built-in `advisor()` tool (which forwards the transcript to a stronger Claude reviewer). Use `aside` when you want a perspective from a *different* model family: OpenAI codex, Google gemini, or GitHub copilot.
+Cross-family second opinions via locally-installed third-party CLIs. Complements — never replaces — the built-in `advisor()` tool (which forwards the transcript to a stronger Claude reviewer). Use `aside` when you want a perspective from a *different* model family: OpenAI codex or GitHub copilot.
 
 - **Transcript forwarding is on by default.** `include_transcript` defaults to `true`. The current Claude Code conversation (parsed from `~/.claude/projects/{dashed-cwd}/<session>.jsonl`) is rendered as plain text and forwarded to the backend **in redacted form** — `text` blocks pass through verbatim, but `tool_use` / `tool_result` / `thinking` blocks are replaced with placeholders (unlike built-in `advisor()`, which receives the full unredacted transcript). Subject to a 100 KB cap (front-trimmed, with a `[transcript truncated: kept last K of M messages]` header when trimming occurs). Pass `include_transcript=false` for decontextualised questions. See `claude-agent-kit--aside.md` > *Transcript redaction — aside ≠ advisor()* for the full redaction matrix.
-- **Three adapters, same schema.** `aside_codex` / `aside_gemini` / `aside_copilot` share the same params (`question`, `context?`, `include_transcript?`, `transcript_tail?`, `timeout_secs?`, `model?`, `reasoning_effort?`). `aside_list` reports which CLIs are on `$PATH` with `--version` strings.
-- **Read-only, non-interactive invocation — but the backends can read files themselves.** Each backend is spawned with flags that prevent file *edits* and shell execution but permit file *reads* and grep, so the CLI can inspect the workspace itself rather than requiring the caller to embed content. Launch flags: codex `-s read-only -a never exec`; gemini `-p ... --approval-mode plan -o text`; copilot `-p ... --allow-all-tools --available-tools=view,rg,glob,web_fetch -s --no-color`. See `claude-agent-kit--aside.md` > *Backend capabilities* for the per-backend read / grep / web-fetch / write-exec matrix.
+- **Two adapters, same schema.** `aside_codex` / `aside_copilot` share the same params (`question`, `context?`, `include_transcript?`, `transcript_tail?`, `model?`, `reasoning_effort?`). `aside_list` reports which CLIs are on `$PATH` with `--version` strings.
+- **Read-only, non-interactive invocation — but the backends can read files themselves.** Each backend is spawned with flags that prevent file *edits* and shell execution but permit file *reads* and grep, so the CLI can inspect the workspace itself rather than requiring the caller to embed content. Launch flags: codex `-s read-only -a never exec`; copilot `-p ... --allow-all-tools --available-tools=view,rg,glob,web_fetch -s --no-color`. See `claude-agent-kit--aside.md` > *Backend capabilities* for the per-backend read / grep / web-fetch / write-exec matrix.
 - **Preference-driven call policy.** The install flow generates `~/.claude/rules/claude-agent-kit--aside-prefs.md` where you set a preferred backend, per-backend default models, per-backend reasoning effort, and an auto-call policy (`conservative` / `preference-only` / `proactive`). Claude reads this rule and applies your preferences when the current turn doesn't name a backend or model explicitly. **An explicit current-turn instruction to use only one surface — e.g. "only aside" / "only `advisor()`" / "skip the aside call" — overrides the policy in both directions (including the `proactive` aside↔`advisor()` pairing).** Re-run `make configure` anytime to regenerate it.
 - **Custom rules passthrough.** At install time the installer can also copy a directory of your own `*.md` rule files into `~/.claude/rules/`. They get the `claude-agent-kit-custom:user` signature so `make uninstall` preserves them by default (it asks interactively, with an explicit `y` required to remove).
 - **Cost awareness.** Every aside call consumes your third-party API quota with the backend provider. See `claude-agent-kit--aside.md` for the usage rules Claude follows (single question per call, no speculative calls, no loops).
@@ -104,17 +104,15 @@ Cross-family second opinions via locally-installed third-party CLIs. Complements
 
 | Tool | Description |
 |------|-------------|
-| `aside_list()` | Report which of codex / gemini / copilot are on `$PATH` and their `--version` output. |
-| `aside_codex(question, context?, include_transcript?, transcript_tail?, timeout_secs?, model?, reasoning_effort?)` | Ask OpenAI codex. Maps `model` → `-m`, `reasoning_effort` → `-c model_reasoning_effort=...`. |
-| `aside_gemini(question, context?, include_transcript?, transcript_tail?, timeout_secs?, model?, reasoning_effort?)` | Ask Google gemini. Maps `model` → `-m`. `reasoning_effort` is accepted for API symmetry but the gemini CLI currently exposes no flag that consumes it. |
-| `aside_copilot(question, context?, include_transcript?, transcript_tail?, timeout_secs?, model?, reasoning_effort?)` | Ask GitHub copilot (standalone CLI, not the `gh` extension). Maps `model` → `--model`, `reasoning_effort` → `--effort` (`low` / `medium` / `high` / `xhigh`). |
+| `aside_list()` | Report which of codex / copilot are on `$PATH` and their `--version` output. |
+| `aside_codex(question, context?, include_transcript?, transcript_tail?, model?, reasoning_effort?)` | Ask OpenAI codex. Maps `model` → `-m`, `reasoning_effort` → `-c model_reasoning_effort=...`. |
+| `aside_copilot(question, context?, include_transcript?, transcript_tail?, model?, reasoning_effort?)` | Ask GitHub copilot (standalone CLI, not the `gh` extension). Maps `model` → `--model`, `reasoning_effort` → `--effort` (`low` / `medium` / `high` / `xhigh`). |
 
 #### Required CLIs
 
 You install these separately — `aside` just wraps them:
 
 - [codex](https://github.com/openai/codex) (`npm i -g @openai/codex`)
-- [gemini](https://github.com/google-gemini/gemini-cli) (`npm i -g @google/gemini-cli`)
 - [copilot](https://docs.github.com/copilot/how-tos/copilot-cli) (GitHub's standalone Copilot CLI — not `gh copilot`)
 
 `aside_list` will tell you which ones this machine has. Missing CLIs are reported as unavailable, not as errors.

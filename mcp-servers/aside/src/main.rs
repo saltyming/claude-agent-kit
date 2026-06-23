@@ -41,13 +41,13 @@ impl Aside {
         }
     }
 
-    #[tool(description = "List which backend CLIs (codex, gemini, copilot) are available on PATH, with their --version output. Call this when you're unsure which backends are installed on this machine.")]
+    #[tool(description = "List which backend CLIs (codex, copilot) are available on PATH, with their --version output. Call this when you're unsure which backends are installed on this machine.")]
     async fn aside_list(
         &self,
         Parameters(_params): Parameters<ListParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let mut report = Vec::new();
-        for backend in [Backend::Codex, Backend::Gemini, Backend::Copilot] {
+        for backend in [Backend::Codex, Backend::Copilot] {
             let path = which(backend.binary());
             let entry = match path {
                 Some(p) => {
@@ -80,15 +80,6 @@ impl Aside {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.dispatch(Backend::Codex, params, ctx.ct).await
-    }
-
-    #[tool(description = "Ask Google's gemini CLI for a second opinion. include_transcript defaults to true — current conversation is forwarded in REDACTED form (tool_use / tool_result / thinking blocks become placeholders; only text passes through). `--approval-mode plan` keeps gemini strictly read-only: NO edits, NO shell exec, NO approval prompts — but read / grep / web tools ARE available, so gemini CAN inspect files and search the workspace itself (reads are restricted to the spawn cwd workspace). **Prefer passing file paths in `question` / `context`** and let gemini read them; embed an excerpt only for focused line-range questions or for off-disk tool output. reasoning_effort is accepted for API symmetry but currently ignored (no gemini CLI flag consumes it). See claude-agent-kit--aside.md 'Transcript redaction' section. Costs third-party API quota.")]
-    async fn aside_gemini(
-        &self,
-        Parameters(params): Parameters<AskParams>,
-        ctx: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.dispatch(Backend::Gemini, params, ctx.ct).await
     }
 
     #[tool(description = "Ask GitHub's standalone copilot CLI for a second opinion. include_transcript defaults to true — current conversation is forwarded in REDACTED form (tool_use / tool_result / thinking blocks become placeholders; only text passes through). Runs with --allow-all-tools + --available-tools=view,rg,glob,web_fetch — a read-only whitelist that lets copilot inspect files (view), grep the workspace (rg), pattern-match file paths (glob), and fetch URL bodies (web_fetch). NO shell exec, NO file mutation (bash/write_bash/task/sql and other mutating tools are excluded). **Prefer passing file paths in `question` / `context`** and let copilot read them; embed an excerpt only for focused line-range questions or for off-disk tool output. reasoning_effort maps to copilot --effort (low/medium/high/xhigh). See claude-agent-kit--aside.md 'Transcript redaction' section. Costs third-party API quota.")]
@@ -152,7 +143,7 @@ impl Aside {
 /// Role framing prepended to every prompt. Prevents the receiving model from
 /// misinterpreting meta-instructions inside the forwarded transcript (e.g.
 /// "Plan Mode", ExitPlanMode, tool-call references) as live directives to
-/// itself — a concrete failure mode we observed when gemini refused to
+/// itself — a concrete failure mode we observed when a backend refused to
 /// answer because it mistook transcript plan-mode artifacts as its own
 /// operating context. Keep it short and imperative so it parses before the
 /// transcript flood.
@@ -190,15 +181,12 @@ fn render_outcome(
     transcript_warning: Option<String>,
 ) -> CallToolResult {
     match outcome {
-        InvokeOutcome::Ok { stdout, truncated, note } => {
+        InvokeOutcome::Ok { stdout, truncated } => {
             let mut header = format!("[{}]", backend.binary());
             if truncated {
                 header.push_str(" (response truncated)");
             }
             let mut body = format!("{}\n\n{}", header, stdout);
-            if let Some(n) = note {
-                body.push_str(&format!("\n\n{}", n));
-            }
             if let Some(w) = transcript_warning {
                 body.push_str(&format!("\n\n{}", w));
             }
@@ -230,15 +218,14 @@ fn render_outcome(
 impl ServerHandler for Aside {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
-            "Cross-family second-opinion tools. Wraps locally-installed codex / gemini / copilot \
+            "Cross-family second-opinion tools. Wraps locally-installed codex / copilot \
              CLIs as MCP tools so Claude can ask another model family for a second opinion. \
              include_transcript defaults to true — the current conversation is forwarded \
              automatically, but in REDACTED form: text blocks pass through, while tool_use / \
              tool_result / thinking blocks are replaced with placeholders. This differs from the \
-             built-in advisor(), which receives the full unredacted transcript. All three \
+             built-in advisor(), which receives the full unredacted transcript. Both \
              backends run in read-only configurations that let them inspect files themselves: \
-             codex uses `-s read-only`; gemini uses `--approval-mode plan` (read/grep/web tools \
-             available, no edits, no exec); copilot uses `--available-tools=view,rg,glob,web_fetch`. \
+             codex uses `-s read-only`; copilot uses `--available-tools=view,rg,glob,web_fetch`. \
              PREFER passing file paths in the `question` / `context` parameter and letting the \
              backend read them — this is cheaper than embedding, avoids the transcript's 100 KB \
              cap, and lets the backend pull in related files it decides it needs. Embed an \

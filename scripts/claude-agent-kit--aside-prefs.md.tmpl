@@ -7,20 +7,18 @@
 
 Default backend when Claude decides to ask a non-Claude advisor: **{{PREFERRED_BACKEND}}**
 
-Valid values: `none` | `codex` | `gemini` | `copilot`
+Valid values: `none` | `codex` | `copilot`
 
 ## Default models (per backend)
 
 When Claude calls an aside tool and the user has not named a specific model for this turn, Claude passes these values as the tool's `model` param. Leave blank to let each CLI use its own default.
 
 - codex default model: **{{CODEX_MODEL}}**
-- gemini default model: **{{GEMINI_MODEL}}**
 - copilot default model: **{{COPILOT_MODEL}}**
 
 Examples of current-generation model names:
 - codex: `gpt-5.4`
-- gemini: `gemini-3.1-pro`, `gemini-3.0-flash`
-- copilot: `claude-sonnet-4.6`, `claude-opus-4.6`, `gemini-3.1-pro`, `gpt-5.4`
+- copilot: `claude-sonnet-4.6`, `claude-opus-4.6`, `gpt-5.4`
 
 ## Default reasoning effort (per backend)
 
@@ -28,8 +26,6 @@ For CLIs that expose a reasoning-effort knob. Claude passes these as the tool's 
 
 - codex default reasoning effort: **{{CODEX_EFFORT}}**   (`low` / `medium` / `high` / `xhigh`, or blank)
 - copilot default reasoning effort: **{{COPILOT_EFFORT}}** (`low` / `medium` / `high` / `xhigh`, or blank — maps to `copilot --effort`)
-
-(gemini CLI does not expose a reasoning-effort flag; nothing to configure here.)
 
 ## Auto-call policy
 

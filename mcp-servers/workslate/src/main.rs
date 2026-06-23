@@ -1361,7 +1361,7 @@ impl Workslate {
 
     // ── Team messaging tools ──────────────────────────────
 
-    #[tool(description = "Register your role name for the active task session so the inbox/task doorbell hooks can resolve which agent this Claude session is. Teammates call this once on startup (with the same session name the leader used), alongside workslate_inbox_read.")]
+    #[tool(description = "Register your role name for the active task session so the inbox/task doorbell hooks can resolve which agent this Claude session is. Teammates call this once on startup (with the same session name the leader used), alongside workslate_inbox_read. Pass agent_id explicitly: the leader passes an empty agent_id (its own identity), teammates pass their SubagentStart agent_id — omitting it is rejected, since it would default to the leader's row and a teammate would overwrite the leader's role.")]
     async fn workslate_register(
         &self,
         Parameters(params): Parameters<RegisterParams>,
@@ -1381,6 +1381,21 @@ impl Workslate {
                 )]));
             }
         };
+        // HARD GUARD: agent_id must be explicit. The leader and all teammates share one
+        // session_id; an omitted agent_id defaults to "" and writes the main session's
+        // `(session_id, "")` row — its ON CONFLICT DO UPDATE overwrites `role`, so a
+        // teammate that forgets agent_id would CLOBBER the leader's `team-lead` role.
+        // The leader passes an empty agent_id (its own identity); teammates pass theirs.
+        if params.agent_id.is_none() {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "workslate_register: agent_id is required — pass it explicitly. The leader \
+                 and all teammates share one session_id, so an omitted agent_id defaults to \
+                 the main session's row (empty agent_id) and a teammate would overwrite the \
+                 leader's role. The leader passes an empty agent_id (its own identity); \
+                 teammates pass the agent_id from their SubagentStart hint."
+                    .to_string(),
+            )]));
+        }
         let agent_id = params.agent_id.clone().unwrap_or_default();
         {
             // Scope the DB guard so it is released before the async active_role write.
@@ -1401,7 +1416,7 @@ impl Workslate {
         ))]))
     }
 
-    #[tool(description = "Send a message to a teammate's role inbox in the active task session. The recipient sees a one-line doorbell on their next tool call and reads the body with workslate_inbox_read. Set urgent=true for mid-task steering that should interrupt.")]
+    #[tool(description = "Send a message to a teammate's role inbox in the active task session. The recipient sees a one-line doorbell on their next tool call and reads the body with workslate_inbox_read. Set urgent=true for mid-task steering that should interrupt. Pass your own session_id AND agent_id (the SessionStart/SubagentStart hint values) for correct sender attribution — when a session is in effect an omitted agent_id is rejected, since the leader and teammates share one session_id and a missing agent_id would mis-attribute the message as 'team-lead' (the leader passes an empty agent_id).")]
     async fn workslate_msg_send(
         &self,
         Parameters(params): Parameters<MsgSendParams>,
@@ -1421,16 +1436,33 @@ impl Workslate {
             .clone()
             .filter(|s| !s.is_empty())
             .or_else(current_claude_session_id);
-        let agent_id = params.agent_id.clone().unwrap_or_default();
+        // HARD GUARD: when a session_id is in effect (passed or env-resolved) the caller
+        // is in a (possibly shared) team session where agent_id is the only discriminator.
+        // An OMITTED agent_id defaults to the leader's `(session_id, "")` row, silently
+        // mis-attributing this message as sent by `team-lead`. Require it explicitly — the
+        // leader passes agent_id="" (its own identity), teammates pass their SubagentStart
+        // agent_id. An explicit `sender` is the caller taking responsibility, so it bypasses.
+        if claude_sid.is_some() && params.agent_id.is_none() && params.sender.is_none() {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "workslate_msg_send: a session_id is in effect but agent_id was omitted. \
+                 The leader and all teammates share one session_id, so agent_id is what \
+                 attributes the sender — omitting it would mis-attribute this message as \
+                 sent by 'team-lead'. Pass agent_id explicitly: the leader passes an empty \
+                 agent_id (the main session), teammates pass the agent_id from their \
+                 SubagentStart hint (or pass an explicit `sender`)."
+                    .to_string(),
+            )]));
+        }
         let conn = match self.lock_db() { Ok(c) => c, Err(e) => return Ok(e) };
         // Sender attribution via the composite (session_id, agent_id) identity, not a
         // single in-process role cache (last-writer-wins when leader + teammates share
-        // this one server process). Falls back to active_role, then NULL.
+        // this one server process). A miss yields NULL, never the cache; an omitted
+        // agent_id is rejected by the guard above before reaching here.
         let sender = resolve_sender(
             &conn,
             params.sender,
             claude_sid.as_deref(),
-            &agent_id,
+            params.agent_id.as_deref(),
             active_role_fallback,
         );
         conn.execute(

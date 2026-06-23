@@ -240,10 +240,9 @@ if (-not $keepPrefs) {
     Write-Host "(set ASIDE_* environment variables to run non-interactively)"
     Write-Host ""
 
-    $preferred   = Prompt-WithDefault "Preferred third-party advisor [none/codex/gemini/copilot] (default none)" "ASIDE_PREFERRED"     "none"         '^(none|codex|gemini|copilot)$'
+    $preferred   = Prompt-WithDefault "Preferred third-party advisor [none/codex/copilot] (default none)" "ASIDE_PREFERRED"     "none"         '^(none|codex|copilot)$'
     $codexModel  = Prompt-WithDefault "Default model for codex (blank for CLI default)"                          "ASIDE_CODEX_MODEL"   ""             $null
     $codexEff    = Prompt-WithDefault "Codex reasoning effort [low/medium/high/xhigh, blank]"                    "ASIDE_CODEX_EFFORT"  ""             '^(low|medium|high|xhigh)?$'
-    $geminiModel = Prompt-WithDefault "Default model for gemini (blank for CLI default)"                         "ASIDE_GEMINI_MODEL"  ""             $null
     $copilotModel= Prompt-WithDefault "Default model for copilot (blank for CLI default)"                        "ASIDE_COPILOT_MODEL" ""             $null
     $copilotEff  = Prompt-WithDefault "Copilot reasoning effort [low/medium/high/xhigh, blank]"                  "ASIDE_COPILOT_EFFORT" ""            '^(low|medium|high|xhigh)?$'
     $policy      = Prompt-WithDefault "Auto-call policy [conservative/preference-only/proactive] (default conservative)" "ASIDE_POLICY" "conservative" '^(conservative|preference-only|proactive)$'
@@ -261,7 +260,6 @@ if (-not $keepPrefs) {
     $tmplContent = Get-Content $tmplTmp.FullName -Raw
     $tmplContent = $tmplContent.Replace("{{PREFERRED_BACKEND}}", $preferred)
     $tmplContent = $tmplContent.Replace("{{CODEX_MODEL}}",       $codexModel)
-    $tmplContent = $tmplContent.Replace("{{GEMINI_MODEL}}",      $geminiModel)
     $tmplContent = $tmplContent.Replace("{{COPILOT_MODEL}}",     $copilotModel)
     $tmplContent = $tmplContent.Replace("{{CODEX_EFFORT}}",      $codexEff)
     $tmplContent = $tmplContent.Replace("{{COPILOT_EFFORT}}",    $copilotEff)

@@ -145,6 +145,7 @@ Teammates are spawned by calling `Agent(name=..., subagent_type=..., model=..., 
 | Element | Convention | Example |
 |---------|-----------|---------|
 | Team name | kebab-case, describes objective | `auth-refactor` |
+| Leader (you) | the reserved role `team-lead` — register under it on startup | `team-lead` |
 | Teammates | descriptive role name | `security-reviewer`, `arch-designer` |
 
 **Team size:** 3-5 teammates for most workflows. 5-6 tasks per teammate keeps everyone productive.
@@ -162,15 +163,17 @@ The leader uses **workslate tasks with namespaces** for unified tracking:
 Both namespaces appear in the footer. The leader sees `ws:[2/4] team:[8/12]` at a glance.
 
 ```
-1. workslate_task_init                           → Create a named session for this team effort
-2. Agent(name=..., subagent_type=..., model="sonnet", run_in_background=true, prompt=<role-only>)
+1. workslate_task_init(<name>, session_id=<S>)   → Create a named session for this team effort (session_id from the SessionStart hint)
+2. workslate_register(role="team-lead", session_id=<S>, agent_id="")
+                                                 → Register yourself as team-lead (agent_id="" — the main session) so teammate messages to "team-lead" reach you and the inbox doorbell nudges you; then workslate_inbox_read(role="team-lead")
+3. Agent(name=..., subagent_type=..., model="sonnet", run_in_background=true, prompt=<role-only>)
                                                  → Spawn each teammate into the implicit team (no TeamCreate). Call Agent once per teammate. Teammates explore their scope while waiting — see Creation Prompt below.
-3. workslate_task_create(namespace="team")       → Design task graph with depends_on and owner
-4. Teammates work                                → Self-claim eligible tasks via workslate_task_update(owner=self)
-5. Monitor                                       → Footer shows team progress; intervene only when stuck
-6. Build & verify                                → After all teammates complete
-7. Fix integration                               → Missing imports, visibility, mod declarations
-8. Shutdown                                      → shutdown_request to each teammate (no TeamDelete — the implicit team needs no teardown)
+4. workslate_task_create(namespace="team")       → Design task graph with depends_on and owner
+5. Teammates work                                → Self-claim eligible tasks via workslate_task_update(owner=self)
+6. Monitor                                       → Footer shows team progress; intervene only when stuck
+7. Build & verify                                → After all teammates complete
+8. Fix integration                               → Missing imports, visibility, mod declarations
+9. Shutdown                                      → shutdown_request to each teammate (no TeamDelete — the implicit team needs no teardown)
 ```
 
 **Creation prompt rules:**
@@ -195,6 +198,7 @@ Read and understand the code in your scope while waiting for task assignments."
 6. Shutdown all teammates (`shutdown_request`) when the work is done
 
 **Leader checklist:**
+- [ ] Registered yourself as `team-lead` (`workslate_register(role="team-lead", session_id=<S>, agent_id="")`) so teammate messages reach you and the inbox doorbell fires
 - [ ] Teammates spawned with `model="sonnet"` unless a specific role justifies Opus (document the exception in the creation prompt)
 - [ ] Teammates spawned with a `subagent_type` that matches the role — implementation teammates MUST use a write-capable type (e.g., `general-purpose`); never `Explore` or `Plan` for implementation work
 - [ ] Creation prompts contain role/scope only (no implementation instructions)
@@ -226,9 +230,10 @@ The leader does NOT need to review every completion report in detail. Skim repor
 1. **On creation:** Read and explore code within your assigned scope. **Do NOT start implementing anything.** Wait until tasks appear in the task list.
 2. **Self-claim** an eligible task (see Task Claiming Policy below).
 3. **Work** on that task only. Stay within your assigned file scope.
-4. **On task completion:** Send a **completion report** to the leader using the format below, then self-claim the next eligible task. If no eligible task exists, wait.
-5. **On blocker:** Report to the leader immediately and wait.
+4. **On task completion:** Send a **completion report** to the leader (`recipient="team-lead"`) using the format below, then self-claim the next eligible task. If no eligible task exists, drain your inbox before idling (step 7).
+5. **On blocker:** Report to the leader (`recipient="team-lead"`) immediately and wait.
 6. **On `shutdown_request`:** Finish current work and shut down gracefully.
+7. **Before idling / entering a wait state:** as your **final action**, call `workslate_inbox_read(role=<your name>)`. The per-tool-call inbox doorbell only fires while you are running tools — once you idle you make no tool calls, so a leader `msg_send` that landed during your last working turn would sit unseen. Drain it now; if a message is actionable, handle it instead of idling. This is a drain-*before*-idle, not a poll while suspended — once your turn ends you are suspended and only the leader's built-in `SendMessage` can wake you (see *Mid-Turn Steering* below).
 
 **Rules:**
 - Do not run build/test directly — request the leader to do it
@@ -310,21 +315,27 @@ The built-in `SendMessage` delivers to a teammate only at its **next turn bounda
 
 **Teammate startup sequence (required):** as a subagent you receive a `SubagentStart` hint `[workslate] agent_id=<A> session_id=<S>` (NOT a `SessionStart` hint — subagents do not fire that, and they share the parent's `session_id`). Pass **both** to: `workslate_task_init(<same session name the leader used>, session_id=<S>, agent_id=<A>)` → `workslate_register(role=<your name>, session_id=<S>, agent_id=<A>)` → `workslate_inbox_read(role=<your name>)`. `agent_id` is required because the parent and every subagent share one `session_id`; the composite `(session_id, agent_id)` is what separates your inbox from the leader's. The leader must propagate the task-session name to teammates in their creation prompt.
 
+**Leader startup sequence (required):** the leader is the **main** session, so its `SessionStart` hint carries only `session_id=<S>` (no `agent_id`). Register and read your inbox once on startup: `workslate_task_init(<name>, session_id=<S>)` → `workslate_register(role="team-lead", session_id=<S>, agent_id="")` → `workslate_inbox_read(role="team-lead")`. Pass `agent_id=""` (empty) — that *is* the main session's identity (`(session_id, "")`, shown as `<main>`). Without this registration the inbox doorbell cannot resolve your row and will never nudge you, and your own outgoing `msg_send` has no `(session_id, "")` row to attribute the sender to.
+
+**HARD RULE — every `msg_send` passes BOTH `session_id` and `agent_id`.** The leader and all teammates **share one `session_id`** (subagents inherit the parent's); `agent_id` is the only discriminator, and the leader owns the `(session_id, "")` slot as `team-lead`. **`msg_send` rejects** a call that has a session in effect (passed or env-resolved) but **omits `agent_id`** — it errors and tells you to pass it. Without that guard the omitted id would default to `""`, collide with the leader's `(session_id, "")` row, and silently mis-attribute the message as `team-lead` (and a wholly missing session would fall back to the process-shared `active_role` cache, also usually `team-lead`). So pass your own `session_id` **and** `agent_id` (the `SubagentStart` hint values) on every `msg_send`, exactly as for `register` / `task_init`. An explicit `sender` argument bypasses the guard — the caller takes responsibility; the leader sends with its own `agent_id=""`. **`workslate_register` enforces the same guard** — an omitted `agent_id` there is rejected too, because its `ON CONFLICT` *overwrites* `role`, so a teammate that forgets it would clobber the leader's `team-lead` registration (worse than one mis-attributed message). `task_init` writes the same row but **preserves** `role` on conflict and is also called by solo/main sessions, so it is intentionally NOT guarded — an omitted `agent_id` there is harmless.
+
 **Addressing is by role, not session.** Messages are addressed to the durable role name, so a respawned teammate of the same role still receives prior messages. Assumes **one teammate per role** within a task session — if two live sessions share a role, one `inbox_read` consumes both their messages.
 
 **workslate messaging vs. `SendMessage`:** use `SendMessage` for fire-and-forget peer notes that can wait for a turn boundary; use workslate `msg_send` + the doorbell when you need the recipient nudged mid-turn, durable delivery across respawns, or leader→teammate steering.
+
+**Steering a teammate that may already be idle — send BOTH channels.** The workslate doorbell only fires on the teammate's *own* tool calls; a teammate that has gone idle (its turn ended → it is suspended) makes none, so a `msg_send` alone sits unread until something else wakes it. To re-engage a suspended teammate the leader sends **both**: (a) `workslate_msg_send(recipient="<teammate-role>", subject, body, urgent=true, session_id=<S>, agent_id="")` — the durable, content-rich steering the teammate drains on resume; **and** (b) a built-in `SendMessage` to that teammate whose body tells it to run `workslate_inbox_read(role=<its own role>)`. The `SendMessage` is what actually wakes it at its next turn boundary; the workslate message is what it reads once awake. (Teammate-idle itself surfaces to the leader as a built-in idle notification, so the leader knows when to do this.) For a still-running teammate the doorbell + `urgent` flag suffice — the dual-channel is specifically for the already-idle case.
 
 ### Communication
 
 | Situation | Method | Notes |
 |-----------|--------|-------|
-| Task completion | `message` to leader | Include completion report |
+| Task completion | `message` to `team-lead` | Include completion report |
 | Sharing findings | `message` to specific teammate | Direct teammate-to-teammate |
-| Blocker | `message` to leader | Immediate |
+| Blocker | `message` to `team-lead` | Immediate |
 | Critical issue | `broadcast` | Rarely — cost scales with team size |
 | Shutdown | leader sends `shutdown_request` | After confirming completion |
-| Verification fail | `message` to implementer + leader | Verifier reports bug to implementer directly, notifies leader that feedback was sent |
-| Verification pass | `message` to leader | Verifier confirms build/test clean |
+| Verification fail | `message` to implementer + `team-lead` | Verifier reports bug to implementer directly, notifies the leader that feedback was sent |
+| Verification pass | `message` to `team-lead` | Verifier confirms build/test clean |
 
 **Teammate-to-teammate triggers (when you MUST message another teammate directly):**
 - Your output defines types, constants, or APIs that another teammate's task consumes → message them with the signatures/paths
@@ -370,9 +381,9 @@ Leader creates implementation tasks + verification tasks (depends_on implementat
 ├── teammate-core     → Claims T1 (implement module)
 ├── teammate-io       → Claims T2 (implement I/O layer)
 └── teammate-verify   → Waits for T1,T2 → runs build, tests, reviews diffs
-    ├── pass → message leader with verification report
+    ├── pass → message team-lead with verification report
     └── fail → message implementer directly with bug details,
-               then message leader: "sent feedback to teammate-core on T1"
+               then message team-lead: "sent feedback to teammate-core on T1"
 ```
 
 Verification teammate's scope:

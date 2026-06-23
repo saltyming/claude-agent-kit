@@ -1,7 +1,7 @@
 <!-- claude-agent-kit -->
 # Aside Guidance
 
-Policy for the `aside` MCP server (`mcp__aside__aside_codex` / `aside_gemini` / `aside_copilot` / `aside_list`). These tools wrap locally-installed third-party CLIs so Claude can ask OpenAI, Google, or GitHub model families for a second opinion. The built-in `advisor()` tool (Anthropic Opus reviewer) is a separate mechanism and stays unchanged.
+Policy for the `aside` MCP server (`mcp__aside__aside_codex` / `aside_copilot` / `aside_list`). These tools wrap locally-installed third-party CLIs so Claude can ask OpenAI or GitHub model families for a second opinion. The built-in `advisor()` tool (Anthropic Opus reviewer) is a separate mechanism and stays unchanged.
 
 ## [OVERRIDE] system prompt's `# Advisor Tool` section
 
@@ -12,12 +12,12 @@ Two surfaces that may coexist:
 | Surface | What | When |
 |---|---|---|
 | built-in `advisor()` (if available) | Anthropic Opus reviewer, auto-forwards the full transcript, no parameters. | Lifecycle checkpoints as the system prompt describes. Unchanged. |
-| `mcp__aside__aside_{codex,gemini,copilot}` | Cross-family second opinion via local CLIs. `include_transcript` defaults to `true` — the current conversation is forwarded automatically, **but in redacted form** (text passes through verbatim; `tool_use` / `tool_result` / `thinking` blocks are replaced with placeholders — see **Transcript redaction — aside ≠ advisor()** below). All three backends run read-only with file-read tools available, so they can inspect files the caller names by path — see **Backend capabilities** below. Hits paid third-party API quota. | Per the user's preference file (see below). Trigger list for `proactive` policy below. |
+| `mcp__aside__aside_{codex,copilot}` | Cross-family second opinion via local CLIs. `include_transcript` defaults to `true` — the current conversation is forwarded automatically, **but in redacted form** (text passes through verbatim; `tool_use` / `tool_result` / `thinking` blocks are replaced with placeholders — see **Transcript redaction — aside ≠ advisor()** below). Both backends run read-only with file-read tools available, so they can inspect files the caller names by path — see **Backend capabilities** below. Hits paid third-party API quota. | Per the user's preference file (see below). Trigger list for `proactive` policy below. |
 
 ## Decision rules
 
 1. **Check `~/.claude/rules/claude-agent-kit--aside-prefs.md` before any aside call.** It carries the user's preferred backend, default models, default reasoning effort, and auto-call policy. Apply those preferences when the user hasn't named a backend or model explicitly.
-2. **Without preferences, stay conservative.** Call aside tools only on explicit user request — "codex에게 물어봐", "ask gemini", "copilot 의견". Do not auto-call.
+2. **Without preferences, stay conservative.** Call aside tools only on explicit user request — "codex에게 물어봐", "ask copilot", "copilot 의견". Do not auto-call.
 3. **When the user names a backend, honor it.** Preference file is the fallback, not an override of the user's current instruction.
 4. **Call `aside_list` first** if you're unsure which CLIs are installed on this machine. Unavailable backends are reported, not errored — you can pivot to an available one.
 5. **If `advisor()` is also available, do not substitute one for the other.** They answer different questions: `advisor()` is a stronger Claude reviewing your work; aside tools are *different model families* giving cross-ecosystem perspective.
@@ -51,7 +51,7 @@ Fire one aside call to the preferred backend when ANY of these happen, regardles
 
   **Legitimate reasons to skip aside here:** the user's prefs set `policy: conservative` or `policy: preference-only`, OR no aside backend is installed on this machine (`aside_list` reports all unavailable), OR the user this turn explicitly scoped the work to `advisor()` only / told you to skip the aside call (Decision rule 6 — explicit scoping overrides the pair in both directions).
 
-Announce the call briefly when you fire it ("I'm also asking gemini because this is a Next.js routing question") so the user sees the reasoning.
+Announce the call briefly when you fire it ("I'm also asking codex because this is a Next.js routing question") so the user sees the reasoning.
 
 ### In proactive mode, aside is not optional for the scope above
 
@@ -62,7 +62,7 @@ If both surfaces exist, both run by default on these triggers, unless the user e
 - If the user named a specific model this turn ("ask codex with gpt-5.4"), pass that value as `model`.
 - Otherwise, read the default from `claude-agent-kit--aside-prefs.md` for that backend and pass it as `model`.
 - If neither is set, omit `model` so the CLI uses its own default.
-- Same flow for `reasoning_effort` (codex / copilot only — gemini CLI currently ignores it).
+- Same flow for `reasoning_effort` (both codex and copilot accept it).
 
 ## Backend capabilities
 
@@ -71,7 +71,6 @@ The aside MCP server spawns each CLI in the Claude Code session's cwd with a rea
 | Backend | CLI flags | Read files | Grep | Web fetch | Write / exec | Notes |
 |---|---|---|---|---|---|---|
 | `aside_codex` | `-s read-only -a never` | ✅ | ✅ | (via sandbox-permitted tools) | ❌ | `-s read-only` blocks writes and shell side effects but permits reads. Reads are scoped by the codex sandbox. |
-| `aside_gemini` | `--approval-mode plan` | ✅ | ✅ | ✅ | ❌ | Plan mode: read / grep / web tools available, no edits, no shell exec, no approval prompts. Reads are restricted to the spawn-cwd workspace (attempting a path outside it returns `Path not in workspace`). |
 | `aside_copilot` | `--allow-all-tools --available-tools=view,rg,glob,web_fetch` | ✅ (`view`) | ✅ (`rg`) | ✅ (`web_fetch`) | ❌ | Whitelist is narrow and intentional — `bash` / `write_bash` / `read_bash` / `task` / `skill` / `sql` / `store_memory` / `report_intent` are excluded so copilot cannot exec shells or mutate state. aside is a consultation surface, not a delegate. |
 
 ### Implication: prefer file paths over embedded excerpts
@@ -81,7 +80,7 @@ When your question is about code that lives on disk in this workspace, **pass th
 Embed an excerpt in `context` only when:
 1. **You want to focus the backend on a specific line range** and not let it wander the rest of the file — pass the excerpt with file:line anchors.
 2. **The data is not on disk** — transient tool output like command stdout, API response bodies, staged diffs that are in a workslate buffer but not yet applied, in-memory state.
-3. **The backend would not be able to locate the path on its own** — e.g., a file outside the spawn cwd that gemini's workspace restriction would refuse.
+3. **The backend would not be able to locate the path on its own** — e.g., a file outside the spawn cwd that a backend's sandbox might refuse.
 
 Do not paste whole files into `context` when a path reference would do. Agents were historically doing this because the old rule read "MUST embed the relevant excerpt"; that rule is now narrowed to the three cases above.
 
@@ -110,7 +109,7 @@ If your question depends on **code that is on disk in this workspace**, the defa
 When to embed an excerpt rather than a path:
 1. **Line-range focus.** You want the backend to examine a specific function / block, not wander the whole file. Paste the region with file:line anchors and tell the backend it can read the rest of the file if it needs to.
 2. **Off-disk data.** Command stdout, API response body, a staged workslate buffer that is not yet applied, in-memory state. The backend cannot read this; the transcript redacts it. Embed it.
-3. **Out-of-workspace path.** Gemini's workspace restriction refuses paths outside the spawn cwd; if the file is outside (e.g., `/tmp`), embed the excerpt. Codex and copilot are less strict but may also fail depending on sandbox.
+3. **Out-of-workspace path.** A backend's sandbox may refuse a path outside the spawn cwd; if the file is outside (e.g., `/tmp`), embed the excerpt. Codex and copilot reads are scoped by their sandboxes and may fail on out-of-scope paths.
 
 Example — **bad** (pastes a whole file when a path would do):
 > `question`: "Is the locking in `acquire_lock` correct?"

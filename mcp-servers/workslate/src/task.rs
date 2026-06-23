@@ -296,8 +296,10 @@ pub struct RegisterParams {
     pub session_id: Option<String>,
     /// This subagent's agent_id (from the workslate SubagentStart hint). With
     /// session_id it forms the composite identity; distinguishes a teammate from the
-    /// parent session (they share CLAUDE_CODE_SESSION_ID). Empty/omitted for the main
-    /// session.
+    /// parent session (they share CLAUDE_CODE_SESSION_ID). REQUIRED: the leader passes
+    /// an explicit empty string (its `(session_id, "")` identity), teammates pass their
+    /// SubagentStart agent_id. Omitting it is rejected — it would default to the leader's
+    /// row and a teammate would overwrite the leader's role.
     pub agent_id: Option<String>,
 }
 
@@ -326,7 +328,11 @@ pub struct MsgSendParams {
     pub session_id: Option<String>,
     /// This subagent's agent_id (from the workslate SubagentStart hint). The second
     /// half of the composite identity that tells a teammate apart from the parent
-    /// session (they share CLAUDE_CODE_SESSION_ID). Empty/omitted for the main session.
+    /// session (they share CLAUDE_CODE_SESSION_ID). REQUIRED whenever a session_id is
+    /// in effect: the leader passes an explicit empty string (its `(session_id, "")`
+    /// identity), teammates pass their SubagentStart agent_id. Omitting it while a
+    /// session is resolvable is rejected by `workslate_msg_send` — an omitted agent_id
+    /// would collapse to the leader's row and mis-attribute the message as `team-lead`.
     pub agent_id: Option<String>,
 }
 
@@ -598,7 +604,7 @@ pub fn resolve_sender(
     conn: &rusqlite::Connection,
     explicit: Option<String>,
     claude_session_id: Option<&str>,
-    agent_id: &str,
+    agent_id: Option<&str>,
     active_role_fallback: Option<String>,
 ) -> Option<String> {
     if let Some(s) = explicit {
@@ -610,6 +616,16 @@ pub fn resolve_sender(
     // miss: that cache is last-writer-wins across a leader and its teammates, so a
     // fallback here would reintroduce the mis-attribution this fix removes.
     if let Some(sid) = claude_session_id {
+        // agent_id MUST be explicit to attribute a sender under a (shared) session id.
+        // The leader and all teammates share one session_id; an OMITTED agent_id would
+        // collapse to the leader's `(session_id, "")` row and mis-attribute the message
+        // as sent by `team-lead`. Refuse to guess (None → NULL sender). An explicit
+        // empty string IS the leader's own identity and is honoured. The msg_send tool
+        // rejects the omitted-agent_id case up front; this is defense in depth.
+        let agent_id = match agent_id {
+            Some(a) => a,
+            None => return None,
+        };
         return conn
             .query_row(
                 "SELECT role FROM session_context WHERE claude_session_id = ? AND agent_id = ?",
@@ -731,29 +747,35 @@ mod tests {
 
         // Explicit sender always wins.
         assert_eq!(
-            resolve_sender(&conn, Some("explicit".into()), Some("sid"), "", Some("fb".into())),
+            resolve_sender(&conn, Some("explicit".into()), Some("sid"), Some(""), Some("fb".into())),
             Some("explicit".into())
         );
-        // Composite lookup: same session id, agent_id='' -> leader.
+        // Composite lookup: same session id, explicit agent_id='' -> leader.
         assert_eq!(
-            resolve_sender(&conn, None, Some("sid"), "", Some("fb".into())),
+            resolve_sender(&conn, None, Some("sid"), Some(""), Some("fb".into())),
             Some("leader".into())
         );
         // Composite lookup: same session id, distinct agent_id -> teammate. A single
         // in-process role cache would mis-attribute this to the last registrant.
         assert_eq!(
-            resolve_sender(&conn, None, Some("sid"), "agentX", Some("fb".into())),
+            resolve_sender(&conn, None, Some("sid"), Some("agentX"), Some("fb".into())),
             Some("teammate".into())
         );
         // session_id supplied but no matching row -> None (NOT the process-shared
         // active_role, which would reintroduce mis-attribution on a miss).
         assert_eq!(
-            resolve_sender(&conn, None, Some("sid"), "unknown", Some("fb".into())),
+            resolve_sender(&conn, None, Some("sid"), Some("unknown"), Some("fb".into())),
+            None
+        );
+        // session_id supplied but agent_id OMITTED -> None. An omitted agent_id must not
+        // collapse to the leader's (session_id, "") row and mis-attribute as team-lead.
+        assert_eq!(
+            resolve_sender(&conn, None, Some("sid"), None, Some("fb".into())),
             None
         );
         // No session_id supplied at all -> legacy active_role fallback.
         assert_eq!(
-            resolve_sender(&conn, None, None, "", Some("fb".into())),
+            resolve_sender(&conn, None, None, None, Some("fb".into())),
             Some("fb".into())
         );
     }

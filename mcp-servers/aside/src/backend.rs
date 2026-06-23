@@ -15,7 +15,6 @@
 
 use std::process::Stdio;
 
-use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
@@ -26,7 +25,6 @@ const MAX_CAPTURED_STDOUT: usize = 50 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
     Codex,
-    Gemini,
     Copilot,
 }
 
@@ -34,7 +32,6 @@ impl Backend {
     pub fn binary(&self) -> &'static str {
         match self {
             Backend::Codex => "codex",
-            Backend::Gemini => "gemini",
             Backend::Copilot => "copilot",
         }
     }
@@ -43,7 +40,7 @@ impl Backend {
 /// Structured outcome of a backend call. Returned to the tool layer which
 /// converts it into `CallToolResult`.
 pub enum InvokeOutcome {
-    Ok { stdout: String, truncated: bool, note: Option<String> },
+    Ok { stdout: String, truncated: bool },
     NotFound { binary: &'static str, hint: String },
     Failed { code: Option<i32>, stderr: String },
     Spawn(String),
@@ -81,34 +78,17 @@ pub async fn invoke(
     }
 
     let mut cmd = build_command(backend, prompt, model, reasoning_effort);
-    let pipe_prompt_on_stdin = matches!(backend, Backend::Gemini);
-
-    if pipe_prompt_on_stdin {
-        cmd.stdin(Stdio::piped());
-    } else {
-        cmd.stdin(Stdio::null());
-    }
+    cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     cmd.kill_on_drop(true);
 
-    let mut child = match cmd.spawn() {
+    let child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
             return InvokeOutcome::Spawn(format!("spawn {} failed: {}", backend.binary(), e));
         }
     };
-
-    // gemini: argv already carries the prompt, but the CLI also accepts stdin
-    // and appends it to the argv prompt. We pipe the prompt again on stdin —
-    // harmless duplication but ensures long transcripts get through even if
-    // they strain argv limits.
-    if pipe_prompt_on_stdin {
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(prompt.as_bytes()).await;
-            let _ = stdin.shutdown().await;
-        }
-    }
 
     let output = tokio::select! {
         biased;
@@ -147,16 +127,7 @@ pub async fn invoke(
         truncated = true;
     }
 
-    let note = if matches!(backend, Backend::Gemini) && reasoning_effort.is_some() {
-        Some(
-            "note: gemini CLI currently exposes no reasoning-effort flag; the value was ignored"
-                .to_string(),
-        )
-    } else {
-        None
-    };
-
-    InvokeOutcome::Ok { stdout, truncated, note }
+    InvokeOutcome::Ok { stdout, truncated }
 }
 
 /// Build the `Command` for a backend. Prompt and flags inlined; stdio is
@@ -186,23 +157,6 @@ fn build_command(
             }
             cmd.arg("exec");
             cmd.arg(prompt);
-            cmd
-        }
-        Backend::Gemini => {
-            // gemini -p "<PROMPT>" --approval-mode plan -o text [-m MODEL]
-            //   -p:                  non-interactive with prompt; appends stdin
-            //   --approval-mode plan: plan mode — read / grep / web tools remain available to the
-            //                         model, but NO edits, NO shell exec, NO approval prompts.
-            //                         File reads are restricted to the spawn cwd workspace.
-            //   -o text:             plain text output
-            let mut cmd = Command::new("gemini");
-            cmd.arg("-p").arg(prompt);
-            cmd.arg("--approval-mode").arg("plan");
-            cmd.arg("-o").arg("text");
-            if let Some(m) = model {
-                cmd.arg("-m").arg(m);
-            }
-            // reasoning_effort intentionally ignored; gemini CLI has no flag.
             cmd
         }
         Backend::Copilot => {
@@ -243,10 +197,6 @@ fn install_hint(backend: Backend) -> String {
     match backend {
         Backend::Codex => {
             "install codex CLI (`npm i -g @openai/codex`; see https://github.com/openai/codex)"
-                .to_string()
-        }
-        Backend::Gemini => {
-            "install gemini CLI (`npm i -g @google/gemini-cli`; see https://github.com/google-gemini/gemini-cli)"
                 .to_string()
         }
         Backend::Copilot => {

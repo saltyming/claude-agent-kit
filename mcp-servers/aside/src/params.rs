@@ -10,7 +10,7 @@
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-/// Parameters for `aside_codex` / `aside_gemini` / `aside_copilot`.
+/// Parameters for `aside_codex` / `aside_copilot`.
 ///
 /// All three tools share this schema. Backend-specific behaviour (argv
 /// construction, prompt transport) lives in `crate::backend`.
@@ -47,8 +47,6 @@ pub struct AskParams {
     /// Forwarded as a reasoning-effort flag where supported:
     /// * codex  → `-c model_reasoning_effort=<val>`
     /// * copilot → `--effort <val>`
-    /// * gemini → currently no-op (the CLI does not expose this knob); the
-    ///   server logs a one-line notice when a value is passed.
     ///
     /// Valid values: `low` / `medium` / `high` / `xhigh` (or blank).
     pub reasoning_effort: Option<String>,
