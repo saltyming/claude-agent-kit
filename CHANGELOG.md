@@ -4,6 +4,20 @@ All notable changes to Claude Agent Kit are documented here. Format loosely base
 
 Version numbers track the `Version` field in `CLAUDE.md`. Most entries correspond to operating-manual revisions and accompanying MCP server changes; the two ship together.
 
+## [8.13] - 2026-06-25
+
+Three additive prompt-discipline rules in `parallel-work.md`, adapted from an external subagent-orchestration doc the user evaluated for adoption. Docs-only (no MCP server code, no install-script changes; propagates on next `make install`). Most of the external doc already existed in the kit (one-writer-per-file = "isolated seams"; the `Workflow` pipeline/barrier section = "fan out + synergize"; leader-as-task-graph-architect = "orchestrator owns decomposition"), so only the genuinely-absent items below were taken. Pressure-tested with `aside_codex` (gpt-5.5 / xhigh — read the file itself, confirmed the overlap but refuted two of the agent's mappings) and built-in `advisor()` (caught the headless-output headline as falsifiable, forcing the scoping below).
+
+**Headless-output rule (Subagents → Prompt rules).** A subagent has no live terminal to watch a process it launched in the background, one that streams over time, or output another agent must consume asynchronously. Scoped deliberately to backgrounded/long-running/streaming/async output — NOT a blanket "a subagent can't see stdout", which is trivially false (foreground tool output returns in the `tool_result` normally; advisor's correction). Three sanctioned escapes: write-then-read a log file, an observability sink the agent queries, or an output-free success check (artifact assertion / exit-code-to-file / a `Workflow` `schema:` return). Cross-references — does not restate — the existing *Delegation* note that the leader sees only a delegate's summary (a different axis: the leader's view of the subagent vs. the subagent's view of its own backgrounded process).
+
+**Choice-framed prompts (Subagents → Prompt rules).** Frame a settled decision as a constrained choice ("do A; use B only if X; don't introduce a third pattern") rather than an open prompt that invites the agent to re-open settled design space and diverge from sibling lanes. Placed in the Subagents prompt rules, deliberately NOT in the Agent-Team creation-prompt section (which is role+scope-only / no-decisions and would be contradicted).
+
+**Thin gotcha routing (Completion report format + Leader responsibilities).** An optional, high-threshold `GOTCHA` line in the completion-report format (include only if the trap should change a sibling prompt, a future decomposition, or native memory — a distilled one-liner, not the process narration the format otherwise bans) plus a leader duty to route a reported gotcha through existing channels: native memory for durable/cross-session traps, sibling-prompt injection or `workslate_msg_send` for run-local ones. No new storage — a persistent "ledger" was explicitly rejected as duplicating Claude Code's native auto-memory (which subagents do not reliably inherit, but which the leader owns).
+
+Deliberately excluded after review: a shared-captured-context rule (emergent from the headless-output + self-contained-prompt rules; no harness primitive exists), an "under-90k-tokens-per-subagent as decomposition-health signal" heuristic (too vague), and the persistent ledger above. An `aside.md` consultation-sequencing tweak was also declined — the codex→advisor timing was a current-turn explicit user request already covered by `aside.md` Decision rule 6, not a standing defect.
+
+Version bumped 8.12 → 8.13 (minor — three rule additions to `parallel-work.md`).
+
 ## [8.12] - 2026-06-24
 
 Three workstreams: a backend removal in the `aside` MCP server, an Agent-Team coordination-rule fix, and a workslate sender-attribution code hardening. The aside change is code + docs + install-scripts; the coordination change is docs-only; the workslate change is code + docs. Design pressure-tested with `aside_codex` (gpt-5.5 / xhigh) and reviewed by built-in `advisor()`. Propagates on next `make install`.

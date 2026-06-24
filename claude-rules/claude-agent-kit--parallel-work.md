@@ -74,6 +74,13 @@ Lightweight workers spawned via the `Agent` tool fire-and-forget (no `name`, not
 - Subagents load CLAUDE.md but do not inherit the parent's conversation history
 - Specify exact file paths and expected outputs
 - State what the subagent should NOT do
+- **Frame settled decisions as constrained choices, not open questions.** When a subtask carries a decision you've already made, hand the agent the framed choice ("do A; use B only if X; don't introduce a third pattern") rather than an open prompt ("figure out how to handle Y"). An open prompt invites the agent to re-open settled design space — burning tokens and risking divergence from what sibling lanes assumed. Pre-frame the decision; cap the leeway.
+- **A subagent can't watch the live output of a backgrounded, long-running, or streaming process.** Foreground tool output returns in the `tool_result` normally — but a subagent has no live terminal to watch a process it launched in the background, one that streams over time, or output that another agent must consume asynchronously. A command fired assuming the agent will "watch it run" is flying blind there. Design such commands around one of three escapes, and name the chosen one in the subagent's prompt:
+  1. **Write-then-read** — redirect to a log file and read it back (`cmd > run.log 2>&1`, then read `run.log`). The file is the feedback channel.
+  2. **Observability sink** — a structured channel the agent queries: a results file in a known schema, a status endpoint, a test report it parses.
+  3. **Output-free success check** — make success/failure decidable without a stream: assert on a produced artifact, capture an exit code to a file, or (in a `Workflow`) use a `schema:` return.
+
+  (The subagent's view of its *own* backgrounded process — distinct from the leader seeing only a delegate's summary, not its intermediate tool output, noted under *Delegation* above.)
 
 **When to use (read-only subagent types — proactive is fine):**
 - `subagent_type="Explore"` for broad codebase research that would take more than ~3 Grep/Glob queries.
@@ -196,6 +203,7 @@ Read and understand the code in your scope while waiting for task assignments."
 4. **Run build & tests** — teammates may lack Bash permissions
 5. Fix integration issues after all teammates complete
 6. Shutdown all teammates (`shutdown_request`) when the work is done
+7. **Route discovered gotchas** — when a completion report carries a `GOTCHA`, place it (do not build a parallel store): durable / cross-session → persist to native memory (a memory file + `MEMORY.md` pointer); run-local → inject it into not-yet-spawned sibling subagents' prompts, or message running teammates via `workslate_msg_send`. The channels already exist; the line only makes the hand-off explicit.
 
 **Leader checklist:**
 - [ ] Registered yourself as `team-lead` (`workslate_register(role="team-lead", session_id=<S>, agent_id="")`) so teammate messages reach you and the inbox doorbell fires
@@ -258,6 +266,9 @@ VERIFICATION:
 
 DEFERRED (optional, omit if none):
 - <thing intentionally not touched and why>
+
+GOTCHA (optional — a distilled one-line trap, not process narration; include ONLY if it should change a sibling prompt, a future decomposition, or native memory):
+- <trap → how to avoid, 1 line>
 
 NEXT: <ready for task X / shutdown / blocked on Y>
 ```
