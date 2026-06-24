@@ -1,260 +1,94 @@
 # Claude Agent Kit
 
-A battle-tested `CLAUDE.md` for Claude Code, plus two custom MCP servers: `workslate` (staged code editing + SQLite-backed task tracking) and `aside` (cross-family second opinions — wraps OpenAI codex and GitHub copilot CLIs so Claude can consult another model family mid-session).
+A battle-tested `CLAUDE.md` for Claude Code, plus two custom MCP servers — `workslate` (staged code editing + SQLite-backed task tracking) and `aside` (cross-family second opinions, wrapping the OpenAI codex and GitHub copilot CLIs so Claude can consult another model family mid-session).
 
-> **Honest caveat — user intervention is still required.** These rules reduce common failure modes but do not eliminate them. At least two patterns recur even after repeated rule tightening, and you should expect to correct them manually:
->
-> 1. **Silent scope reduction.** Despite `[OVERRIDE]`s that explicitly forbid follow-up-PR deferral, stubs, TODOs, and "for now" implementations (see v8.5.1 / v8.5.2 in the Version History), Claude still occasionally splits requested scope at completion time — announcing the split as if it's acceptable, or quietly omitting parts of the spec. Review completion reports critically; push back on any deferred work.
-> 2. **Skipping workslate / aside.** The staging workflow and the `advisor()`-paired cross-family second opinion are rules, not automation. Claude routinely falls back to direct `Edit` on files that should be staged through workslate, or calls `advisor()` without firing the paired aside call despite `policy: proactive` (see v8.6.2 for the latest tightening of the pair rule). When you spot the miss, name it out loud — the override exists for exactly that correction.
->
-> Treat this kit as a strong prior, not a guarantee. Each observed failure mode has produced a version bump; new phrasings of the same weasel still emerge. If you find a fresh one, file an issue or PR.
+> **Honest caveat.** These rules reduce common failure modes but don't eliminate them — treat the kit as a strong prior, not a guarantee. Two patterns still recur and need manual correction: **silent scope reduction** (splitting or deferring requested work despite the `[OVERRIDE]`s) and **skipping workslate / aside** (falling back to direct `Edit`, or calling `advisor()` without the paired aside call under `policy: proactive`). Review completion reports critically and name the miss when you see it.
 
 ## What's Inside
 
-### CLAUDE.md — System Prompt Override Manual
+### CLAUDE.md — system-prompt override manual
 
-Claude Code ships with system prompt directives optimized for casual Q&A — not deep engineering work. This manual quotes each problematic directive and provides an explicit `[OVERRIDE]`:
+Claude Code's stock system prompt is tuned for casual Q&A, not deep engineering. This manual quotes each problematic directive and overrides it:
 
-| System Prompt Says | What You Actually Need |
+| System prompt says | What you actually need |
 |---|---|
-| "Be extra concise. Lead with action, not reasoning." | Explain before acting. Show the reasoning relevant to the decision (not hidden chain-of-thought). |
-| "Only make changes that are directly requested." | Follow the design doc. Implement the full scope. |
+| "Be extra concise. Lead with action, not reasoning." | Explain before acting — the reasoning relevant to the decision, not hidden chain-of-thought. |
+| "Only make changes that are directly requested." | Follow the design doc; implement the full scope. |
 | "Do not create files unless absolutely necessary." | Create every file the spec calls for. |
-| (no verification required) | Verify before claiming completion. Never fake a green result. |
+| (no verification required) | Verify before claiming completion; never fake a green result. |
 
-Also includes:
-- **Teammates coordination** (single implicit team — `Agent` with `name` + `run_in_background`, no `TeamCreate`) — self-claim policy, leader intervention patterns, teammate communication triggers, **token cost criteria** (when a team is actually worth it vs. single session), and a **HARD RULE completion report format** that caps per-report tokens
-- **Delegation model — three surfaces + a surface/propose gate** — subagents (`Agent` fire-and-forget), teammates (`Agent` named + `run_in_background`), and the separate **`Workflow`** tool (deterministic fan-out) with **`ultracode`** mode. Write-capable delegation follows *surface/propose → run on the user's agreement*; read-only delegation (`Explore` / `Plan`) is free and reduces context cost. Mechanism choice is by **dependency structure** (independent → subagent, coordinated → team, large mechanical sweep → `Workflow`). *Maturity note:* Agent Teams is an experimental Claude Code feature (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`; no session resume, status can lag) — the kit's doorbell + composite-identity work mitigates the rough edges, and the agent-facing rules are kept behavior-focused (this caveat context lives here, not in the rules)
-- **Code Staging via workslate** — staged editing workflow that prevents chain-of-thought leakage and scope reduction, with safety rules for `workslate_clear`, stale-buffer handling, and buffer naming across solo/leader/teammate contexts
-- **Unified task system** — all contexts (solo, leader, teammate) use `workslate_task_*` with `ws:`/`team:` namespaces, sharing a single SQLite DB via WAL concurrency
-- **Quality guardrails** — false claims mitigation, comment discipline, verification requirement before claiming completion
+It also covers **delegation** (subagents / teammates / the separate `Workflow` tool, with a surface-propose-agree gate and dependency-structure selection), **Agent Teams coordination** (self-claim policy, leader intervention, a token-capped completion-report format), **code staging via workslate**, a **unified `workslate_task_*` task system** (`ws:` / `team:` namespaces), and **quality guardrails** (comment discipline, verification-before-done).
 
-### Workslate MCP Server
+### workslate MCP server
 
-An MCP server for Claude Code that provides:
+Staged code editing and task tracking:
 
-- **Staged code editing** — write code to buffers, review the diff, then apply. Catches mistakes before they reach files. New files show full content with line numbers for review. Buffers persist across server restarts (SQLite-backed).
-- **Stale buffer detection** — when a buffer is loaded from disk, workslate records a SHA-256 of the file. At apply time it re-hashes the file and refuses to write if the disk content changed since load. `force=true` overrides. This catches silent data loss when another process (teammate, formatter, user) edited the file behind workslate's back.
-- **One buffer per file** — the server rejects creating a second buffer targeting the same file path, forcing you to either extend the existing buffer or explicitly clear it. Prevents conflicting edits from different buffers.
-- **Auto-clear on apply** — successful `workslate_apply` removes the buffer from both memory and SQLite automatically; failed apply preserves it for retry. `workslate_clear` is only needed to abandon a buffer you decided not to apply.
-- **Safe clear** — `workslate_clear()` without arguments is rejected. You must pass either `name="<buffer>"` or the explicit `all=true` opt-in (which lists the buffers being cleared as a last checkpoint). Guards against catastrophic wipes in shared/team staging areas.
-- **File reading with line numbers** — read files from disk with numbered output, feeding directly into line-range editing. Supports range reads (`start_line`/`end_line`).
-- **Pattern search** — find patterns (substring or regex) in files, returns matches with context and a summary of line numbers for precise `workslate_edit` targeting.
-- **SQLite-backed task tracking** — project-scoped tasks stored in `workslate.db` with WAL mode for concurrent access by multiple agents. Supports `ws:` (personal) and `team:` (coordination) namespaces with cross-namespace dependencies.
-- **Named task sessions** — `workslate_task_init("auth-refactor")` isolates tasks per work context. Multiple sessions coexist in SQLite, resumable across restarts.
-- **Auto-footer** — a `PostToolUse` doorbell hook injects a footer after each tool call (so it reflects that tool's own effect) showing the active session and task progress by namespace (`ws:[3/5] team:[1/3]`). Staged buffers are not in the footer (the hook is a separate process and cannot see in-memory buffers) — use `workslate_list` to see what's staged.
-- **Team messaging + mid-turn steering** — a `PreToolUse` inbox doorbell nudges a running teammate the moment a role-addressed message arrives (`workslate_msg_send` → `workslate_inbox_read`), letting an Agent Teams leader redirect a teammate *before* its current turn ends instead of at the next turn boundary. Messages are addressed by durable role, so a respawned teammate of the same role still receives them; identity is the composite `(session_id, agent_id)` supplied by the `SessionStart` / `SubagentStart` hooks.
-- **Project root guard** — all file operations are restricted to the current working directory tree. The server refuses to read or write outside the project root, even via symlinks.
+- **Staged editing** — write to a buffer, review the diff, then apply. New files show full content with line numbers; buffers persist across restarts (SQLite).
+- **Stale-buffer detection** — records a SHA-256 at load and refuses to apply if the file changed since (`force=true` overrides).
+- **One buffer per file**, **auto-clear on apply**, and **safe clear** (a bare `workslate_clear()` is rejected) — friction that prevents conflicting edits and accidental wipes.
+- **File read + pattern search with line numbers** — feeds precise line-range edits.
+- **SQLite task tracking** — `ws:` / `team:` namespaces with cross-namespace dependencies, named resumable sessions, WAL concurrency for multiple agents.
+- **Doorbell hooks** — a `PostToolUse` footer shows the active session and task progress; a `PreToolUse` inbox nudge delivers role-addressed team messages mid-turn (`workslate_msg_send` → `workslate_inbox_read`), so an Agent Teams leader can steer a teammate before its turn ends. Identity is the composite `(session_id, agent_id)` from the `SessionStart` / `SubagentStart` hooks.
+- **Project-root guard** — file operations are confined to the working-directory tree, even via symlinks.
 
-#### Tools
+### aside MCP server
 
-**Buffer operations:**
+Cross-family second opinions via locally-installed CLIs — it complements, never replaces, the built-in `advisor()` (a stronger Claude). Use it for a perspective from a *different* model family: OpenAI codex or GitHub copilot.
 
-| Tool | Description |
-|------|-------------|
-| `workslate_write(name, content, file_path?, depends_on?)` | Store content in a buffer. If `file_path` given, returns diff for review and records a `source_hash` of the current disk file for stale detection. New files show full content with line numbers. `depends_on` declares buffer application ordering. One buffer per file enforced. |
-| `workslate_edit(name, file_path?, old_string?, new_string, position?, match_index?, line_start?, line_end?)` | Stage an edit. With `file_path`: loads file from disk, records `source_hash`, edits. Without: edits existing buffer content (chain edits on a stable buffer). Position: `replace` (default) / `after` / `before` / `append`. Targeting: unique match, `match_index` (Nth occurrence), or `line_start`/`line_end` (line range). One buffer per file enforced. |
-| `workslate_read(name?, file_path?, line_numbers?, start_line?, end_line?)` | Read a buffer by name, or read a file from disk with line numbers. File mode supports range reads. |
-| `workslate_search(file_path, pattern, regex?, context?)` | Search a file for a pattern. Returns matches with context lines and a Summary of line numbers for use with `workslate_edit`. |
-| `workslate_list()` | List all buffers with types and sizes. |
-| `workslate_diff(name, file_path?, summary?, old_string?)` | Re-check diff between buffer and file. `summary=true` returns one-line stats (e.g. "2 hunks, +15/-8 lines"). |
-| `workslate_apply(name, file_path?, dry_run?, force?, old_string?)` | Apply buffer to file. `dry_run=true` previews without writing (buffer preserved). `force=true` overrides stale buffer detection (disk file changed since load). On successful write, the buffer is automatically cleared from memory and SQLite — no follow-up `workslate_clear` needed. Respects `depends_on` ordering. |
-| `workslate_clear(name?, all?)` | Clear a buffer. Pass `name` to clear a specific buffer. To clear ALL staged buffers, pass `all=true` explicitly — bare calls are rejected to prevent accidental wipes. Only needed to abandon a buffer you decided not to apply (successful apply auto-clears). |
+- **Transcript auto-forwarded, redacted** — `text` passes through verbatim, but `tool_use` / `tool_result` / `thinking` become placeholders (unlike `advisor()`, which gets the full transcript). 100 KB cap; pass `include_transcript=false` for decontextualised questions.
+- **Read-only, non-interactive** — each backend can read files and grep the workspace itself, but cannot edit files or run shells.
+- **Preference-driven policy** — `make configure` generates `aside-prefs.md` (preferred backend, default models, reasoning effort, and a `conservative` / `preference-only` / `proactive` auto-call policy). An explicit current-turn instruction to use only one surface ("only aside" / "only `advisor()`") overrides the policy in both directions.
+- **Cost-aware** — every call uses your third-party API quota, so the rules cap it to one focused question per call.
 
-**Task tracking:**
-
-| Tool | Description |
-|------|-------------|
-| `workslate_task_create(name, description?, namespace?, owner?, depends_on?)` | Create a task. `namespace`: `ws` (default) or `team`. `owner` for team task claiming. `depends_on` supports cross-namespace IDs (e.g. `["ws:1", "team:2"]`). |
-| `workslate_task_done(id)` | Mark task done. Auto-unblocks dependents. ID format: `"3"`, `"ws:3"`, or `"team:3"`. |
-| `workslate_task_update(id, status?, description?, owner?)` | Update task status, description, or owner. |
-| `workslate_task_list(namespace?)` | List tasks. Optional namespace filter: `ws`, `team`, or omit for all. |
-| `workslate_task_clear(namespace?)` | Clear tasks. Optional namespace filter. |
-| `workslate_task_init(name, session_id?, agent_id?)` | Switch to a named task session (SQLite-backed). `session_id` / `agent_id` (from the `SessionStart` / `SubagentStart` hint) tie the session to the doorbell identity. |
-| `workslate_task_sessions()` | List all sessions with per-namespace counters. |
-
-**Team messaging (Agent Teams):**
-
-| Tool | Description |
-|------|-------------|
-| `workslate_register(role, session_id?, agent_id?)` | Map this Claude session to a durable role name (e.g. `backend-dev`) so role-addressed messages reach it. Pass `session_id` / `agent_id` from the `SessionStart` / `SubagentStart` hint so the composite `(session_id, agent_id)` identity is recorded. |
-| `workslate_msg_send(recipient, subject, body, urgent?, session_id?, agent_id?)` | Send a message to a role's inbox in the active task session. `subject` shows in the doorbell nudge; `body` is read on demand; `urgent=true` flags it. Pass `session_id` / `agent_id` so the sender is attributed to your role via the composite identity. |
-| `workslate_inbox_read(role)` | Return unread messages for a role and mark them read atomically — concurrent reads never double-deliver. |
-
-**Parameter type notes.** Array fields (`depends_on`), boolean fields (`dry_run`,
-`force`, `summary`, `regex`, `line_numbers`, `all`) and integer fields
-(`match_index`, `line_start`, `line_end`, `start_line`, `end_line`, `context`)
-expect native JSON types — arrays, booleans, and numbers respectively.
-Stringified JSON values (e.g. `"[\"ws:1\"]"`, `"true"`, `"3"`) are tolerated
-as a best-effort shim, but the error message on failure points back at the
-expected JSON shape — so always prefer raw JSON values.
-
-### Aside MCP Server
-
-Cross-family second opinions via locally-installed third-party CLIs. Complements — never replaces — the built-in `advisor()` tool (which forwards the transcript to a stronger Claude reviewer). Use `aside` when you want a perspective from a *different* model family: OpenAI codex or GitHub copilot.
-
-- **Transcript forwarding is on by default.** `include_transcript` defaults to `true`. The current Claude Code conversation (parsed from `~/.claude/projects/{dashed-cwd}/<session>.jsonl`) is rendered as plain text and forwarded to the backend **in redacted form** — `text` blocks pass through verbatim, but `tool_use` / `tool_result` / `thinking` blocks are replaced with placeholders (unlike built-in `advisor()`, which receives the full unredacted transcript). Subject to a 100 KB cap (front-trimmed, with a `[transcript truncated: kept last K of M messages]` header when trimming occurs). Pass `include_transcript=false` for decontextualised questions. See `claude-agent-kit--aside.md` > *Transcript redaction — aside ≠ advisor()* for the full redaction matrix.
-- **Two adapters, same schema.** `aside_codex` / `aside_copilot` share the same params (`question`, `context?`, `include_transcript?`, `transcript_tail?`, `model?`, `reasoning_effort?`). `aside_list` reports which CLIs are on `$PATH` with `--version` strings.
-- **Read-only, non-interactive invocation — but the backends can read files themselves.** Each backend is spawned with flags that prevent file *edits* and shell execution but permit file *reads* and grep, so the CLI can inspect the workspace itself rather than requiring the caller to embed content. Launch flags: codex `-s read-only -a never exec`; copilot `-p ... --allow-all-tools --available-tools=view,rg,glob,web_fetch -s --no-color`. See `claude-agent-kit--aside.md` > *Backend capabilities* for the per-backend read / grep / web-fetch / write-exec matrix.
-- **Preference-driven call policy.** The install flow generates `~/.claude/rules/claude-agent-kit--aside-prefs.md` where you set a preferred backend, per-backend default models, per-backend reasoning effort, and an auto-call policy (`conservative` / `preference-only` / `proactive`). Claude reads this rule and applies your preferences when the current turn doesn't name a backend or model explicitly. **An explicit current-turn instruction to use only one surface — e.g. "only aside" / "only `advisor()`" / "skip the aside call" — overrides the policy in both directions (including the `proactive` aside↔`advisor()` pairing).** Re-run `make configure` anytime to regenerate it.
-- **Custom rules passthrough.** At install time the installer can also copy a directory of your own `*.md` rule files into `~/.claude/rules/`. They get the `claude-agent-kit-custom:user` signature so `make uninstall` preserves them by default (it asks interactively, with an explicit `y` required to remove).
-- **Cost awareness.** Every aside call consumes your third-party API quota with the backend provider. See `claude-agent-kit--aside.md` for the usage rules Claude follows (single question per call, no speculative calls, no loops).
-
-#### Tools
-
-| Tool | Description |
-|------|-------------|
-| `aside_list()` | Report which of codex / copilot are on `$PATH` and their `--version` output. |
-| `aside_codex(question, context?, include_transcript?, transcript_tail?, model?, reasoning_effort?)` | Ask OpenAI codex. Maps `model` → `-m`, `reasoning_effort` → `-c model_reasoning_effort=...`. |
-| `aside_copilot(question, context?, include_transcript?, transcript_tail?, model?, reasoning_effort?)` | Ask GitHub copilot (standalone CLI, not the `gh` extension). Maps `model` → `--model`, `reasoning_effort` → `--effort` (`low` / `medium` / `high` / `xhigh`). |
-
-#### Required CLIs
-
-You install these separately — `aside` just wraps them:
-
-- [codex](https://github.com/openai/codex) (`npm i -g @openai/codex`)
-- [copilot](https://docs.github.com/copilot/how-tos/copilot-cli) (GitHub's standalone Copilot CLI — not `gh copilot`)
-
-`aside_list` will tell you which ones this machine has. Missing CLIs are reported as unavailable, not as errors.
+Install the CLIs separately (`aside` only wraps them): [codex](https://github.com/openai/codex) (`npm i -g @openai/codex`) and [copilot](https://docs.github.com/copilot/how-tos/copilot-cli) (GitHub's standalone Copilot CLI, not `gh copilot`). `aside_list` reports which are present; missing ones are reported as unavailable, not errors.
 
 ## Installation
 
-### macOS / Linux
+**macOS / Linux**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/saltyming/claude-agent-kit/main/install.sh | sh
-```
-
-```bash
-# Uninstall (only removes files it installed, verified by signature)
+# uninstall (removes only what it installed, verified by signature):
 curl -fsSL https://raw.githubusercontent.com/saltyming/claude-agent-kit/main/install.sh | sh -s -- --uninstall
 ```
 
-### Windows (PowerShell)
+**Windows (PowerShell)**
 
 ```powershell
 irm https://raw.githubusercontent.com/saltyming/claude-agent-kit/main/install.ps1 | iex
-```
-
-```powershell
-# Uninstall
+# uninstall:
 irm https://raw.githubusercontent.com/saltyming/claude-agent-kit/main/install.ps1 -OutFile install.ps1; .\install.ps1 -Uninstall
 ```
 
-Downloads the pre-built `workslate` and `aside` binaries from GitHub Releases, `CLAUDE.md`, and rule files. No Rust toolchain required. On macOS, the installer automatically re-signs binaries with `codesign` to prevent endpoint security software (e.g. Kaspersky) from blocking them. The installer registers both MCP servers with Claude Code (if `claude` CLI is available), registers workslate's doorbell hooks (`PreToolUse` inbox + `PostToolUse` task footer) in `~/.claude/settings.json`, and then runs an interactive configuration step for `aside` — you'll be prompted for preferred backend / default models / reasoning effort / auto-call policy, and optionally a directory of your own custom rule files to install alongside. All prompts accept ENTER for the documented default, and `ASIDE_*` env vars skip them entirely (useful for CI / automation). If `~/.local/bin` is not in your PATH, the installer will print instructions to add it.
+The installer pulls the pre-built `workslate` / `aside` binaries from GitHub Releases (no Rust needed), installs `CLAUDE.md` + rule files, registers both MCP servers and workslate's doorbell hooks with Claude Code, re-signs binaries on macOS (so endpoint security like Kaspersky doesn't block them), then runs an interactive `aside` config (preferred backend, default models, reasoning effort, auto-call policy — and optionally ingests a directory of your own `*.md` rule files alongside). All prompts accept ENTER for the default; `ASIDE_*` env vars skip them for CI.
 
-### From source (requires Rust)
+**From source** (requires Rust):
 
 ```bash
-git clone https://github.com/saltyming/claude-agent-kit
-cd claude-agent-kit
-make install
+git clone https://github.com/saltyming/claude-agent-kit && cd claude-agent-kit
+make install      # build + install binaries, CLAUDE.md, rules, hooks; then configure aside
+make uninstall    # remove kit-owned files (prompts before removing user-owned ones)
+make configure    # re-run just the aside preference prompts
 ```
 
-This builds both binaries (`workslate`, `aside`), copies `CLAUDE.md` to `~/.claude/`, rule files to `~/.claude/rules/`, and the binaries to `~/.local/bin/`. It also registers workslate's doorbell hooks (`PreToolUse` inbox + `PostToolUse` task footer) in `~/.claude/settings.json`. On macOS, binaries are re-signed with `codesign` for endpoint security compatibility. A manifest is written to `~/.claude/.claude-agent-kit-manifest` for safe uninstall. The install step ends with an interactive prompt to configure `aside` preferences (see above); re-run anytime with `make configure`.
+Uninstall branches on a first-line signature: `<!-- claude-agent-kit -->` files are removed unconditionally, while `<!-- claude-agent-kit-custom... -->` files (your `aside-prefs.md` and any ingested custom rules) are preserved by default. It also surgically unregisters only workslate's own hooks, leaving any other `settings.json` hooks intact.
+
+**Manual** (no script):
 
 ```bash
-make uninstall    # removes kit-owned files; prompts before removing user-owned ones
-make configure    # re-run just the aside preferences prompts
-```
-
-Uninstall uses signatures on the first line of each `.md` to branch:
-- `<!-- claude-agent-kit -->` → kit-owned, removed unconditionally.
-- `<!-- claude-agent-kit-custom... -->` → user-owned (the generated `aside-prefs.md` and any ingested custom rules). Preserved by default; you get an interactive `[y/N]` prompt to remove them. Non-interactive runs honor `ASIDE_UNINSTALL_KEEP_PREFS=yes|no`.
-
-Uninstall also unregisters workslate's doorbell hooks from `~/.claude/settings.json` before removing the binary — surgically, so only workslate's own hook entries are removed and any other hooks you've added are preserved (`settings.json` is not tracked in the manifest).
-
-The main `CLAUDE.md` contains core principles and quick reference (~125 lines). Detailed rules live in `claude-rules/` (task-execution, parallel-work, git-workflow, framework-conventions, aside) and are auto-loaded by Claude Code from `.claude/rules/`.
-
-### Manual install
-
-```bash
-# CLAUDE.md + rules (global)
-cp CLAUDE.md ~/.claude/CLAUDE.md
-mkdir -p ~/.claude/rules
-cp claude-rules/*.md ~/.claude/rules/
-
-# Or project-level
-cp CLAUDE.md your-project/CLAUDE.md
-mkdir -p your-project/.claude/rules
-cp claude-rules/*.md your-project/.claude/rules/
-
-# Both binaries
-cargo build --release -p workslate -p aside
-cp target/release/workslate ~/.local/bin/
-cp target/release/aside ~/.local/bin/
-# macOS: re-sign to avoid endpoint security (Kaspersky, etc.) blocking
-codesign --force --sign - ~/.local/bin/workslate
-codesign --force --sign - ~/.local/bin/aside
-
-# Register both MCP servers
+cp CLAUDE.md ~/.claude/CLAUDE.md && mkdir -p ~/.claude/rules && cp claude-rules/*.md ~/.claude/rules/
+cargo build --release -p workslate -p aside && cp target/release/workslate target/release/aside ~/.local/bin/
+codesign --force --sign - ~/.local/bin/workslate ~/.local/bin/aside   # macOS only
 claude mcp add workslate -s user --transport stdio -- workslate
 claude mcp add aside     -s user --transport stdio -- aside
 ```
 
-## Field report — one Claude session, both tools
-
-Asked Claude, at the end of a real systems refactor (18 tasks, cross-architecture, multiple internal modules), what it honestly thought of `workslate` and `aside` — both tools used throughout. Reply below, verbatim:
-
-> ### workslate — what helped
->
-> - **Staging forced a diff review that caught real mistakes.** One staged edit *looked* like a two-line file replacement; checking the diff before apply confirmed it was actually correct. The enforced review converted panic into confidence rather than a needless revert.
-> - **One-buffer-per-file prevented partial-edit collisions** without requiring manual discipline.
-> - **Task tracking held coherence across 18 tasks** — nothing fell off the list.
-> - **Line-number targeting via `workslate_search` + `workslate_read` was precise** — more reliable than substring-unique matching.
->
-> ### workslate — what was awkward
->
-> - **`replace_all` is weak on 3+ duplicates.** Replacing a constant that appeared 3 times in the same file failed with "appears 3 times" and required splitting into 3 `match_index` edits. Workable, but friction-heavy.
-> - **One-buffer-per-file adds round-trips on heavy-touch files.** A refactor with 10+ edits on the same file becomes `apply` → re-edit → `apply` → re-edit. The safety it buys is real, but so is the friction.
-> - **"Buffer not found" errors after a successful apply don't explain that the buffer auto-cleared on apply.** A follow-up edit that forgot to reload the file just sees a generic not-found error.
->
-> ### aside (`policy: proactive`, copilot backend) — decisive
->
-> **Caught two ship-blocking bugs across two calls in the same session:**
->
-> 1. A missed symbol conversion in an arch-specific file that would have broken the aarch64 build. I had reviewed that file and missed it.
-> 2. A silent capability-slot-allocation overshoot: a startup routine pre-reserved `MAX_SERVICES × STRIDE` entries, overshooting the slot-table bound by ~170 slots. Copilot did the arithmetic in one pass; otherwise this would have surfaced as a runtime out-of-bounds after the build landed.
->
-> ### aside — what worked
->
-> - **Cross-family perspective was real value.** The arithmetic check is the kind of thing I'd likely have skimmed past reading my own transcript.
-> - **Structured "critical / medium / low" risk framing made triage fast.**
-> - **~1–2 min turnaround with auto-forwarded transcript** — no re-explaining context.
->
-> ### aside — what to watch
->
-> - **Some claims were partially speculative.** One review stated that a helper had pre-existing deduplication behavior. It turned out to be true, but the response stated it with more confidence than it had grounds for. Hedge language ("I didn't verify, but plausibly...") would be healthier.
-> - **Long replies add to session context fast.** Two 500–800-word responses built up quickly. Asking for tighter replies is the caller's responsibility.
-> - **ROI was positive because both calls found bugs.** If a call finds nothing, the cost is wasted. Pre-call judgment — "do I actually need an outside view right now?" — still matters even under `policy: proactive`.
->
-> ### Meta observation
->
-> workslate's **"review your own diff" loop was less effective than expected** — long diffs got skimmed.
-> **Friction-based controls** (unique-match requirement, one-buffer-per-file) caught more mistakes than **inspection-based controls** (the diff view).
-> External perspective (`aside`) caught what self-review missed.
->
-> **Short version: tools that force you to slow down outperformed tools that ask you to pay attention.**
->
-> ### Changes for the next session
->
-> 1. Call `aside` earlier in a refactor — at design review, not mid-implementation.
-> 2. When planning multi-occurrence replacements, include unique surrounding context per site from the start instead of relying on `replace_all`.
-> 3. Invest up-front time batching `workslate_task_create` (10+ tasks at once) — pays back across the whole refactor.
->
-> Net positive. `aside` in particular prevented two bugs that would otherwise have surfaced as broken builds.
+The main `CLAUDE.md` is core principles + a quick reference (~125 lines); detailed rules live in `claude-rules/` (task-execution, parallel-work, git-workflow, framework-conventions, aside) and auto-load from `.claude/rules/`.
 
 ## Background
 
-This kit was developed over months of intensive multi-agent development on a real project, running multiple Claude Code agents in parallel against a shared codebase. Every rule in the CLAUDE.md exists because something went wrong without it.
-
-Key references that informed the system prompt overrides:
-
-- [Claude Code isn't "stupid now": it's being system prompted to act like that](https://github.com/anthropics/claude-code/issues/30027)
-- [Follow-up: Claude Code's source confirms the system prompt problem](https://github.com/anthropics/claude-code/issues/30027)
+Developed over months of intensive multi-agent development on a real project — multiple Claude Code agents running in parallel against a shared codebase. Every rule exists because something went wrong without it. Background on the system-prompt overrides: [Claude Code isn't "stupid now": it's being system prompted to act like that](https://github.com/anthropics/claude-code/issues/30027).
 
 ## License
 
-This work is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
-
-You are free to share and adapt this material for any purpose, including commercial, as long as you give appropriate credit.
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) — free to share and adapt for any purpose, including commercial, with appropriate credit.
