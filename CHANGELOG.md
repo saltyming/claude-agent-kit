@@ -4,6 +4,12 @@ All notable changes to Claude Agent Kit are documented here. Format loosely base
 
 Version numbers track the `Version` field in `CLAUDE.md`. Most entries correspond to operating-manual revisions and accompanying MCP server changes; the two ship together.
 
+## [8.13.1] - 2026-06-25
+
+Patch correcting the no-concurrency wording in `claude-agent-kit--aside.md` — it should have shipped in 8.13. The "HARD RULE — no concurrency" block said aside and `advisor()` must not run "in the same turn" and that `advisor()` goes "in a subsequent response". The actual hazard is *concurrency* (aside's stdio transport interfering with `advisor()`'s transcript forwarding while both are live), NOT same-turn adjacency: the two MAY run **sequentially within the same turn** — fire aside, await its full reply, then call `advisor()` in a later tool-use block — and the prohibition is only on calling them concurrently / in the same tool-use block / while the other is still running. The "Required sequence" step 3 was corrected to match. Docs-only; propagates on next `make install`.
+
+Version bumped 8.13 → 8.13.1 (patch — single-rule wording correction in `aside.md`).
+
 ## [8.13] - 2026-06-25
 
 Three additive prompt-discipline rules in `parallel-work.md`, adapted from an external subagent-orchestration doc the user evaluated for adoption. Docs-only (no MCP server code, no install-script changes; propagates on next `make install`). Most of the external doc already existed in the kit (one-writer-per-file = "isolated seams"; the `Workflow` pipeline/barrier section = "fan out + synergize"; leader-as-task-graph-architect = "orchestrator owns decomposition"), so only the genuinely-absent items below were taken. Pressure-tested with `aside_codex` (gpt-5.5 / xhigh — read the file itself, confirmed the overlap but refuted two of the agent's mappings) and built-in `advisor()` (caught the headless-output headline as falsifiable, forcing the scoping below).
