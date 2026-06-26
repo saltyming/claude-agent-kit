@@ -23,9 +23,10 @@ $RuleFiles = @(
     "claude-agent-kit--framework-conventions.md"
     "claude-agent-kit--parallel-work.md"
     "claude-agent-kit--aside.md"
+    "claude-agent-kit--dispatch.md"
 )
 
-$Binaries = @("workslate", "aside")
+$Binaries = @("workslate", "aside", "dispatch")
 
 function Do-Uninstall {
     if (-not (Test-Path $Manifest)) {
@@ -248,9 +249,12 @@ if (-not $keepPrefs) {
     $policy      = Prompt-WithDefault "Auto-call policy [conservative/preference-only/proactive] (default conservative)" "ASIDE_POLICY" "conservative" '^(conservative|preference-only|proactive)$'
 }
 
-# Custom-rules-dir prompt always runs so users who kept their prefs can
-# still add custom rules in the same invocation.
-$customRules = Prompt-WithDefault "Path to a directory of your own custom rule files (blank to skip)"        "ASIDE_CUSTOM_RULES_DIR" ""           $null
+# Shared custom-rules dir prompt (used by both the aside and dispatch flows; the
+# ingestion below runs once). Honors CUSTOM_RULES_DIR, falling back to ASIDE_CUSTOM_RULES_DIR.
+if (-not [Environment]::GetEnvironmentVariable("CUSTOM_RULES_DIR") -and [Environment]::GetEnvironmentVariable("ASIDE_CUSTOM_RULES_DIR")) {
+    [Environment]::SetEnvironmentVariable("CUSTOM_RULES_DIR", [Environment]::GetEnvironmentVariable("ASIDE_CUSTOM_RULES_DIR"))
+}
+$customRules = Prompt-WithDefault "Path to a directory of your own custom rule files (blank to skip)"        "CUSTOM_RULES_DIR" ""           $null
 
 if (-not $keepPrefs) {
     # Render the template
@@ -276,8 +280,70 @@ if (-not $keepPrefs) {
     Write-Host "  Wrote $prefsDest"
 }
 
-# Custom rules ingestion
-if ($customRules -and (Test-Path $customRules -PathType Container)) {
+# ── Dispatch preferences (interactive) ──
+$dispatchPrefsDest = Join-Path $RulesDir "claude-agent-kit--dispatch-prefs.md"
+$keepDispatchPrefs = $false
+if (Test-Path $dispatchPrefsDest) {
+    $reconf = $null
+    $envReconf = [Environment]::GetEnvironmentVariable("DISPATCH_RECONFIGURE")
+    if ($envReconf) {
+        if ($envReconf -match '^(yes|y|YES|Yes|Y)$') { $reconf = $true }
+        elseif ($envReconf -match '^(no|n|NO|No|N)$') { $reconf = $false }
+    }
+    if ($null -eq $reconf) {
+        if ([Environment]::UserInteractive) {
+            Write-Host ""
+            Write-Host "Existing dispatch preferences found at:"
+            Write-Host "  $dispatchPrefsDest"
+            $answer = Read-Host "Reconfigure (overwrite)? [y/N]"
+            if ($answer -match '^(y|Y|yes|YES|Yes)$') { $reconf = $true } else { $reconf = $false }
+        } else {
+            $reconf = $false
+        }
+    }
+    if (-not $reconf) {
+        $keepDispatchPrefs = $true
+        Write-Host "Keeping existing dispatch preferences (edit anytime at $dispatchPrefsDest)."
+        $existingManifest = if (Test-Path $Manifest) { Get-Content $Manifest } else { @() }
+        if ($existingManifest -notcontains $dispatchPrefsDest) { Add-Content $Manifest $dispatchPrefsDest }
+    }
+}
+
+if (-not $keepDispatchPrefs) {
+    Write-Host ""
+    Write-Host "Configuring claude-agent-kit dispatch preferences."
+    Write-Host "(set DISPATCH_* environment variables to run non-interactively)"
+    Write-Host ""
+
+    $dispApproval    = Prompt-WithDefault "Approval mode [ask/auto] (default ask)"                          "DISPATCH_APPROVAL"    "ask" '^(ask|auto)$'
+    $dispGranularity = Prompt-WithDefault "Default approval granularity [per-step/batch/ask] (default ask)" "DISPATCH_GRANULARITY" "ask" '^(per-step|batch|ask)$'
+    $dispModel       = Prompt-WithDefault "Default model for codex (blank for CLI default)"                 "DISPATCH_MODEL"       ""    $null
+    $dispEffort      = Prompt-WithDefault "Default reasoning effort [low/medium/high/xhigh, blank]"         "DISPATCH_EFFORT"      ""    '^(low|medium|high|xhigh)?$'
+
+    $dtmplUrl = "$RawBase/scripts/claude-agent-kit--dispatch-prefs.md.tmpl"
+    $dtmplTmp = New-TemporaryFile
+    Invoke-WebRequest -Uri $dtmplUrl -OutFile $dtmplTmp.FullName
+    $dtmplContent = Get-Content $dtmplTmp.FullName -Raw
+    $dtmplContent = $dtmplContent.Replace("{{APPROVAL}}",    $dispApproval)
+    $dtmplContent = $dtmplContent.Replace("{{GRANULARITY}}", $dispGranularity)
+    $dtmplContent = $dtmplContent.Replace("{{MODEL}}",       $dispModel)
+    $dtmplContent = $dtmplContent.Replace("{{EFFORT}}",      $dispEffort)
+
+    Set-Content $dispatchPrefsDest -Value $dtmplContent -NoNewline
+    Remove-Item $dtmplTmp.FullName -Force
+
+    $existingManifest = if (Test-Path $Manifest) { Get-Content $Manifest } else { @() }
+    if ($existingManifest -notcontains $dispatchPrefsDest) { Add-Content $Manifest $dispatchPrefsDest }
+    Write-Host "  Wrote $dispatchPrefsDest"
+}
+
+# Shared custom-rules ingestion — a function (parity with cak-common.sh's
+# ingest_custom_rules on the shell side), called once after both prefs configs.
+function Install-CustomRules {
+    if (-not ($customRules -and (Test-Path $customRules -PathType Container))) {
+        if ($customRules) { Write-Host "  custom rules dir not found: $customRules — skipping" }
+        return
+    }
     Write-Host "Ingesting custom rules from $customRules ..."
     foreach ($src in Get-ChildItem -Path $customRules -Filter *.md) {
         $base = $src.Name
@@ -303,9 +369,8 @@ if ($customRules -and (Test-Path $customRules -PathType Container)) {
         }
         Write-Host "  installed $dest"
     }
-} elseif ($customRules) {
-    Write-Host "  custom rules dir not found: $customRules — skipping"
 }
+Install-CustomRules
 
 Write-Host ""
 Write-Host "To uninstall, run:"

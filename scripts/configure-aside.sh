@@ -40,92 +40,19 @@ set -e
 : "${MANIFEST:?configure-aside.sh: MANIFEST not set}"
 : "${TEMPLATE_SRC:?configure-aside.sh: TEMPLATE_SRC not set}"
 
-# ── helpers ───────────────────────────────────────────────
-
-# Read from /dev/tty when possible, fall back to stdin.
-# Note: uses a `_rt_*` variable name to avoid colliding with `varname` in
-# callers (POSIX sh has no local vars — any plain name would be a global).
-read_tty() {
-    _rt_target="$1"
-    if [ -r /dev/tty ]; then
-        # shellcheck disable=SC2229
-        read -r "$_rt_target" < /dev/tty || return 1
-    else
-        # shellcheck disable=SC2229
-        read -r "$_rt_target" || return 1
-    fi
-}
-
-have_tty() {
-    [ -r /dev/tty ] && [ -t 0 ] || [ -r /dev/tty -a ! -t 0 ] 2>/dev/null
-    if [ -r /dev/tty ]; then
-        return 0
-    fi
-    return 1
-}
-
-# Prompt with a default; respect env override if the named variable is
-# already set (including empty-string via explicit assignment).
-#
-# Args: <var_name> <env_override_name> <prompt_text> <default_value> [<case_pattern>]
-#   case_pattern: shell `case` pattern, e.g. 'none|codex|copilot'
-#                 or 'low|medium|high|xhigh|""' (empty string allowed when
-#                 the pattern contains ""). Empty arg = accept anything.
-prompt_with_default() {
-    varname="$1"
-    envname="$2"
-    prompt_text="$3"
-    default_value="$4"
-    pattern="$5"
-
-    # If the env var is set (not just non-empty), honor it — even if empty.
-    if env | grep -q "^${envname}="; then
-        eval "$varname=\${$envname}"
-        return 0
-    fi
-
-    if ! have_tty; then
-        eval "$varname=\$default_value"
-        return 0
-    fi
-
-    while :; do
-        printf "%s " "$prompt_text" >&2
-        if read_tty _answer; then
-            :
-        else
-            eval "$varname=\$default_value"
-            return 0
-        fi
-        if [ -z "$_answer" ]; then
-            _answer="$default_value"
-        fi
-        if [ -n "$pattern" ]; then
-            _match=0
-            eval "case \"\$_answer\" in $pattern) _match=1 ;; esac"
-            if [ "$_match" -eq 0 ]; then
-                echo "  invalid value; accepted: $pattern" >&2
-                continue
-            fi
-        fi
-        eval "$varname=\$_answer"
-        return 0
-    done
-}
-
-# Escape a value for literal substitution via sed (handles /, &, \).
-sed_escape() {
-    printf '%s' "$1" | sed -e 's/[\/&]/\\&/g'
-}
+# ── shared functions ─────────────────────────────────────
+# read_tty / have_tty / prompt_with_default / sed_escape / ingest_custom_rules
+# live in cak-common.sh, sourced from the same directory (install.sh downloads it
+# alongside this script; `make` runs it from scripts/).
+. "$(dirname "$0")/cak-common.sh"
 
 # ── existing prefs check ─────────────────────────────────
 
 PREFS_DEST="$RULES_DIR/claude-agent-kit--aside-prefs.md"
 
-# KEEP_PREFS=yes means the prefs file already exists and the user chose
-# to preserve it — skip the prompt + sed sections below, but STILL run the
-# custom-rules-dir prompt + ingestion at the bottom so users who want to
-# "keep my prefs but add new custom rules" have a path.
+# KEEP_PREFS=yes means the prefs file already exists and the user chose to
+# preserve it — skip the prompt + sed sections below. (Custom-rules ingestion is
+# a separate shared step the install flow runs once via cak-common.sh.)
 KEEP_PREFS="no"
 
 if [ -f "$PREFS_DEST" ]; then
@@ -200,12 +127,6 @@ if [ "$KEEP_PREFS" = "no" ]; then
         'conservative|preference-only|proactive'
 fi
 
-# Custom-rules-dir prompt always runs so users who kept their prefs can
-# still add custom rules in the same invocation.
-prompt_with_default CUSTOM_RULES_DIR ASIDE_CUSTOM_RULES_DIR \
-    "Path to a directory of your own custom rule files (blank to skip):" \
-    ""
-
 # ── render template (skip when keeping existing prefs) ───
 
 if [ "$KEEP_PREFS" = "no" ]; then
@@ -245,50 +166,6 @@ if [ "$KEEP_PREFS" = "no" ]; then
     echo "  Wrote $PREFS_DEST" >&2
 fi
 
-# ── custom rules ingestion ────────────────────────────────
-
-if [ -n "$CUSTOM_RULES_DIR" ]; then
-    if [ ! -d "$CUSTOM_RULES_DIR" ]; then
-        echo "configure-aside.sh: custom rules dir not found: $CUSTOM_RULES_DIR" >&2
-        echo "  skipping custom rules ingestion" >&2
-    else
-        echo "Ingesting custom rules from $CUSTOM_RULES_DIR ..." >&2
-        for src in "$CUSTOM_RULES_DIR"/*.md; do
-            [ -f "$src" ] || continue
-            base="$(basename "$src")"
-            case "$base" in
-                claude-agent-kit--*) dest_name="$base" ;;
-                *)                   dest_name="claude-agent-kit--$base" ;;
-            esac
-            dest="$RULES_DIR/$dest_name"
-
-            # Reject name collisions with core kit files (they use the
-            # `claude-agent-kit` signature and would be shadowed).
-            if [ -f "$dest" ] && head -1 "$dest" 2>/dev/null | grep -Fq "<!-- claude-agent-kit -->"; then
-                echo "  refusing to overwrite core kit file: $dest" >&2
-                continue
-            fi
-
-            first_line="$(head -1 "$src" 2>/dev/null || true)"
-            if printf '%s' "$first_line" | grep -Fq "<!-- claude-agent-kit-custom"; then
-                cp "$src" "$dest"
-            else
-                # Splice signature after the first heading (or at top if no
-                # heading found) without mutating the source.
-                {
-                    echo "<!-- claude-agent-kit-custom:user -->"
-                    cat "$src"
-                } > "$dest"
-            fi
-
-            if ! grep -Fxq "$dest" "$MANIFEST" 2>/dev/null; then
-                echo "$dest" >> "$MANIFEST"
-            fi
-            echo "  installed $dest" >&2
-        done
-    fi
-fi
-
 # ── summary ───────────────────────────────────────────────
 
 if [ "$KEEP_PREFS" = "yes" ]; then
@@ -296,7 +173,6 @@ if [ "$KEEP_PREFS" = "yes" ]; then
 
 Aside preferences preserved:
   preferences file:        $PREFS_DEST (unchanged)
-  custom rules dir:        ${CUSTOM_RULES_DIR:-<none>}
 
 Edit anytime:   $PREFS_DEST
 Reconfigure:    make configure
@@ -309,7 +185,6 @@ Aside preferences configured:
   codex model / effort:    ${CODEX_MODEL:-<CLI default>} / ${CODEX_EFFORT:-<CLI default>}
   copilot model / effort:  ${COPILOT_MODEL:-<CLI default>} / ${COPILOT_EFFORT:-<CLI default>}
   auto-call policy:        $POLICY
-  custom rules dir:        ${CUSTOM_RULES_DIR:-<none>}
 
 Edit anytime:   $PREFS_DEST
 Reconfigure:    make configure

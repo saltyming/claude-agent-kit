@@ -7,13 +7,16 @@ CUSTOM_SIGNATURE := claude-agent-kit-custom
 
 RULE_FILES := $(wildcard claude-rules/*.md)
 
-PREFS_TEMPLATE  := scripts/claude-agent-kit--aside-prefs.md.tmpl
-CONFIGURE_ASIDE := scripts/configure-aside.sh
+PREFS_TEMPLATE     := scripts/claude-agent-kit--aside-prefs.md.tmpl
+DISPATCH_TEMPLATE  := scripts/claude-agent-kit--dispatch-prefs.md.tmpl
+CONFIGURE_ASIDE    := scripts/configure-aside.sh
+CONFIGURE_DISPATCH := scripts/configure-dispatch.sh
+CAK_COMMON         := scripts/cak-common.sh
 
 .PHONY: install uninstall build configure
 
 build:
-	cargo build --release -p workslate -p aside
+	cargo build --release -p workslate -p aside -p dispatch
 
 install: build
 	@mkdir -p $(RULES_DIR) $(BIN_DIR)
@@ -26,7 +29,7 @@ install: build
 		echo $$dest >> $(MANIFEST); \
 	done
 	@# Install binaries
-	@for bin in workslate aside; do \
+	@for bin in workslate aside dispatch; do \
 		cp target/release/$$bin $(BIN_DIR)/$$bin; \
 		if [ "$$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then \
 			codesign --force --sign - $(BIN_DIR)/$$bin 2>/dev/null && \
@@ -38,7 +41,7 @@ install: build
 	@$(BIN_DIR)/workslate --install-hooks || echo "  Hook registration failed. Run manually: $(BIN_DIR)/workslate --install-hooks"
 	@# Register both MCP servers
 	@if command -v claude >/dev/null 2>&1; then \
-		for srv in workslate aside; do \
+		for srv in workslate aside dispatch; do \
 			echo "Registering $$srv MCP server..."; \
 			claude mcp add $$srv -s user --transport stdio -- $$srv 2>/dev/null && \
 				echo "  $$srv registered." || \
@@ -48,13 +51,21 @@ install: build
 		echo "Claude Code CLI not found. Register MCP servers manually:"; \
 		echo "  claude mcp add workslate -s user --transport stdio -- workslate"; \
 		echo "  claude mcp add aside -s user --transport stdio -- aside"; \
+		echo "  claude mcp add dispatch -s user --transport stdio -- dispatch"; \
 	fi
-	@# Interactive aside configuration + optional custom rule ingestion
+	@# Interactive aside configuration
 	@CLAUDE_DIR=$(CLAUDE_DIR) RULES_DIR=$(RULES_DIR) MANIFEST=$(MANIFEST) \
 		TEMPLATE_SRC=$(PREFS_TEMPLATE) \
 		sh $(CONFIGURE_ASIDE)
+	@# Interactive dispatch configuration
+	@CLAUDE_DIR=$(CLAUDE_DIR) RULES_DIR=$(RULES_DIR) MANIFEST=$(MANIFEST) \
+		TEMPLATE_SRC=$(DISPATCH_TEMPLATE) \
+		sh $(CONFIGURE_DISPATCH)
+	@# Shared custom-rules ingestion (once, via the cak-common.sh function)
+	@RULES_DIR=$(RULES_DIR) MANIFEST=$(MANIFEST) \
+		sh -c '. $(CAK_COMMON); ingest_custom_rules'
 	@echo ""
-	@echo "Installed to $(CLAUDE_DIR) and $(BIN_DIR)/{workslate,aside}"
+	@echo "Installed to $(CLAUDE_DIR) and $(BIN_DIR)/{workslate,aside,dispatch}"
 	@echo "Manifest: $(MANIFEST)"
 
 configure:
@@ -64,6 +75,12 @@ configure:
 		TEMPLATE_SRC=$(PREFS_TEMPLATE) \
 		ASIDE_RECONFIGURE=yes \
 		sh $(CONFIGURE_ASIDE)
+	@CLAUDE_DIR=$(CLAUDE_DIR) RULES_DIR=$(RULES_DIR) MANIFEST=$(MANIFEST) \
+		TEMPLATE_SRC=$(DISPATCH_TEMPLATE) \
+		DISPATCH_RECONFIGURE=yes \
+		sh $(CONFIGURE_DISPATCH)
+	@RULES_DIR=$(RULES_DIR) MANIFEST=$(MANIFEST) \
+		sh -c '. $(CAK_COMMON); ingest_custom_rules'
 
 uninstall:
 	@if [ ! -f $(MANIFEST) ]; then \
@@ -126,7 +143,7 @@ uninstall:
 	fi
 	@rm -f $(MANIFEST)
 	@if command -v claude >/dev/null 2>&1; then \
-		for srv in workslate aside; do \
+		for srv in workslate aside dispatch; do \
 			claude mcp remove $$srv -s user 2>/dev/null && echo "  $$srv unregistered." || true; \
 		done; \
 	fi

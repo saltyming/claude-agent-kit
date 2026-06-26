@@ -1,8 +1,8 @@
 <!-- claude-agent-kit -->
 # Claude Agent Operating Manual
 
-**Version**: 8.13.1
-**Last Updated**: 2026-06-25
+**Version**: 9.0.0
+**Last Updated**: 2026-06-26
 
 > Global operating rules for AI coding agents. Focuses on user-specific preferences and overrides — general tool usage, security, and communication rules are handled by the system prompt.
 
@@ -99,6 +99,8 @@ Out of scope for this gate: aside tools (`mcp__aside__aside_*`) and built-in `ad
 
 Rationale: write-capable delegates mutate files durably (a misread becomes a committed mistake), and the leader sees only the agent's compressed summary — not its reasoning or tool outputs — so the user owns the decision to incur that. (Effort/model control differs by surface: the `Agent` tool has no reasoning-effort knob, while `Workflow` `agent()` does — set it explicitly.) Full posture, dependency-structure selection, cost classes, and the Workflow playbook live in `claude-agent-kit--parallel-work.md`.
 
+**External execution delegation (`dispatch`).** The `dispatch_*` MCP tools are a *separate* delegation surface from the Claude `Agent` / `Workflow` mechanisms above: they hand an execution step to an external coding agent (codex) running write-capable in a target directory, asynchronously (`dispatch_submit` returns a task id; poll `dispatch_status` or block on the bounded `dispatch_wait`; `dispatch_logs` shows a curated live tail of what codex is doing; `dispatch_steer` interrupts and redirects it by resuming the same codex session with a new instruction; `dispatch_cancel` stops it). Because it executes and mutates files, it carries its own gate — **confirm working_dir + step scope + approval mode with the user before the first dispatch of a session** (unless prefs set auto) — plus server-enforced guards (project-tree containment, sandbox ceiling, one run per dir). Full policy in `claude-agent-kit--dispatch.md`; this is distinct from the consultation-only `aside` surface.
+
 ---
 
 ## Quick Reference
@@ -131,7 +133,7 @@ User Request
 │  └─ STOP → preserve work → propose the ONE deviation → wait for explicit approval
 │     (only: genuine impossibility / reorder-to-prevent-regression / plan-deviating design)
 │
-└─ Need to delegate (parallelize, or run a large sweep)?
+├─ Need to delegate (parallelize, or run a large sweep)?
    ├─ Read-only? (research, design sketch) → spawn Explore / Plan / claude-code-guide freely — reduces context cost, no need to ask
    └─ Write-capable? → SURFACE/PROPOSE (mechanism + rough cost + files it writes); spawn on the user's agreement, never auto-spawn.
       Then SELECT by dependency structure:
@@ -139,6 +141,11 @@ User Request
       ├─ Coordinated streams that must talk / be steered → Agent Team (single implicit team; no TeamCreate; team_name deprecated)
       │     └─ Agent(name=..., subagent_type=..., model="sonnet", run_in_background=true, prompt=<role-only>) per teammate; task graph in team: namespace; steer via workslate_msg_send doorbell; leader builds & verifies; shutdown_request when done
       └─ Large breadth-first mechanical sweep → Workflow (separate tool; default-off on cost; one writer per target; you verify the synthesis)
+│
+└─ Delegate an execution STEP to an external coding agent (codex), async?
+   └─ dispatch_submit → poll dispatch_status (or bounded dispatch_wait) / dispatch_logs (curated live tail) → dispatch_steer (interrupt+redirect) / dispatch_cancel  (see claude-agent-kit--dispatch.md)
+      Confirm working_dir + step scope + approval mode with the user BEFORE the first dispatch of a session
+      (skip only if dispatch-prefs sets auto). Server-enforced: project-tree containment, sandbox ceiling, one run/dir.
 ```
 
 ---

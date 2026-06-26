@@ -1,3 +1,3 @@
 [workspace]
 resolver = "2"
-members = ["mcp-servers/workslate", "mcp-servers/aside"]
+members = ["mcp-servers/workslate", "mcp-servers/aside", "mcp-servers/dispatch"]

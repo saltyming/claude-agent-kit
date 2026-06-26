@@ -17,6 +17,7 @@ claude-agent-kit--git-workflow.md
 claude-agent-kit--framework-conventions.md
 claude-agent-kit--parallel-work.md
 claude-agent-kit--aside.md
+claude-agent-kit--dispatch.md
 "
 
 uninstall() {
@@ -80,7 +81,7 @@ uninstall() {
     rm -f "$custom_list_file"
     rm -f "$MANIFEST"
     if command -v claude >/dev/null 2>&1; then
-        for srv in workslate aside; do
+        for srv in workslate aside dispatch; do
             claude mcp remove "$srv" -s user 2>/dev/null && echo "  $srv unregistered." || true
         done
     fi
@@ -152,6 +153,7 @@ mkdir -p "$RULES_DIR" "$BIN_DIR"
 # Binaries from latest GitHub Release
 install_binary workslate
 install_binary aside
+install_binary dispatch
 
 # Register PreToolUse doorbell hooks in settings.json
 "$BIN_DIR/workslate" --install-hooks || echo "  Hook registration failed. Run manually: $BIN_DIR/workslate --install-hooks"
@@ -200,7 +202,7 @@ esac
 
 # Register MCP servers
 if command -v claude >/dev/null 2>&1; then
-    for srv in workslate aside; do
+    for srv in workslate aside dispatch; do
         echo "Registering $srv MCP server..."
         claude mcp add "$srv" -s user --transport stdio -- "$srv" 2>/dev/null && \
             echo "  $srv registered." || \
@@ -210,16 +212,26 @@ else
     echo "Claude Code CLI not found. Register MCP servers manually:"
     echo "  claude mcp add workslate -s user --transport stdio -- workslate"
     echo "  claude mcp add aside -s user --transport stdio -- aside"
+    echo "  claude mcp add dispatch -s user --transport stdio -- dispatch"
 fi
 
-# Aside preferences configuration (interactive)
+# Interactive aside + dispatch configuration (shared helpers in cak-common.sh)
 echo ""
 scripts_tmp=$(mktemp -d)
+download "$RAW_BASE/scripts/cak-common.sh" "$scripts_tmp/cak-common.sh"
 download "$RAW_BASE/scripts/configure-aside.sh" "$scripts_tmp/configure-aside.sh"
+download "$RAW_BASE/scripts/configure-dispatch.sh" "$scripts_tmp/configure-dispatch.sh"
 download "$RAW_BASE/scripts/claude-agent-kit--aside-prefs.md.tmpl" "$scripts_tmp/aside-prefs.tmpl"
+download "$RAW_BASE/scripts/claude-agent-kit--dispatch-prefs.md.tmpl" "$scripts_tmp/dispatch-prefs.tmpl"
 CLAUDE_DIR="$CLAUDE_DIR" RULES_DIR="$RULES_DIR" MANIFEST="$MANIFEST" \
     TEMPLATE_SRC="$scripts_tmp/aside-prefs.tmpl" \
     sh "$scripts_tmp/configure-aside.sh"
+CLAUDE_DIR="$CLAUDE_DIR" RULES_DIR="$RULES_DIR" MANIFEST="$MANIFEST" \
+    TEMPLATE_SRC="$scripts_tmp/dispatch-prefs.tmpl" \
+    sh "$scripts_tmp/configure-dispatch.sh"
+# Shared custom-rules ingestion (once, via the cak-common.sh function)
+RULES_DIR="$RULES_DIR" MANIFEST="$MANIFEST" \
+    sh -c ". \"$scripts_tmp/cak-common.sh\"; ingest_custom_rules"
 rm -rf "$scripts_tmp"
 
 echo ""

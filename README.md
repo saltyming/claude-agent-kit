@@ -1,6 +1,6 @@
 # Claude Agent Kit
 
-A battle-tested `CLAUDE.md` for Claude Code, plus two custom MCP servers — `workslate` (staged code editing + SQLite-backed task tracking) and `aside` (cross-family second opinions, wrapping the OpenAI codex and GitHub copilot CLIs so Claude can consult another model family mid-session).
+A battle-tested `CLAUDE.md` for Claude Code, plus three custom MCP servers — `workslate` (staged code editing + SQLite-backed task tracking), `aside` (cross-family second opinions, wrapping the OpenAI codex and GitHub copilot CLIs so Claude can consult another model family mid-session), and `dispatch` (asynchronous hierarchical delegation — handing an execution step to an external coding agent like codex, running write-capable in a target directory).
 
 > **Honest caveat.** These rules reduce common failure modes but don't eliminate them — treat the kit as a strong prior, not a guarantee. Two patterns still recur and need manual correction: **silent scope reduction** (splitting or deferring requested work despite the `[OVERRIDE]`s) and **skipping workslate / aside** (falling back to direct `Edit`, or calling `advisor()` without the paired aside call under `policy: proactive`). Review completion reports critically and name the miss when you see it.
 
@@ -42,6 +42,19 @@ Cross-family second opinions via locally-installed CLIs — it complements, neve
 
 Install the CLIs separately (`aside` only wraps them): [codex](https://github.com/openai/codex) (`npm i -g @openai/codex`) and [copilot](https://docs.github.com/copilot/how-tos/copilot-cli) (GitHub's standalone Copilot CLI, not `gh copilot`). `aside_list` reports which are present; missing ones are reported as unavailable, not errors.
 
+### dispatch MCP server
+
+Asynchronous **hierarchical delegation** — hand an execution step to an external coding agent (codex) running as a headless, **write-capable** subprocess. Where `aside` seeks a read-only opinion, `dispatch` entrusts execution; the run continues in the background and you poll for the result.
+
+- **Async submit → poll / wait → cancel** — `dispatch_submit` returns a task id immediately and runs codex detached (`codex exec -s workspace-write` in the target dir, prompt on stdin); `dispatch_status` / `dispatch_list` track it, or `dispatch_wait` blocks for you (a **bounded** long-poll — until the task is terminal or a timeout, never an unbounded hold) so you don't busy-poll; `dispatch_cancel` stops a run — or a whole `plan_id` — by killing its process group.
+- **Watch + steer** — `dispatch_logs` shows a curated, live timeline of what codex is doing (read from its own session rollout, noise filtered, line-range paged to dodge output limits); `dispatch_steer` interrupts a run and resumes the *same* codex session with a new instruction — its context and the files it already wrote are preserved — as a linked follow-up task. A "watch → redirect" loop, not just fire-and-forget.
+- **Structured + free-form task spec** — objective / target_files / constraints / acceptance plus free context/details, rendered deterministically into the codex prompt and stored alongside it for audit.
+- **Persistent state** — its own SQLite `dispatch.db`; statuses `queued → running → succeeded / failed / cancelled / interrupted`. Boot reconciliation marks tasks stranded by a dead server `interrupted` without clobbering a peer session's live runs (owner-pid liveness).
+- **Server-enforced guards** — working_dir must canonicalize within the project tree (widen with the `DISPATCH_EXTRA_ROOTS` env var); the sandbox ceiling blocks `danger-full-access` unless `DISPATCH_ALLOW_DANGER=1`; one active run per directory unless `allow_concurrent`. These are real runtime invariants, not config the model can talk past — in Claude Code the model can edit any file, so only a runtime guard is a real boundary. Rejections come back as a structured `{error:{code,message}}` so a caller branches on the code rather than parsing prose.
+- **Approval gate** — because it runs write-capable, Claude confirms working_dir + step scope + approval mode with you before the first dispatch of a session (configurable in `claude-agent-kit--dispatch-prefs.md`; `[OVERRIDE]`-aware). Policy in `claude-agent-kit--dispatch.md`.
+
+Requires the [codex](https://github.com/openai/codex) CLI (`npm i -g @openai/codex`) — `dispatch` wraps it; `dispatch_backends` reports whether it's installed.
+
 ## Installation
 
 **macOS / Linux**
@@ -77,13 +90,14 @@ Uninstall branches on a first-line signature: `<!-- claude-agent-kit -->` files 
 
 ```bash
 cp CLAUDE.md ~/.claude/CLAUDE.md && mkdir -p ~/.claude/rules && cp claude-rules/*.md ~/.claude/rules/
-cargo build --release -p workslate -p aside && cp target/release/workslate target/release/aside ~/.local/bin/
-codesign --force --sign - ~/.local/bin/workslate ~/.local/bin/aside   # macOS only
+cargo build --release -p workslate -p aside -p dispatch && cp target/release/workslate target/release/aside target/release/dispatch ~/.local/bin/
+codesign --force --sign - ~/.local/bin/workslate ~/.local/bin/aside ~/.local/bin/dispatch   # macOS only
 claude mcp add workslate -s user --transport stdio -- workslate
 claude mcp add aside     -s user --transport stdio -- aside
+claude mcp add dispatch  -s user --transport stdio -- dispatch
 ```
 
-The main `CLAUDE.md` is core principles + a quick reference (~125 lines); detailed rules live in `claude-rules/` (task-execution, parallel-work, git-workflow, framework-conventions, aside) and auto-load from `.claude/rules/`.
+The main `CLAUDE.md` is core principles + a quick reference (~125 lines); detailed rules live in `claude-rules/` (task-execution, parallel-work, git-workflow, framework-conventions, aside, dispatch) and auto-load from `.claude/rules/`.
 
 ## Background
 
