@@ -51,7 +51,7 @@ Asynchronous **hierarchical delegation** — hand an execution step to an extern
 - **Structured + free-form task spec** — objective / target_files / constraints / acceptance plus free context/details, rendered deterministically into the codex prompt and stored alongside it for audit.
 - **Persistent state** — its own SQLite `dispatch.db`; statuses `queued → running → succeeded / failed / cancelled / interrupted`. Boot reconciliation marks tasks stranded by a dead server `interrupted` without clobbering a peer session's live runs (owner-pid liveness).
 - **Server-enforced guards** — working_dir must canonicalize within the project tree (widen with the `DISPATCH_EXTRA_ROOTS` env var); the sandbox ceiling blocks `danger-full-access` unless `DISPATCH_ALLOW_DANGER=1`; one active run per directory unless `allow_concurrent`. These are real runtime invariants, not config the model can talk past — in Claude Code the model can edit any file, so only a runtime guard is a real boundary. Rejections come back as a structured `{error:{code,message}}` so a caller branches on the code rather than parsing prose.
-- **Approval gate** — because it runs write-capable, Claude confirms working_dir + step scope + approval mode with you before the first dispatch of a session (configurable in `claude-agent-kit--dispatch-prefs.md`; `[OVERRIDE]`-aware). Policy in `claude-agent-kit--dispatch.md`.
+- **Execution policy + approval gate** — `make configure` generates `dispatch-prefs.md` with a `conservative` / `preference-only` / `proactive` execution policy plus a separate approval mode. Because dispatch runs write-capable, `approval mode: ask` still confirms working_dir + step scope + approval granularity before the first submit; `approval mode: auto` pre-authorizes that prompt within server guards. Policy in `claude-agent-kit--dispatch.md`.
 
 Requires the [codex](https://github.com/openai/codex) CLI (`npm i -g @openai/codex`) — `dispatch` wraps it; `dispatch_backends` reports whether it's installed.
 
@@ -73,18 +73,18 @@ irm https://raw.githubusercontent.com/saltyming/claude-agent-kit/main/install.ps
 irm https://raw.githubusercontent.com/saltyming/claude-agent-kit/main/install.ps1 -OutFile install.ps1; .\install.ps1 -Uninstall
 ```
 
-The installer pulls the pre-built `workslate` / `aside` binaries from GitHub Releases (no Rust needed), installs `CLAUDE.md` + rule files, registers both MCP servers and workslate's doorbell hooks with Claude Code, re-signs binaries on macOS (so endpoint security like Kaspersky doesn't block them), then runs an interactive `aside` config (preferred backend, default models, reasoning effort, auto-call policy — and optionally ingests a directory of your own `*.md` rule files alongside). All prompts accept ENTER for the default; `ASIDE_*` env vars skip them for CI.
+The installer pulls the pre-built `workslate` / `aside` / `dispatch` binaries from GitHub Releases (no Rust needed), installs `CLAUDE.md` + rule files, registers the MCP servers and workslate's doorbell hooks with Claude Code, re-signs binaries on macOS (so endpoint security like Kaspersky doesn't block them), then runs interactive `aside` and `dispatch` config. All prompts accept ENTER for the default; `ASIDE_*` and `DISPATCH_*` env vars skip them for CI.
 
 **From source** (requires Rust):
 
 ```bash
 git clone https://github.com/saltyming/claude-agent-kit && cd claude-agent-kit
-make install      # build + install binaries, CLAUDE.md, rules, hooks; then configure aside
+make install      # build + install binaries, CLAUDE.md, rules, hooks; then configure aside + dispatch
 make uninstall    # remove kit-owned files (prompts before removing user-owned ones)
-make configure    # re-run just the aside preference prompts
+make configure    # re-run the aside + dispatch preference prompts
 ```
 
-Uninstall branches on a first-line signature: `<!-- claude-agent-kit -->` files are removed unconditionally, while `<!-- claude-agent-kit-custom... -->` files (your `aside-prefs.md` and any ingested custom rules) are preserved by default. It also surgically unregisters only workslate's own hooks, leaving any other `settings.json` hooks intact.
+Uninstall branches on a first-line signature: `<!-- claude-agent-kit -->` files are removed unconditionally, while `<!-- claude-agent-kit-custom... -->` files (your prefs files and any ingested custom rules) are preserved by default. It also surgically unregisters only workslate's own hooks, leaving any other `settings.json` hooks intact.
 
 **Manual** (no script):
 

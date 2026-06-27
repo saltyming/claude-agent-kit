@@ -25,16 +25,28 @@ dispatch is a delegate you can supervise, not just a fire-and-forget job — thi
 
 Steering is at **turn granularity**: you cannot inject into codex mid-turn, but you can stop it and resume the session with new direction. A follow-up step that depends on a steer should wait for that steer's task to reach `succeeded`.
 
+## Execution policy (when to initiate dispatch)
+
+Read `claude-agent-kit--dispatch-prefs.md` before choosing dispatch. If the file is absent or unclear, default to `execution policy: conservative`.
+
+- `execution policy: conservative` — only submit dispatch after an explicit current-turn user request for dispatch, or after the user directly approves a proposed dispatch.
+- `execution policy: preference-only` — do not auto-submit, but when the user asks for execution delegation without naming a surface, prefer dispatch for execution-shaped work and apply the prefs defaults.
+- `execution policy: proactive` — for suitable execution steps, Claude **SHOULD** initiate dispatch. With `approval mode: ask`, initiating dispatch means running the approval gate below before the first submit; with `approval mode: auto`, Claude may submit directly within the server's hard guards.
+
+Proactive dispatch is for execution, not judgment. Suitable triggers include isolated mechanical edits, long-running verification/fix loops, large but well-scoped repetitive sweeps, or independent plan steps with clear target files and acceptance criteria. Do not proactive-dispatch when the product scope is ambiguous, the expected edits overlap active local/user edits, the task needs tight interactive judgment, or the task cannot be written as one self-contained structured spec.
+
+An explicit current-turn user instruction always wins: "use dispatch", "do not dispatch", "only do it yourself", or equivalent overrides the preference file for that turn.
+
 ## Approval gate (HARD RULE)
 
-dispatch runs a write-capable subprocess, so **before the FIRST dispatch in a session you MUST confirm with the user directly** (unless their prefs set auto-approve — see below). Confirm three things:
+dispatch runs a write-capable subprocess, so **before the FIRST dispatch in a session you MUST confirm with the user directly** (unless their prefs set `approval mode: auto` — see below). Confirm three things:
 1. **working_dir** — the exact directory codex will edit.
 2. **Step scope** — which step(s) of the plan are being delegated.
 3. **Approval granularity** — per-step (confirm each dispatch) vs batch (approve the whole plan once, then dispatch its steps under one `plan_id`).
 
 Read `claude-agent-kit--dispatch-prefs.md`:
-- `approval: ask` (default) → run the confirmation above before the first dispatch.
-- `approval: auto` → the user has pre-authorized; you may skip the interactive confirmation. The server's hard guards still apply.
+- `approval mode: ask` (default) → run the confirmation above before the first dispatch.
+- `approval mode: auto` → the user has pre-authorized; you may skip the interactive confirmation. The server's hard guards still apply.
 
 After the first-dispatch confirmation, follow the agreed granularity for the rest of the session. A genuinely new working_dir or a materially wider scope than agreed is a fresh confirmation.
 
@@ -65,4 +77,4 @@ Rejections come back as a **structured error** — `{ "error": { "code", "messag
 
 ## Cost & cleanup
 
-Each dispatch consumes the backend's third-party API quota and runs autonomously. Don't fan out speculative dispatches; delegate the steps the user approved. If you cancel, confirm the task reached `cancelled` via `dispatch_status`.
+Each dispatch consumes the backend's third-party API quota and runs autonomously. Don't fan out speculative dispatches; delegate the steps allowed by the execution policy and approval gate. If you cancel, confirm the task reached `cancelled` via `dispatch_status`.

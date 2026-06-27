@@ -2,10 +2,10 @@
 # configure-dispatch.sh — interactive configuration step for the `dispatch` MCP
 # server. Mirrors configure-aside.sh; shared helpers live in cak-common.sh.
 #
-# Sourced-helper model: prompts for approval mode, granularity, default model,
-# and reasoning effort, then renders the dispatch-prefs template. Reads /dev/tty
-# when stdin is not a terminal (so curl|sh works). Every prompt is skippable via
-# a DISPATCH_* env var; when a var is set AND non-empty no prompt is shown.
+# Sourced-helper model: prompts for execution policy, approval mode, granularity,
+# default model, and reasoning effort, then renders the dispatch-prefs template.
+# Reads /dev/tty when stdin is not a terminal (so curl|sh works). Every prompt is
+# skippable via a DISPATCH_* env var; when a var is set no prompt is shown.
 #
 # Required caller env:
 #   CLAUDE_DIR     e.g. $HOME/.claude
@@ -14,6 +14,7 @@
 #   TEMPLATE_SRC   path or URL to claude-agent-kit--dispatch-prefs.md.tmpl
 #
 # Honored env overrides (when set, suppress the corresponding prompt):
+#   DISPATCH_POLICY        conservative|preference-only|proactive
 #   DISPATCH_APPROVAL      ask|auto
 #   DISPATCH_GRANULARITY   per-step|batch|ask
 #   DISPATCH_MODEL         freeform model string or empty
@@ -84,6 +85,11 @@ if [ "$KEEP_PREFS" = "no" ]; then
     echo "(set DISPATCH_* env vars to run fully non-interactively)" >&2
     echo "" >&2
 
+    prompt_with_default POLICY DISPATCH_POLICY \
+        "Execution policy [conservative/preference-only/proactive] (default: conservative):" \
+        "conservative" \
+        'conservative|preference-only|proactive'
+
     prompt_with_default APPROVAL DISPATCH_APPROVAL \
         "Approval mode [ask/auto] (default: ask):" \
         "ask" \
@@ -127,6 +133,7 @@ if [ "$KEEP_PREFS" = "no" ]; then
     fi
 
     sed \
+        -e "s/{{POLICY}}/$(sed_escape "$POLICY")/g" \
         -e "s/{{APPROVAL}}/$(sed_escape "$APPROVAL")/g" \
         -e "s/{{GRANULARITY}}/$(sed_escape "$GRANULARITY")/g" \
         -e "s/{{MODEL}}/$(sed_escape "$MODEL")/g" \
@@ -156,6 +163,7 @@ else
     cat >&2 <<SUMMARY
 
 Dispatch preferences configured:
+  execution policy:        $POLICY
   approval mode:           $APPROVAL
   default granularity:     $GRANULARITY
   default model / effort:  ${MODEL:-<CLI default>} / ${EFFORT:-<CLI default>}

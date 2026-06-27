@@ -172,7 +172,7 @@ done
 
 echo ""
 echo "Installed:"
-echo "  Binaries: $BIN_DIR/workslate, $BIN_DIR/aside"
+echo "  Binaries: $BIN_DIR/workslate, $BIN_DIR/aside, $BIN_DIR/dispatch"
 echo "  Config:   $CLAUDE_DIR/CLAUDE.md"
 echo "  Rules:    $RULES_DIR/claude-agent-kit--*.md"
 echo ""

@@ -4,6 +4,20 @@ All notable changes to Claude Agent Kit are documented here. Format loosely base
 
 Version numbers track the `Version` field in `CLAUDE.md`. Most entries correspond to operating-manual revisions and accompanying MCP server changes; the two ship together.
 
+## [9.1.0] - 2026-06-27
+
+Dispatch now has an explicit **execution policy** preference, parallel to aside's auto-call policy but still constrained by dispatch's write-capable approval gate. The user-owned `claude-agent-kit--dispatch-prefs.md` template now records `conservative` / `preference-only` / `proactive`: conservative only dispatches on explicit request or direct approval; preference-only applies dispatch defaults when the user asks for execution delegation without naming a surface; proactive instructs Claude to initiate suitable execution steps. The existing approval mode remains separate: `approval mode: ask` still confirms working_dir + step scope + approval granularity before the first submit, while `approval mode: auto` pre-authorizes that prompt within server-enforced guards.
+
+**Rules and surface metadata.** `claude-agent-kit--dispatch.md` now defines when dispatch may be initiated, including proactive triggers (isolated mechanical edits, long-running verification/fix loops, well-scoped repetitive sweeps, and independent plan steps with clear acceptance criteria) and explicit non-triggers (ambiguous product scope, overlapping local/user edits, tight interactive judgment, or tasks that cannot be written as one self-contained dispatch spec). `CLAUDE.md`, the README, and the dispatch MCP tool/server descriptions were updated so agents see the execution-policy vs approval-gate split at both rule-reading and tool-selection time.
+
+**Installer/config wiring.** `scripts/configure-dispatch.sh` and `install.ps1` now accept `DISPATCH_POLICY`, prompt for it during dispatch configuration, render `{{POLICY}}`, and include the selected execution policy in summaries. Install output and README install text were also corrected to consistently mention the `dispatch` binary and the aside + dispatch preference prompts.
+
+**Configuration robustness.** The shared shell helper `scripts/cak-common.sh` now validates `/dev/tty` by opening it before treating the session as interactive. This avoids noisy prompt attempts in environments where `/dev/tty` exists but cannot be opened, while preserving interactive prompting when a real TTY is available.
+
+Verification in-session: `sh -n` for the relevant shell scripts, proactive and default dispatch-prefs render smoke tests, aside-prefs render smoke test after the shared TTY change, `cargo fmt --check -p dispatch`, `cargo check -p dispatch`, `cargo test -p dispatch`, and `git diff --check` all passed. PowerShell parsing and `shellcheck` were not run because `pwsh` and `shellcheck` were not installed in the environment.
+
+Version bumped 9.0.0 → 9.1.0 (minor — new dispatch execution-policy preference plus install/config/rule integration).
+
 ## [9.0.0] - 2026-06-26
 
 New `dispatch` MCP server — a third delegation surface. Where `aside` asks another model family for a read-only second opinion (horizontal consultation), `dispatch` hands an execution *step* to an external coding agent (codex) running as a headless, write-capable subprocess (hierarchical delegation). Adds `mcp-servers/dispatch/` (Rust, rmcp), a new rule file, a user-owned prefs file, and the `CLAUDE.md` / `README` / build-script wiring. Design pressure-tested with `aside_codex` (gpt-5.5 / xhigh) and built-in `advisor()`; the MCP-protocol paths (boot, tools/list, backends probe, every input guard) and the unit tests (cross-connection concurrency guard, rollout curation/paging) were verified in-session, and the full codex round-trip — submit → run → `succeeded`, a live curated log tail while `running`, and session-resume steering — was verified end-to-end against real codex. Propagates on next `make install`.

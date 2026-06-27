@@ -13,7 +13,7 @@
 # Read a line into the named variable, from /dev/tty when available.
 read_tty() {
     _rt_target="$1"
-    if [ -r /dev/tty ]; then
+    if have_tty; then
         # shellcheck disable=SC2229
         read -r "$_rt_target" < /dev/tty || return 1
     else
@@ -24,7 +24,7 @@ read_tty() {
 
 # True when an interactive terminal is reachable (so curl|sh can still prompt).
 have_tty() {
-    [ -r /dev/tty ]
+    [ -r /dev/tty ] && [ -w /dev/tty ] && { : < /dev/tty; } 2>/dev/null
 }
 
 # Prompt with a default; honor an env override if the named variable is set

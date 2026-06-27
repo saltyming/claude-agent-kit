@@ -153,7 +153,7 @@ foreach ($f in $RuleFiles) {
 
 Write-Host ""
 Write-Host "Installed:"
-Write-Host "  Binaries: $BinDir\workslate.exe, $BinDir\aside.exe"
+Write-Host "  Binaries: $BinDir\workslate.exe, $BinDir\aside.exe, $BinDir\dispatch.exe"
 Write-Host "  Config:   $claudeDest"
 Write-Host "  Rules:    $RulesDir\claude-agent-kit--*.md"
 Write-Host ""
@@ -315,6 +315,7 @@ if (-not $keepDispatchPrefs) {
     Write-Host "(set DISPATCH_* environment variables to run non-interactively)"
     Write-Host ""
 
+    $dispPolicy      = Prompt-WithDefault "Execution policy [conservative/preference-only/proactive] (default conservative)" "DISPATCH_POLICY"      "conservative" '^(conservative|preference-only|proactive)$'
     $dispApproval    = Prompt-WithDefault "Approval mode [ask/auto] (default ask)"                          "DISPATCH_APPROVAL"    "ask" '^(ask|auto)$'
     $dispGranularity = Prompt-WithDefault "Default approval granularity [per-step/batch/ask] (default ask)" "DISPATCH_GRANULARITY" "ask" '^(per-step|batch|ask)$'
     $dispModel       = Prompt-WithDefault "Default model for codex (blank for CLI default)"                 "DISPATCH_MODEL"       ""    $null
@@ -324,6 +325,7 @@ if (-not $keepDispatchPrefs) {
     $dtmplTmp = New-TemporaryFile
     Invoke-WebRequest -Uri $dtmplUrl -OutFile $dtmplTmp.FullName
     $dtmplContent = Get-Content $dtmplTmp.FullName -Raw
+    $dtmplContent = $dtmplContent.Replace("{{POLICY}}",      $dispPolicy)
     $dtmplContent = $dtmplContent.Replace("{{APPROVAL}}",    $dispApproval)
     $dtmplContent = $dtmplContent.Replace("{{GRANULARITY}}", $dispGranularity)
     $dtmplContent = $dtmplContent.Replace("{{MODEL}}",       $dispModel)
@@ -335,6 +337,8 @@ if (-not $keepDispatchPrefs) {
     $existingManifest = if (Test-Path $Manifest) { Get-Content $Manifest } else { @() }
     if ($existingManifest -notcontains $dispatchPrefsDest) { Add-Content $Manifest $dispatchPrefsDest }
     Write-Host "  Wrote $dispatchPrefsDest"
+    Write-Host "  Dispatch execution policy: $dispPolicy"
+    Write-Host "  Dispatch approval mode:    $dispApproval"
 }
 
 # Shared custom-rules ingestion — a function (parity with cak-common.sh's

@@ -83,7 +83,7 @@ struct Dispatch {
 #[tool_router]
 impl Dispatch {
     #[tool(
-        description = "Delegate ONE execution step to a coding-agent backend (codex) running as a headless, WRITE-CAPABLE subprocess in `working_dir` — codex may modify files there. Runs ASYNCHRONOUSLY: returns a task id immediately; poll dispatch_status(id) for progress and the result. Provide a structured spec — objective (required), working_dir (required, absolute), and optional target_files / constraints / acceptance — plus optional free-form context / details; the server renders them into the codex prompt. working_dir is rejected unless it canonicalizes within the project root (widen with the DISPATCH_EXTRA_ROOTS env var). sandbox defaults to workspace-write; danger-full-access is rejected unless the server enables it. One active run per working_dir unless allow_concurrent=true. APPROVAL: before the FIRST dispatch in a session, confirm working_dir + the step scope + the approval mode with the user per claude-agent-kit--dispatch.md (skip only if the user's prefs set auto-approve)."
+        description = "Delegate ONE execution step to a coding-agent backend (codex) running as a headless, WRITE-CAPABLE subprocess in `working_dir` — codex may modify files there. Runs ASYNCHRONOUSLY: returns a task id immediately; poll dispatch_status(id) for progress and the result. Provide a structured spec — objective (required), working_dir (required, absolute), and optional target_files / constraints / acceptance — plus optional free-form context / details; the server renders them into the codex prompt. working_dir is rejected unless it canonicalizes within the project root (widen with the DISPATCH_EXTRA_ROOTS env var). sandbox defaults to workspace-write; danger-full-access is rejected unless the server enables it. One active run per working_dir unless allow_concurrent=true. POLICY: initiate dispatch according to claude-agent-kit--dispatch-prefs.md (`conservative` / `preference-only` / `proactive`). APPROVAL: before the FIRST dispatch in a session, confirm working_dir + the step scope + the approval mode with the user when approval mode is ask; skip that confirmation only when approval mode is auto."
     )]
     async fn dispatch_submit(
         &self,
@@ -1057,10 +1057,10 @@ impl ServerHandler for Dispatch {
              hard guards a misbehaving model cannot bypass: working_dir must canonicalize within \
              the project root (or a DISPATCH_EXTRA_ROOTS-allowlisted root), the sandbox ceiling \
              blocks danger-full-access unless DISPATCH_ALLOW_DANGER is set, and only one run is \
-             allowed per working_dir unless allow_concurrent. The behavioral approval gate — \
-             confirming working_dir, step scope, and approval mode with the user before the first \
-             dispatch of a session — lives in claude-agent-kit--dispatch.md and \
-             claude-agent-kit--dispatch-prefs.md.",
+             allowed per working_dir unless allow_concurrent. The behavioral dispatch policy — \
+             when to initiate dispatch, and whether to confirm working_dir, step scope, and \
+             approval mode before the first dispatch of a session — lives in \
+             claude-agent-kit--dispatch.md and claude-agent-kit--dispatch-prefs.md.",
         )
     }
 
