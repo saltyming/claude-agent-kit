@@ -1,7 +1,7 @@
 <!-- claude-agent-kit -->
 # Claude Agent Operating Manual
 
-**Version**: 9.1.0
+**Version**: 9.1.1
 **Last Updated**: 2026-06-27
 
 > Global operating rules for AI coding agents. Focuses on user-specific preferences and overrides — general tool usage, security, and communication rules are handled by the system prompt.

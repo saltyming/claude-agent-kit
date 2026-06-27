@@ -167,6 +167,19 @@ pub fn window(
     start: Option<usize>,
     end: Option<usize>,
 ) -> (String, usize, usize, bool) {
+    window_with_limits(lines, start, end, DEFAULT_TAIL_LINES, RENDER_BYTE_CAP)
+}
+
+/// Slice rendered lines with caller-specified default tail and byte cap. This is
+/// used by `dispatch_wait` to include a small progress tail without returning the
+/// larger `dispatch_logs` default window.
+pub fn window_with_limits(
+    lines: &[String],
+    start: Option<usize>,
+    end: Option<usize>,
+    default_tail_lines: usize,
+    byte_cap: usize,
+) -> (String, usize, usize, bool) {
     let total = lines.len();
     if total == 0 {
         return (String::new(), 0, 0, false);
@@ -175,14 +188,14 @@ pub fn window(
         (Some(s), Some(e)) => (s, e),
         (Some(s), None) => (s, total),
         (None, Some(e)) => (1, e),
-        (None, None) => (total.saturating_sub(DEFAULT_TAIL_LINES) + 1, total),
+        (None, None) => (total.saturating_sub(default_tail_lines) + 1, total),
     };
     s = s.clamp(1, total);
     e = e.clamp(s, total);
     let mut text = lines[(s - 1)..=(e - 1)].join("\n");
     let mut capped = false;
-    if text.len() > RENDER_BYTE_CAP {
-        text = text.chars().take(RENDER_BYTE_CAP).collect();
+    if text.len() > byte_cap {
+        text = text.chars().take(byte_cap).collect();
         text.push_str("\n…[truncated at byte cap — narrow the line range]");
         capped = true;
     }
@@ -500,6 +513,20 @@ mod tests {
         // out-of-range clamps
         let (_t2, s3, e3, _) = window(&lines, Some(8), Some(99));
         assert_eq!((s3, e3), (8, 10));
+    }
+
+    #[test]
+    fn window_with_limits_uses_custom_tail_and_byte_cap() {
+        let lines: Vec<String> = (1..=10).map(|i| format!("line {i}")).collect();
+        let (txt, s, e, capped) = window_with_limits(&lines, None, None, 3, 1024);
+        assert_eq!((s, e), (8, 10));
+        assert_eq!(txt, "line 8\nline 9\nline 10");
+        assert!(!capped);
+
+        let long = vec!["abcdef".to_string(), "ghijkl".to_string()];
+        let (txt, _s, _e, capped) = window_with_limits(&long, None, None, 2, 5);
+        assert!(capped);
+        assert!(txt.starts_with("abcde"));
     }
 
     // ── rollout locating ──────────────────────────────────

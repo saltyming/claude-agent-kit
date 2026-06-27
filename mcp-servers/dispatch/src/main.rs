@@ -53,6 +53,8 @@ const STEER_TERMINATE_WAIT_MS: u64 = 30_000;
 const WAIT_MAX_TIMEOUT_MS: u64 = 120_000;
 const WAIT_DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const WAIT_POLL_INTERVAL_MS: u64 = 300;
+const WAIT_LOG_TAIL_LINES: usize = 30;
+const WAIT_LOG_BYTE_CAP: usize = 8 * 1024;
 
 /// Tolerance subtracted from a legacy task's start time when validating its rollout by
 /// mtime — absorbs clock / ordering skew between the DB timestamp and the file.
@@ -614,7 +616,7 @@ impl Dispatch {
     }
 
     #[tool(
-        description = "Bounded long-poll: block until a dispatched task reaches a terminal status (succeeded / failed / cancelled / interrupted) or timeout_ms elapses (default 30s, capped at 120s), then return the task row plus a `timed_out` flag. This is NOT an unbounded wait — a multi-minute run will time out and you simply re-invoke dispatch_wait; meanwhile you avoid busy-polling dispatch_status. Use it after dispatch_submit when the next step needs this one finished."
+        description = "Bounded long-poll: block until a dispatched task reaches a terminal status (succeeded / failed / cancelled / interrupted) or timeout_ms elapses (default 30s, capped at 120s), then return compact task status plus a small curated `log_tail` and `timed_out` flag. This is NOT an unbounded wait — a multi-minute run will time out and you simply re-invoke dispatch_wait; meanwhile you avoid busy-polling dispatch_status / dispatch_logs. Use dispatch_logs for the full timeline and dispatch_status for the full captured result/spec."
     )]
     async fn dispatch_wait(
         &self,
@@ -649,15 +651,13 @@ impl Dispatch {
                 Err(e) => return Ok(err_struct(ErrCode::DbError, format!("db error: {e}"))),
             };
             if !store::is_active(&row.status) {
-                let mut v = row.to_json(true);
-                v["timed_out"] = json!(false);
+                let v = self.wait_json(&row, waited_ms, false);
                 return Ok(json_ok(v));
             }
             if waited_ms >= timeout_ms {
-                let mut v = row.to_json(true);
-                v["timed_out"] = json!(true);
+                let mut v = self.wait_json(&row, waited_ms, true);
                 v["note"] = json!(format!(
-                    "still {} after {waited_ms}ms — re-invoke dispatch_wait to keep waiting, or poll dispatch_status",
+                    "still {} after {waited_ms}ms — re-invoke dispatch_wait to keep waiting; inspect log_tail below or call dispatch_logs for the full timeline",
                     row.status
                 ));
                 return Ok(json_ok(v));
@@ -675,6 +675,71 @@ impl Dispatch {
         self.db
             .lock()
             .map_err(|e| err_struct(ErrCode::DbError, format!("database lock poisoned: {e}")))
+    }
+
+    fn wait_json(&self, row: &store::TaskRow, waited_ms: u64, timed_out: bool) -> Value {
+        let mut v = row.to_json(false);
+        v["timed_out"] = json!(timed_out);
+        v["waited_ms"] = json!(waited_ms);
+        v["has_result"] = json!(row.result.is_some());
+        v["has_error"] = json!(row.error.is_some());
+        if let Some(err) = row
+            .error
+            .as_deref()
+            .filter(|_| !store::is_active(&row.status))
+        {
+            v["error_preview"] = json!(preview_oneline(err, 1_000));
+        }
+        v["log_tail"] = self.wait_log_tail(row);
+        v["next"] = json!({
+            "wait": format!("dispatch_wait(id={})", row.id),
+            "logs": format!("dispatch_logs(id={}) for the full curated timeline", row.id),
+            "status": format!("dispatch_status(id={}) for captured result/error/spec", row.id),
+        });
+        v
+    }
+
+    fn wait_log_tail(&self, row: &store::TaskRow) -> Value {
+        let Some(rollout_path) = self.resolve_rollout(row) else {
+            return json!({
+                "session_pending": true,
+                "total_lines": 0,
+                "shown_lines": "0-0",
+                "byte_capped": false,
+                "text": "",
+                "note": "no codex log associated yet — the run may not have written its rollout, or its association is still pending",
+            });
+        };
+        let jsonl = match rollout::read_to_string(Path::new(&rollout_path)) {
+            Ok(s) => trim_to_start_line(s, row.rollout_start_line),
+            Err(e) => {
+                return json!({
+                    "session_pending": false,
+                    "total_lines": 0,
+                    "shown_lines": "0-0",
+                    "byte_capped": false,
+                    "text": "",
+                    "error": format!("could not read rollout {rollout_path}: {e}"),
+                });
+            }
+        };
+        let kinds = rollout::default_kinds();
+        let rendered = rollout::curate(&jsonl, &kinds);
+        let (text, s, e, capped) = rollout::window_with_limits(
+            &rendered.lines,
+            None,
+            None,
+            WAIT_LOG_TAIL_LINES,
+            WAIT_LOG_BYTE_CAP,
+        );
+        json!({
+            "session_pending": false,
+            "total_lines": rendered.total,
+            "shown_lines": format!("{s}-{e}"),
+            "byte_capped": capped,
+            "kinds": kinds,
+            "text": text,
+        })
     }
 
     /// Resolve a task's codex rollout path. A cached value is trusted only if it still
@@ -888,6 +953,16 @@ fn nonempty(o: Option<String>) -> Option<String> {
 
 fn nonempty_ref(o: &Option<String>) -> Option<&str> {
     o.as_deref().map(str::trim).filter(|s| !s.is_empty())
+}
+
+fn preview_oneline(s: &str, cap: usize) -> String {
+    let one = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one.chars().count() > cap {
+        let cut: String = one.chars().take(cap).collect();
+        format!("{cut}…")
+    } else {
+        one
+    }
 }
 
 /// Monotonic counter for `make_nonce`.

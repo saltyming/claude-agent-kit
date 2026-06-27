@@ -4,6 +4,16 @@ All notable changes to Claude Agent Kit are documented here. Format loosely base
 
 Version numbers track the `Version` field in `CLAUDE.md`. Most entries correspond to operating-manual revisions and accompanying MCP server changes; the two ship together.
 
+## [9.1.1] - 2026-06-27
+
+Patch refining `dispatch_wait` output shape. The bounded long-poll now returns compact task status plus a small curated `log_tail` instead of inlining the full `dispatch_status`-style payload (`result`, `prompt`, `spec`, `argv`, owner/session metadata). This keeps wait responses useful for supervision without forcing agents to immediately call `dispatch_logs`, while avoiding large captured stdout/prompt/spec payloads in the hot wait path.
+
+**Implementation.** `dispatch_wait` now reports `timed_out`, `waited_ms`, `has_result`, `has_error`, an optional short `error_preview`, and a `log_tail` rendered from the same curated rollout timeline as `dispatch_logs`. The wait tail is deliberately smaller than the full logs default: 30 rendered lines capped at 8 KiB. `dispatch_logs` keeps its existing behavior and remains the paging/full-timeline surface. `rollout::window_with_limits` was added so the two tools can share the same slicing logic with different limits.
+
+Verification in-session: `cargo check -p dispatch`, `cargo test -p dispatch` (10 tests), `cargo fmt --check -p dispatch`, `git diff --check`, and `make build` all passed. Installed with existing aside/dispatch preferences preserved via `ASIDE_RECONFIGURE=no DISPATCH_RECONFIGURE=no CUSTOM_RULES_DIR= make install`; MCP registration attempts remained non-fatal as before.
+
+Version bumped 9.1.0 → 9.1.1 (patch — compact `dispatch_wait` payload with built-in curated log tail).
+
 ## [9.1.0] - 2026-06-27
 
 Dispatch now has an explicit **execution policy** preference, parallel to aside's auto-call policy but still constrained by dispatch's write-capable approval gate. The user-owned `claude-agent-kit--dispatch-prefs.md` template now records `conservative` / `preference-only` / `proactive`: conservative only dispatches on explicit request or direct approval; preference-only applies dispatch defaults when the user asks for execution delegation without naming a surface; proactive instructs Claude to initiate suitable execution steps. The existing approval mode remains separate: `approval mode: ask` still confirms working_dir + step scope + approval granularity before the first submit, while `approval mode: auto` pre-authorizes that prompt within server-enforced guards.
