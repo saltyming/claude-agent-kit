@@ -54,6 +54,8 @@ When a plan explicitly defers scope determination to post-inspection review, the
 
 The same rule applies when inspection reveals that the approved plan itself reserved scope selection as a post-inspection decision point (the deferral phrasings above are explicit instances; equivalent phrasings also qualify). It does **NOT** apply to *supporting work required to make the approved behavior actually work* — tests, config, imports, minor refactors needed to satisfy the spec are in-scope and proceed without a fresh approval round. *Scope change* means you want to touch files, modules, or behaviors the plan did not name **and** those changes are not required to deliver what was already approved. If uncertain which side a change falls on, ask before acting — but do not paralyze execution on routine supporting work that is clearly required to satisfy the approved deliverable.
 
+**palette note.** palette's loop runs this same checkpoint every cycle: proposing a phase/story scope is a user-facing gate — report the proposed slice, wait for explicit approval, *then* hand off to implementation. The backlog *proposes* scope; the user's approval *authorizes* it. See `claude-agent-kit--palette.md`.
+
 You MUST NOT, after completing inspection:
 
 - **Expand** the plan to cover additional files, modules, or behaviors you discovered, and implement them.
@@ -89,6 +91,8 @@ Rationale: the plan's "scope TBD" annotation is a gate, not a waiver. Treating i
 
 **Task tracking trigger (solo work):** When implementing changes that touch 2+ files or produce 2+ distinct deliverables, call `workslate_task_init` and create tasks BEFORE writing any code. This is the first implementation action. If you realize mid-work that you skipped this, stop and initialize immediately.
 
+**palette note.** In a palette-active project (`_palette/` present), the workslate tasks you create here are the tactical *projection of an already-approved story's acceptance criteria* — a translation, not a second backlog and not new scope. See `claude-agent-kit--palette.md`.
+
 **Preserve user-owned local changes.** Before editing any file, check `git status` / `git diff` for uncommitted changes. Any hunk the model did not make in this session is **user-owned**: do NOT overwrite it, do NOT assume a clean baseline, and do NOT incorporate it into your own edit without explicit authorization. If an edit you are about to make would touch or clobber a user-owned hunk, stop and ask. This applies even when the file itself is "in scope" for the current task — the user's uncommitted work has its own ownership independent of the task's file scope.
 
 **Execution Requirements:**
@@ -110,9 +114,11 @@ In this project: when a design document or implementation plan is provided, impl
 
 The system-prompt directive above governs *unsolicited* expansion — don't refactor or introduce abstractions the user didn't ask for. It does NOT authorize *contracting* the asked-for scope. Those are different axes.
 
-**[OVERRIDE]** `"ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required."`
+**palette note.** palette's thin-slicing does not license contracting an approved scope: choosing a *thinner slice* is a planning-time, user-owned scope decision (which this project already mandates) made *before* approval — not the agent shrinking work already approved. Once a slice is approved, "implement the entire scope" applies to that slice, and deferring any of it to the backlog needs explicit, specific user consent. See `claude-agent-kit--palette.md`.
 
-If the design document or task specifies creating new files, create them — the design document or task description constitutes the "explicit requirement" the system prompt asks for. This is specifically meant to suppress the agent-side failure mode of responding to "split `main.rs` into modules per the plan" by editing `main.rs` in place to avoid creating the new module files.
+**[OVERRIDE]** `"Prefer editing existing files to creating new ones."`
+
+If the design document or task specifies creating new files, create them — the design document or task description constitutes the explicit case this preference isn't meant to block. This is specifically meant to suppress the agent-side failure mode of responding to "split `main.rs` into modules per the plan" by editing `main.rs` in place to avoid creating the new module files.
 
 **Refactoring Guidelines:**
 
@@ -135,6 +141,8 @@ When NOT to refactor:
 ## Forced Spec/Plan Deviation: Re-request Approval (HARD RULE)
 
 Scope is **NEVER** reduced arbitrarily, and the agent **NEVER** decides a deviation on the user's behalf. This section is a *deviation gate*, not permission to reduce scope: when one of the three triggers below fires, you may only **pause and ask** — you may not implement the deviation, a reduction, or a preferred alternative on your own judgment.
+
+**palette note.** For a palette story, its `Done when` + `Not this story` **are** the "approved spec/plan" this gate protects. A forced deviation while implementing a story follows the same stop → preserve → propose → wait procedure; moving unmet acceptance criteria into the backlog is not an escape hatch. See `claude-agent-kit--palette.md`.
 
 The ONLY three situations that justify deviating from the approved spec/plan — **each REQUIRES you to stop and re-request EXPLICIT user approval before proceeding**:
 
@@ -267,9 +275,13 @@ This avoids the line-shifting problem: once loaded into the buffer, edits operat
 
 `position` values for `workslate_edit`:
 - omitted or `"replace"` — find old_string, replace with new_string (default)
-- `"after"` — find old_string as anchor, insert new_string after it (anchor stays)
-- `"before"` — find old_string as anchor, insert new_string before it (anchor stays)
+- `"after"` — find old_string as anchor, insert new_string **immediately** after it (anchor stays; raw byte-splice — no newline is added, so to land on a *new line* you must start new_string with `\n`)
+- `"before"` — find old_string as anchor, insert new_string **immediately** before it (anchor stays; raw byte-splice — end new_string with `\n` to keep the anchor on its own line)
+- `"after_line"` — insert new_string as its **own whole line(s)** after the line containing old_string; the newline is handled for you. Prefer this over `"after"` for line insertion — it avoids the glue-onto-the-anchor-line footgun.
+- `"before_line"` — insert new_string as its **own whole line(s)** before the line containing old_string; the newline is handled for you. Prefer this over `"before"` for line insertion.
 - `"append"` — append new_string to end of file (old_string not needed)
+
+**Insert modes keep the anchor.** `after` / `before` / `after_line` / `before_line` are inserts, not replaces — do NOT repeat old_string inside new_string (it will be duplicated). Use `"replace"` when you mean to swap the anchor out.
 
 Targeting options (apply to all position modes except append):
 - **Default** — old_string must appear exactly once in the file
@@ -371,7 +383,7 @@ These rules prevent catastrophic loss of staged work. The code enforces the firs
 
 ## Team Messaging Tools (Agent Teams)
 
-For multi-agent coordination, workslate exposes `workslate_register(role, session_id, agent_id)`, `workslate_msg_send(recipient, subject, body, urgent?, session_id?, agent_id?)`, and `workslate_inbox_read(role)`. These enable **mid-turn steering** of running teammates via per-tool-call doorbell hooks (a `PreToolUse` inbox nudge and a `PostToolUse` task footer). The **leader** registers as the reserved role `team-lead` with `agent_id=""` (the main session's identity — `SessionStart` gives only `session_id`); teammates address it as `recipient="team-lead"`. Pass `session_id` **and** `agent_id` on **every** `msg_send` — the leader and all teammates share one `session_id`, so `msg_send` **rejects** a call with a session in effect but no `agent_id` (without the guard it would collide with the leader's `(session_id, "")` row and mis-attribute as `team-lead`); the leader passes `agent_id=""`, teammates pass their `SubagentStart` agent_id. (`session_id` + `agent_id` for `register` / `task_init` come from the `SubagentStart` `[workslate]` hint — a subagent shares its parent's `session_id`, so `agent_id` is the disambiguator, and the MCP server's env id does not match the hook's, so the agent must pass both.) The full workflow (startup sequence, role addressing, role-uniqueness invariant) lives in `claude-agent-kit--parallel-work.md` → **Mid-Turn Steering & Team Messaging**. Note: task status is now surfaced by the doorbell hook on every tool call (installed by `make install`), not appended to workslate tool results.
+For multi-agent coordination, workslate exposes `workslate_register(role, session_id, agent_id)`, `workslate_msg_send(recipient, subject, body, urgent?, session_id?, agent_id?)`, and `workslate_inbox_read(role)`, enabling **mid-turn steering** of running teammates via per-tool-call doorbell hooks. The full mechanics — leader/`team-lead` identity, the `session_id`+`agent_id` requirement on every `msg_send`, startup sequence, role addressing — are canonical in `claude-agent-kit--parallel-work.md` → **Mid-Turn Steering & Team Messaging**; this is a pointer, not a restatement. Note: task status is now surfaced by the doorbell hook on every tool call (installed by `make install`), not appended to workslate tool results.
 
 ## After Completion
 

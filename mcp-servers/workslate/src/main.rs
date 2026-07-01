@@ -19,7 +19,6 @@ use rmcp::{
     service::RequestContext,
     tool, tool_router,
 };
-use serde_json;
 use sha2::{Digest, Sha256};
 use similar::{DiffOp, TextDiff};
 use tokio::sync::RwLock;
@@ -30,10 +29,10 @@ use buffer::{
 };
 use file::{MAX_FILE_SIZE, format_numbered_line, is_binary, validate_path};
 use task::{
-    InboxReadParams, MsgSendParams, Namespace, RegisterParams, TaskClearParams, TaskCreateParams,
-    TaskDoneParams, TaskId, TaskInitParams, TaskListParams, TaskStatus, TaskUpdateParams,
-    load_tasks, migrate_db, recompute_blocked_status, resolve_sender, serialize_depends_on,
-    SCHEMA_SQL,
+    InboxReadParams, MsgSendParams, Namespace, RegisterParams, SCHEMA_SQL, TaskClearParams,
+    TaskCreateParams, TaskDoneParams, TaskId, TaskInitParams, TaskListParams, TaskStatus,
+    TaskUpdateParams, load_tasks, migrate_db, recompute_blocked_status, resolve_sender,
+    serialize_depends_on,
 };
 
 // ── Content hashing ───────────────────────────────────────
@@ -95,7 +94,9 @@ impl Workslate {
 
     // ── Buffer tools ──────────────────────────────────────
 
-    #[tool(description = "Store content in a named raw buffer. If file_path is provided, returns the unified diff against that file for review. One buffer per file enforced — use a single buffer and chain edits. Buffers persist across server restarts.")]
+    #[tool(
+        description = "Store content in a named raw buffer. If file_path is provided, returns the unified diff against that file for review. One buffer per file enforced — use a single buffer and chain edits. Buffers persist across server restarts."
+    )]
     async fn workslate_write(
         &self,
         Parameters(params): Parameters<WriteParams>,
@@ -117,10 +118,7 @@ impl Workslate {
                     let unified = diff
                         .unified_diff()
                         .context_radius(DIFF_CONTEXT_RADIUS)
-                        .header(
-                            &format!("a/{}", file_path),
-                            &format!("b/{}", file_path),
-                        )
+                        .header(&format!("a/{}", file_path), &format!("b/{}", file_path))
                         .to_string();
                     let diff_str = if unified.is_empty() {
                         "No differences".to_string()
@@ -138,7 +136,11 @@ impl Workslate {
                         .map(|(i, line)| format_numbered_line(i + 1, width, line, false))
                         .collect();
                     (
-                        Some(format!("(new file: {})\n{}", file_path, numbered.join("\n"))),
+                        Some(format!(
+                            "(new file: {})\n{}",
+                            file_path,
+                            numbered.join("\n")
+                        )),
                         None,
                     )
                 }
@@ -165,7 +167,7 @@ impl Workslate {
     }
 
     #[tool(
-        description = "Stage an edit. With file_path: loads file from disk and edits (one buffer per file enforced). Without file_path: edits existing buffer content. Modes: replace (default), after/before (insert around anchor), append. Targeting: old_string (unique), match_index (Nth occurrence), line_start/line_end (line range). Returns unified diff."
+        description = "Stage an edit. With file_path: loads file from disk and edits (one buffer per file enforced). Without file_path: edits existing buffer content. Modes: replace (default), after/before (raw insert adjacent to anchor — you manage newlines), after_line/before_line (insert new_string as a whole new line after/before the anchor's line — newline handled for you), append. Targeting: old_string (unique), match_index (Nth occurrence), line_start/line_end (line range). Returns unified diff."
     )]
     async fn workslate_edit(
         &self,
@@ -175,10 +177,12 @@ impl Workslate {
             None | Some("replace") => EditMode::Replace,
             Some("after") => EditMode::After,
             Some("before") => EditMode::Before,
+            Some("after_line") => EditMode::AfterLine,
+            Some("before_line") => EditMode::BeforeLine,
             Some("append") => EditMode::Append,
             Some(other) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Invalid position '{}'. Must be: replace, after, before, append",
+                    "Invalid position '{}'. Must be: replace, after, before, after_line, before_line, append",
                     other
                 ))]));
             }
@@ -202,42 +206,43 @@ impl Workslate {
             },
         };
 
-        let (base_content, stored_file_path, stored_depends_on, stored_source_hash) = if let Some(ref file_path) = params.file_path {
-            if let Err(e) = validate_path(file_path, &self.project_root) {
-                return Ok(CallToolResult::error(vec![Content::text(e)]));
-            }
-            if let Some(err) = self.check_file_collision(&params.name, file_path).await {
-                return Ok(err);
-            }
-            match tokio::fs::read_to_string(file_path).await {
-                Ok(c) => {
-                    let hash = hash_content(&c);
-                    (c, Some(file_path.clone()), vec![], Some(hash))
+        let (base_content, stored_file_path, stored_depends_on, stored_source_hash) =
+            if let Some(ref file_path) = params.file_path {
+                if let Err(e) = validate_path(file_path, &self.project_root) {
+                    return Ok(CallToolResult::error(vec![Content::text(e)]));
                 }
-                Err(e) => {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "Failed to read '{}': {}",
-                        file_path, e
-                    ))]));
+                if let Some(err) = self.check_file_collision(&params.name, file_path).await {
+                    return Ok(err);
                 }
-            }
-        } else {
-            let buffers = self.buffers.read().await;
-            match buffers.get(&params.name) {
-                Some(buf) => (
-                    buf.content.clone(),
-                    buf.file_path.clone(),
-                    buf.depends_on.clone(),
-                    buf.source_hash.clone(),
-                ),
-                None => {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "No buffer '{}' and no file_path provided",
-                        params.name
-                    ))]));
+                match tokio::fs::read_to_string(file_path).await {
+                    Ok(c) => {
+                        let hash = hash_content(&c);
+                        (c, Some(file_path.clone()), vec![], Some(hash))
+                    }
+                    Err(e) => {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Failed to read '{}': {}",
+                            file_path, e
+                        ))]));
+                    }
                 }
-            }
-        };
+            } else {
+                let buffers = self.buffers.read().await;
+                match buffers.get(&params.name) {
+                    Some(buf) => (
+                        buf.content.clone(),
+                        buf.file_path.clone(),
+                        buf.depends_on.clone(),
+                        buf.source_hash.clone(),
+                    ),
+                    None => {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "No buffer '{}' and no file_path provided",
+                            params.name
+                        ))]));
+                    }
+                }
+            };
 
         let diff_header_path = stored_file_path.as_deref().unwrap_or(&params.name);
 
@@ -293,7 +298,9 @@ impl Workslate {
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
-    #[tool(description = "Read a buffer by name, or read a file from disk with line numbers. Provide either name (buffer) or file_path (file), not both.")]
+    #[tool(
+        description = "Read a buffer by name, or read a file from disk with line numbers. Provide either name (buffer) or file_path (file), not both."
+    )]
     async fn workslate_read(
         &self,
         Parameters(params): Parameters<ReadParams>,
@@ -304,12 +311,15 @@ impl Workslate {
                 match buffers.get(name) {
                     Some(buf) => {
                         let header = match &buf.file_path {
-                            Some(fp) => format!("[target: {}] {} lines", fp, buf.content.lines().count()),
+                            Some(fp) => {
+                                format!("[target: {}] {} lines", fp, buf.content.lines().count())
+                            }
                             None => format!("{} lines", buf.content.lines().count()),
                         };
-                        Ok(CallToolResult::success(vec![Content::text(
-                            format!("{}\n{}", header, buf.content),
-                        )]))
+                        Ok(CallToolResult::success(vec![Content::text(format!(
+                            "{}\n{}",
+                            header, buf.content
+                        ))]))
                     }
                     None => Ok(CallToolResult::error(vec![Content::text(format!(
                         "Buffer '{}' not found",
@@ -493,9 +503,23 @@ impl Workslate {
                         hunks += 1;
                         for op in &group {
                             match op {
-                                DiffOp::Insert { new_index: _, new_len, .. } => adds += new_len,
-                                DiffOp::Delete { old_index: _, old_len, .. } => dels += old_len,
-                                DiffOp::Replace { old_index: _, old_len, new_index: _, new_len, .. } => {
+                                DiffOp::Insert {
+                                    new_index: _,
+                                    new_len,
+                                    ..
+                                } => adds += new_len,
+                                DiffOp::Delete {
+                                    old_index: _,
+                                    old_len,
+                                    ..
+                                } => dels += old_len,
+                                DiffOp::Replace {
+                                    old_index: _,
+                                    old_len,
+                                    new_index: _,
+                                    new_len,
+                                    ..
+                                } => {
                                     dels += old_len;
                                     adds += new_len;
                                 }
@@ -503,19 +527,17 @@ impl Workslate {
                             }
                         }
                     }
-                    return Ok(CallToolResult::success(vec![Content::text(
-                        format!("{} hunk(s), +{}/-{} lines (target: {})", hunks, adds, dels, file_path)
-                    )]));
+                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                        "{} hunk(s), +{}/-{} lines (target: {})",
+                        hunks, adds, dels, file_path
+                    ))]));
                 }
 
                 let diff = TextDiff::from_lines(&old_text, &buffer.content);
                 let unified = diff
                     .unified_diff()
                     .context_radius(DIFF_CONTEXT_RADIUS)
-                    .header(
-                        &format!("a/{}", file_path),
-                        &format!("b/{}", file_path),
-                    )
+                    .header(&format!("a/{}", file_path), &format!("b/{}", file_path))
                     .to_string();
 
                 if unified.is_empty() {
@@ -529,9 +551,10 @@ impl Workslate {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 if params.summary.unwrap_or(false) {
                     let line_count = buffer.content.lines().count();
-                    return Ok(CallToolResult::success(vec![Content::text(
-                        format!("new file, {} lines (target: {})", line_count, file_path)
-                    )]));
+                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                        "new file, {} lines (target: {})",
+                        line_count, file_path
+                    ))]));
                 }
 
                 let line_count = buffer.content.lines().count();
@@ -575,21 +598,28 @@ impl Workslate {
         drop(buffers);
 
         let apply_file_path = params.file_path.as_deref().or(buffer.file_path.as_deref());
-        if let Some(fp) = apply_file_path {
-            if let Err(e) = validate_path(fp, &self.project_root) {
-                return Ok(CallToolResult::error(vec![Content::text(e)]));
-            }
+        if let Some(fp) = apply_file_path
+            && let Err(e) = validate_path(fp, &self.project_root)
+        {
+            return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
 
         if !buffer.depends_on.is_empty() {
             let applied = self.applied_buffers.read().await;
-            let unapplied: Vec<&String> = buffer.depends_on.iter()
+            let unapplied: Vec<&String> = buffer
+                .depends_on
+                .iter()
                 .filter(|dep| !applied.contains(*dep))
                 .collect();
             if !unapplied.is_empty() {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Cannot apply '{}': unapplied dependencies: {}",
-                    params.name, unapplied.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                    params.name,
+                    unapplied
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ))]));
             }
         }
@@ -608,32 +638,32 @@ impl Workslate {
         // This catches silent data loss when another process (teammate,
         // user, formatter) edited the file behind workslate's back.
         // Skip when force=true or no hash was recorded (new-file writes).
-        if !params.force.unwrap_or(false) {
-            if let Some(ref recorded_hash) = buffer.source_hash {
-                match tokio::fs::read(&file_path).await {
-                    Ok(current_bytes) => {
-                        let current_hash = hash_bytes(&current_bytes);
-                        if &current_hash != recorded_hash {
-                            return Ok(CallToolResult::error(vec![Content::text(format!(
-                                "Stale buffer: '{}' was loaded from '{}' but the file has been modified since. \
-                                 Review with workslate_diff, then either re-stage the edit or apply with force=true.",
-                                params.name, file_path
-                            ))]));
-                        }
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+        if !params.force.unwrap_or(false)
+            && let Some(ref recorded_hash) = buffer.source_hash
+        {
+            match tokio::fs::read(&file_path).await {
+                Ok(current_bytes) => {
+                    let current_hash = hash_bytes(&current_bytes);
+                    if &current_hash != recorded_hash {
                         return Ok(CallToolResult::error(vec![Content::text(format!(
-                            "Stale buffer: '{}' was loaded from '{}' but the file no longer exists. \
-                             Apply with force=true to recreate it, or clear the buffer.",
+                            "Stale buffer: '{}' was loaded from '{}' but the file has been modified since. \
+                                 Review with workslate_diff, then either re-stage the edit or apply with force=true.",
                             params.name, file_path
                         ))]));
                     }
-                    Err(e) => {
-                        return Ok(CallToolResult::error(vec![Content::text(format!(
-                            "Failed to check '{}' for stale buffer detection: {}",
-                            file_path, e
-                        ))]));
-                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Stale buffer: '{}' was loaded from '{}' but the file no longer exists. \
+                             Apply with force=true to recreate it, or clear the buffer.",
+                        params.name, file_path
+                    ))]));
+                }
+                Err(e) => {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Failed to check '{}' for stale buffer detection: {}",
+                        file_path, e
+                    ))]));
                 }
             }
         }
@@ -649,8 +679,7 @@ impl Workslate {
                 }
             };
 
-            let matches: Vec<_> =
-                file_content.match_indices(old_string.as_str()).collect();
+            let matches: Vec<_> = file_content.match_indices(old_string.as_str()).collect();
             if matches.is_empty() {
                 return Ok(CallToolResult::error(vec![Content::text(
                     "old_string not found in file".to_string(),
@@ -668,12 +697,17 @@ impl Workslate {
             if params.dry_run.unwrap_or(false) {
                 let line_count = final_content.lines().count();
                 let width = line_count.max(1).to_string().len();
-                let numbered: Vec<String> = final_content.lines().enumerate()
+                let numbered: Vec<String> = final_content
+                    .lines()
+                    .enumerate()
                     .map(|(i, line)| format_numbered_line(i + 1, width, line, false))
                     .collect();
-                return Ok(CallToolResult::success(vec![Content::text(
-                    format!("Dry run: would write to '{}' ({} lines)\n{}", file_path, line_count, numbered.join("\n"))
-                )]));
+                return Ok(CallToolResult::success(vec![Content::text(format!(
+                    "Dry run: would write to '{}' ({} lines)\n{}",
+                    file_path,
+                    line_count,
+                    numbered.join("\n")
+                ))]));
             }
 
             if let Err(e) = tokio::fs::write(&file_path, &final_content).await {
@@ -683,7 +717,10 @@ impl Workslate {
                 ))]));
             }
 
-            self.applied_buffers.write().await.insert(params.name.clone());
+            self.applied_buffers
+                .write()
+                .await
+                .insert(params.name.clone());
             self.buffers.write().await.remove(&params.name);
             self.delete_buffer(&params.name);
 
@@ -697,24 +734,28 @@ impl Workslate {
             if params.dry_run.unwrap_or(false) {
                 let line_count = final_content.lines().count();
                 let width = line_count.max(1).to_string().len();
-                let numbered: Vec<String> = final_content.lines().enumerate()
+                let numbered: Vec<String> = final_content
+                    .lines()
+                    .enumerate()
                     .map(|(i, line)| format_numbered_line(i + 1, width, line, false))
                     .collect();
-                return Ok(CallToolResult::success(vec![Content::text(
-                    format!("Dry run: would write to '{}' ({} lines)\n{}", file_path, line_count, numbered.join("\n"))
-                )]));
+                return Ok(CallToolResult::success(vec![Content::text(format!(
+                    "Dry run: would write to '{}' ({} lines)\n{}",
+                    file_path,
+                    line_count,
+                    numbered.join("\n")
+                ))]));
             }
 
-            if let Some(parent) = std::path::Path::new(&file_path).parent() {
-                if !parent.exists() {
-                    if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                        return Ok(CallToolResult::error(vec![Content::text(format!(
-                            "Failed to create directory '{}': {}",
-                            parent.display(),
-                            e
-                        ))]));
-                    }
-                }
+            if let Some(parent) = std::path::Path::new(&file_path).parent()
+                && !parent.exists()
+                && let Err(e) = tokio::fs::create_dir_all(parent).await
+            {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to create directory '{}': {}",
+                    parent.display(),
+                    e
+                ))]));
             }
 
             if let Err(e) = tokio::fs::write(&file_path, &final_content).await {
@@ -724,7 +765,10 @@ impl Workslate {
                 ))]));
             }
 
-            self.applied_buffers.write().await.insert(params.name.clone());
+            self.applied_buffers
+                .write()
+                .await
+                .insert(params.name.clone());
             self.buffers.write().await.remove(&params.name);
             self.delete_buffer(&params.name);
 
@@ -735,7 +779,9 @@ impl Workslate {
         }
     }
 
-    #[tool(description = "Clear a buffer. Pass `name` to clear a specific buffer. To clear ALL staged buffers, pass `all=true` explicitly — there is no bare-call shortcut, to prevent accidental wipes of team/shared staging areas.")]
+    #[tool(
+        description = "Clear a buffer. Pass `name` to clear a specific buffer. To clear ALL staged buffers, pass `all=true` explicitly — there is no bare-call shortcut, to prevent accidental wipes of team/shared staging areas."
+    )]
     async fn workslate_clear(
         &self,
         Parameters(params): Parameters<ClearParams>,
@@ -806,7 +852,9 @@ impl Workslate {
 
     // ── Search tool ──────────────────────────────────────
 
-    #[tool(description = "Search a file for a pattern and return matches with line numbers. Plain substring match by default; set regex=true for regex (e.g. 'FOO|BAR', 'fn\\s+\\w+'). Use the Summary line numbers with workslate_edit's line_start/line_end for precise edits.")]
+    #[tool(
+        description = "Search a file for a pattern and return matches with line numbers. Plain substring match by default; set regex=true for regex (e.g. 'FOO|BAR', 'fn\\s+\\w+'). Use the Summary line numbers with workslate_edit's line_start/line_end for precise edits."
+    )]
     async fn workslate_search(
         &self,
         Parameters(params): Parameters<SearchParams>,
@@ -919,9 +967,9 @@ impl Workslate {
             let ctx_end = (idx + ctx + 1).min(lines.len());
 
             output.push(format!("Match {} (line {}):", match_num + 1, line_1based));
-            for i in ctx_start..ctx_end {
+            for (i, &line) in lines.iter().enumerate().take(ctx_end).skip(ctx_start) {
                 let is_match_line = i == idx;
-                output.push(format_numbered_line(i + 1, width, lines[i], is_match_line));
+                output.push(format_numbered_line(i + 1, width, line, is_match_line));
             }
             output.push(String::new());
         }
@@ -951,12 +999,16 @@ impl Workslate {
 
     // ── Task tools ────────────────────────────────────────
 
-    #[tool(description = "Create a task. namespace: 'ws' (default) or 'team'. Returns namespaced ID like ws:1 or team:3.")]
+    #[tool(
+        description = "Create a task. namespace: 'ws' (default) or 'team'. Returns namespaced ID like ws:1 or team:3."
+    )]
     async fn workslate_task_create(
         &self,
         Parameters(params): Parameters<TaskCreateParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if let Err(e) = self.require_session().await { return Ok(e); }
+        if let Err(e) = self.require_session().await {
+            return Ok(e);
+        }
         let session = self.active_session.read().await.clone().unwrap();
         let ns_str = params.namespace.as_deref().unwrap_or("ws");
         let ns = match Namespace::parse(ns_str) {
@@ -977,25 +1029,35 @@ impl Workslate {
             vec![]
         };
 
-        let mut conn = match self.lock_db() { Ok(c) => c, Err(e) => return Ok(e) };
+        let mut conn = match self.lock_db() {
+            Ok(c) => c,
+            Err(e) => return Ok(e),
+        };
 
         // Validate dependencies BEFORE opening a transaction: an early return
         // inside an open transaction would leak it onto the shared connection
         // and corrupt later writes from this and other agent instances.
         for dep in &deps {
-            let exists: bool = conn.query_row(
-                "SELECT COUNT(*) > 0 FROM tasks WHERE session = ? AND namespace = ? AND id = ?",
-                rusqlite::params![session, dep.namespace.as_str(), dep.id],
-                |row| row.get(0),
-            ).unwrap_or(false);
+            let exists: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) > 0 FROM tasks WHERE session = ? AND namespace = ? AND id = ?",
+                    rusqlite::params![session, dep.namespace.as_str(), dep.id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(false);
             if !exists {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "depends_on references non-existent task: {}", dep
+                    "depends_on references non-existent task: {}",
+                    dep
                 ))]));
             }
         }
 
-        let status = if deps.is_empty() { "pending" } else { "blocked" };
+        let status = if deps.is_empty() {
+            "pending"
+        } else {
+            "blocked"
+        };
         let deps_json = serialize_depends_on(&deps);
 
         // RAII transaction: any early return below drops `tx`, rolling back.
@@ -1006,12 +1068,15 @@ impl Workslate {
         tx.execute(
             "INSERT OR IGNORE INTO task_counters (session, namespace, next_id) VALUES (?, ?, 1)",
             rusqlite::params![session, ns.as_str()],
-        ).ok();
-        let id: u32 = tx.query_row(
-            "SELECT next_id FROM task_counters WHERE session = ? AND namespace = ?",
-            rusqlite::params![session, ns.as_str()],
-            |row| row.get(0),
-        ).map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        )
+        .ok();
+        let id: u32 = tx
+            .query_row(
+                "SELECT next_id FROM task_counters WHERE session = ? AND namespace = ?",
+                rusqlite::params![session, ns.as_str()],
+                |row| row.get(0),
+            )
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
         tx.execute(
             "INSERT INTO tasks (session, namespace, id, name, description, status, owner, depends_on) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1021,7 +1086,8 @@ impl Workslate {
         tx.execute(
             "UPDATE task_counters SET next_id = ? WHERE session = ? AND namespace = ?",
             rusqlite::params![id + 1, session, ns.as_str()],
-        ).ok();
+        )
+        .ok();
 
         tx.commit()
             .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
@@ -1032,23 +1098,31 @@ impl Workslate {
 
         let task_id = TaskId { namespace: ns, id };
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Task {} created: {}", task_id, params.name
+            "Task {} created: {}",
+            task_id, params.name
         ))]))
     }
 
-    #[tool(description = "Mark a task as done. ID format: 3, ws:3, or team:3. Automatically unblocks dependent tasks.")]
+    #[tool(
+        description = "Mark a task as done. ID format: 3, ws:3, or team:3. Automatically unblocks dependent tasks."
+    )]
     async fn workslate_task_done(
         &self,
         Parameters(params): Parameters<TaskDoneParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if let Err(e) = self.require_session().await { return Ok(e); }
+        if let Err(e) = self.require_session().await {
+            return Ok(e);
+        }
         let session = self.active_session.read().await.clone().unwrap();
         let tid = match TaskId::parse(&params.id) {
             Ok(t) => t,
             Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
         };
 
-        let conn = match self.lock_db() { Ok(c) => c, Err(e) => return Ok(e) };
+        let conn = match self.lock_db() {
+            Ok(c) => c,
+            Err(e) => return Ok(e),
+        };
         let affected = conn.execute(
             "UPDATE tasks SET status = 'done', updated_at = datetime('now') WHERE session = ? AND namespace = ? AND id = ?",
             rusqlite::params![session, tid.namespace.as_str(), tid.id],
@@ -1056,46 +1130,58 @@ impl Workslate {
 
         if affected == 0 {
             return Ok(CallToolResult::error(vec![Content::text(format!(
-                "Task {} not found", tid
+                "Task {} not found",
+                tid
             ))]));
         }
 
-        let name: String = conn.query_row(
-            "SELECT name FROM tasks WHERE session = ? AND namespace = ? AND id = ?",
-            rusqlite::params![session, tid.namespace.as_str(), tid.id],
-            |row| row.get(0),
-        ).unwrap_or_default();
+        let name: String = conn
+            .query_row(
+                "SELECT name FROM tasks WHERE session = ? AND namespace = ? AND id = ?",
+                rusqlite::params![session, tid.namespace.as_str(), tid.id],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
 
         if let Err(e) = recompute_blocked_status(&conn, &session) {
             tracing::warn!("Failed to recompute blocked status: {}", e);
         }
 
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Task {} done: {}", tid, name
+            "Task {} done: {}",
+            tid, name
         ))]))
     }
 
-    #[tool(description = "Update a task's status, description, or owner. ID format: 3, ws:3, or team:3.")]
+    #[tool(
+        description = "Update a task's status, description, or owner. ID format: 3, ws:3, or team:3."
+    )]
     async fn workslate_task_update(
         &self,
         Parameters(params): Parameters<TaskUpdateParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if let Err(e) = self.require_session().await { return Ok(e); }
+        if let Err(e) = self.require_session().await {
+            return Ok(e);
+        }
         let session = self.active_session.read().await.clone().unwrap();
         let tid = match TaskId::parse(&params.id) {
             Ok(t) => t,
             Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
         };
 
-        if let Some(ref s) = params.status {
-            if TaskStatus::parse(s).is_err() {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Invalid status '{}'. Must be: pending, in_progress, done, blocked", s
-                ))]));
-            }
+        if let Some(ref s) = params.status
+            && TaskStatus::parse(s).is_err()
+        {
+            return Ok(CallToolResult::error(vec![Content::text(format!(
+                "Invalid status '{}'. Must be: pending, in_progress, done, blocked",
+                s
+            ))]));
         }
 
-        let conn = match self.lock_db() { Ok(c) => c, Err(e) => return Ok(e) };
+        let conn = match self.lock_db() {
+            Ok(c) => c,
+            Err(e) => return Ok(e),
+        };
 
         let (cur_status, cur_desc, cur_owner): (String, Option<String>, Option<String>) = match conn.query_row(
             "SELECT status, description, owner FROM tasks WHERE session = ? AND namespace = ? AND id = ?",
@@ -1131,7 +1217,8 @@ impl Workslate {
         }
 
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Task {} updated", tid
+            "Task {} updated",
+            tid
         ))]))
     }
 
@@ -1140,10 +1227,15 @@ impl Workslate {
         &self,
         Parameters(params): Parameters<TaskListParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if let Err(e) = self.require_session().await { return Ok(e); }
+        if let Err(e) = self.require_session().await {
+            return Ok(e);
+        }
         let session = self.active_session.read().await.clone().unwrap();
 
-        let conn = match self.lock_db() { Ok(c) => c, Err(e) => return Ok(e) };
+        let conn = match self.lock_db() {
+            Ok(c) => c,
+            Err(e) => return Ok(e),
+        };
         let tasks = load_tasks(&conn, &session, params.namespace.as_deref())
             .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
@@ -1159,8 +1251,11 @@ impl Workslate {
                 TaskStatus::Pending => " ",
                 TaskStatus::Blocked => "\u{2298}",
             };
-            let owner_str = task.owner.as_ref()
-                .map(|o| format!(" (owner: {})", o)).unwrap_or_default();
+            let owner_str = task
+                .owner
+                .as_ref()
+                .map(|o| format!(" (owner: {})", o))
+                .unwrap_or_default();
             let mut line = format!("{} {}. {}{}", icon, task.display_id(), task.name, owner_str);
             if task.status == TaskStatus::InProgress {
                 line.push_str("  \u{2190} in_progress");
@@ -1175,7 +1270,9 @@ impl Workslate {
             lines.push(line);
         }
 
-        Ok(CallToolResult::success(vec![Content::text(lines.join("\n"))]))
+        Ok(CallToolResult::success(vec![Content::text(
+            lines.join("\n"),
+        )]))
     }
 
     #[tool(description = "Clear tasks. Optional namespace: 'ws', 'team', or omit to clear all.")]
@@ -1183,36 +1280,58 @@ impl Workslate {
         &self,
         Parameters(params): Parameters<TaskClearParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if let Err(e) = self.require_session().await { return Ok(e); }
+        if let Err(e) = self.require_session().await {
+            return Ok(e);
+        }
         let session = self.active_session.read().await.clone().unwrap();
 
-        let conn = match self.lock_db() { Ok(c) => c, Err(e) => return Ok(e) };
+        let conn = match self.lock_db() {
+            Ok(c) => c,
+            Err(e) => return Ok(e),
+        };
         let count: u32 = if let Some(ref ns) = params.namespace {
-            let c = conn.query_row(
-                "SELECT COUNT(*) FROM tasks WHERE session = ? AND namespace = ?",
-                rusqlite::params![session, ns], |row| row.get(0),
-            ).unwrap_or(0);
+            let c = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM tasks WHERE session = ? AND namespace = ?",
+                    rusqlite::params![session, ns],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
             conn.execute(
                 "DELETE FROM tasks WHERE session = ? AND namespace = ?",
                 rusqlite::params![session, ns],
-            ).ok();
+            )
+            .ok();
             conn.execute(
                 "UPDATE task_counters SET next_id = 1 WHERE session = ? AND namespace = ?",
                 rusqlite::params![session, ns],
-            ).ok();
+            )
+            .ok();
             c
         } else {
-            let c = conn.query_row(
-                "SELECT COUNT(*) FROM tasks WHERE session = ?",
-                rusqlite::params![session], |row| row.get(0),
-            ).unwrap_or(0);
-            conn.execute("DELETE FROM tasks WHERE session = ?", rusqlite::params![session]).ok();
-            conn.execute("DELETE FROM task_counters WHERE session = ?", rusqlite::params![session]).ok();
+            let c = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM tasks WHERE session = ?",
+                    rusqlite::params![session],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+            conn.execute(
+                "DELETE FROM tasks WHERE session = ?",
+                rusqlite::params![session],
+            )
+            .ok();
+            conn.execute(
+                "DELETE FROM task_counters WHERE session = ?",
+                rusqlite::params![session],
+            )
+            .ok();
             c
         };
 
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Cleared {} task(s)", count
+            "Cleared {} task(s)",
+            count
         ))]))
     }
 
@@ -1224,55 +1343,70 @@ impl Workslate {
         let json_path = self.tasks_dir.join(format!("tasks-{}.json", params.name));
 
         let task_count = {
-            let conn = match self.lock_db() { Ok(c) => c, Err(e) => return Ok(e) };
+            let conn = match self.lock_db() {
+                Ok(c) => c,
+                Err(e) => return Ok(e),
+            };
 
-            let existing_count: u32 = conn.query_row(
-                "SELECT COUNT(*) FROM tasks WHERE session = ?",
-                rusqlite::params![params.name],
-                |row| row.get(0),
-            ).unwrap_or(0);
+            let existing_count: u32 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM tasks WHERE session = ?",
+                    rusqlite::params![params.name],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
 
-            if existing_count == 0 {
-                if let Ok(json) = std::fs::read_to_string(&json_path) {
-                    if let Ok(old_store) = serde_json::from_str::<serde_json::Value>(&json) {
-                        if let Some(tasks) = old_store.get("tasks").and_then(|t| t.as_array()) {
-                            for task_val in tasks {
-                                let id = task_val.get("id").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                                let name = task_val.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                                let desc = task_val.get("description").and_then(|v| v.as_str());
-                                let status = task_val.get("status").and_then(|v| v.as_str()).unwrap_or("pending");
-                                let deps = task_val.get("depends_on")
-                                    .and_then(|v| v.as_array())
-                                    .map(|arr| {
-                                        let ids: Vec<TaskId> = arr.iter()
-                                            .filter_map(|v| v.as_u64())
-                                            .map(|n| TaskId { namespace: Namespace::Ws, id: n as u32 })
-                                            .collect();
-                                        serialize_depends_on(&ids)
-                                    })
-                                    .unwrap_or_else(|| "[]".to_string());
+            if existing_count == 0
+                && let Ok(json) = std::fs::read_to_string(&json_path)
+                && let Ok(old_store) = serde_json::from_str::<serde_json::Value>(&json)
+                && let Some(tasks) = old_store.get("tasks").and_then(|t| t.as_array())
+            {
+                for task_val in tasks {
+                    let id = task_val.get("id").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                    let name = task_val.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                    let desc = task_val.get("description").and_then(|v| v.as_str());
+                    let status = task_val
+                        .get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("pending");
+                    let deps = task_val
+                        .get("depends_on")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            let ids: Vec<TaskId> = arr
+                                .iter()
+                                .filter_map(|v| v.as_u64())
+                                .map(|n| TaskId {
+                                    namespace: Namespace::Ws,
+                                    id: n as u32,
+                                })
+                                .collect();
+                            serialize_depends_on(&ids)
+                        })
+                        .unwrap_or_else(|| "[]".to_string());
 
-                                conn.execute(
+                    conn.execute(
                                     "INSERT OR IGNORE INTO tasks (session, namespace, id, name, description, status, depends_on) VALUES (?, 'ws', ?, ?, ?, ?, ?)",
                                     rusqlite::params![params.name, id, name, desc, status, deps],
                                 ).ok();
-                            }
-                            let next_id = old_store.get("next_id").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
-                            conn.execute(
+                }
+                let next_id = old_store
+                    .get("next_id")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(1) as u32;
+                conn.execute(
                                 "INSERT OR REPLACE INTO task_counters (session, namespace, next_id) VALUES (?, 'ws', ?)",
                                 rusqlite::params![params.name, next_id],
                             ).ok();
-                            tracing::info!("Migrated session '{}' from JSON to SQLite", params.name);
-                        }
-                    }
-                }
+                tracing::info!("Migrated session '{}' from JSON to SQLite", params.name);
             }
 
             conn.query_row(
                 "SELECT COUNT(*) FROM tasks WHERE session = ?",
                 rusqlite::params![params.name],
                 |row| row.get(0),
-            ).unwrap_or(0u32)
+            )
+            .unwrap_or(0u32)
         };
 
         *self.active_session.write().await = Some(params.name.clone());
@@ -1302,7 +1436,9 @@ impl Workslate {
                     "SELECT role FROM session_context WHERE claude_session_id = ? AND agent_id = ?",
                     rusqlite::params![claude_sid, agent_id],
                     |row| row.get::<_, Option<String>>(0),
-                ).ok().flatten()
+                )
+                .ok()
+                .flatten()
             } else {
                 None
             };
@@ -1314,7 +1450,10 @@ impl Workslate {
         }
 
         let msg = if task_count > 0 {
-            format!("Switched to session '{}' ({} tasks)", params.name, task_count)
+            format!(
+                "Switched to session '{}' ({} tasks)",
+                params.name, task_count
+            )
         } else {
             format!("Created new session '{}'", params.name)
         };
@@ -1333,19 +1472,24 @@ impl Workslate {
              FROM tasks GROUP BY session, namespace ORDER BY session, namespace"
         ).map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
-        let rows: Vec<(String, String, u32, u32)> = stmt.query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-        }).map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?
-        .filter_map(|r| r.ok())
-        .collect();
+        let rows: Vec<(String, String, u32, u32)> = stmt
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?
+            .filter_map(|r| r.ok())
+            .collect();
 
         if rows.is_empty() {
             return Ok(CallToolResult::success(vec![Content::text("No sessions")]));
         }
 
-        let mut sessions: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+        let mut sessions: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
         for (session, ns, total, done) in &rows {
-            sessions.entry(session.clone()).or_default()
+            sessions
+                .entry(session.clone())
+                .or_default()
                 .push(format!("{}:[{}/{}]", ns, done, total));
         }
 
@@ -1356,17 +1500,23 @@ impl Workslate {
             lines.push(format!("  {} {}{}", session, counters.join(" "), marker));
         }
 
-        Ok(CallToolResult::success(vec![Content::text(lines.join("\n"))]))
+        Ok(CallToolResult::success(vec![Content::text(
+            lines.join("\n"),
+        )]))
     }
 
     // ── Team messaging tools ──────────────────────────────
 
-    #[tool(description = "Register your role name for the active task session so the inbox/task doorbell hooks can resolve which agent this Claude session is. Teammates call this once on startup (with the same session name the leader used), alongside workslate_inbox_read. Pass agent_id explicitly: the leader passes an empty agent_id (its own identity), teammates pass their SubagentStart agent_id — omitting it is rejected, since it would default to the leader's row and a teammate would overwrite the leader's role.")]
+    #[tool(
+        description = "Register your role name for the active task session so the inbox/task doorbell hooks can resolve which agent this Claude session is. Teammates call this once on startup (with the same session name the leader used), alongside workslate_inbox_read. Pass agent_id explicitly: the leader passes an empty agent_id (its own identity), teammates pass their SubagentStart agent_id — omitting it is rejected, since it would default to the leader's row and a teammate would overwrite the leader's role."
+    )]
     async fn workslate_register(
         &self,
         Parameters(params): Parameters<RegisterParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if let Err(e) = self.require_session().await { return Ok(e); }
+        if let Err(e) = self.require_session().await {
+            return Ok(e);
+        }
         let session = self.active_session.read().await.clone().unwrap();
         let claude_sid = match params
             .session_id
@@ -1399,7 +1549,10 @@ impl Workslate {
         let agent_id = params.agent_id.clone().unwrap_or_default();
         {
             // Scope the DB guard so it is released before the async active_role write.
-            let conn = match self.lock_db() { Ok(c) => c, Err(e) => return Ok(e) };
+            let conn = match self.lock_db() {
+                Ok(c) => c,
+                Err(e) => return Ok(e),
+            };
             conn.execute(
                 "INSERT INTO session_context (claude_session_id, agent_id, task_session, role, updated_at) \
                  VALUES (?, ?, ?, ?, datetime('now')) \
@@ -1411,17 +1564,27 @@ impl Workslate {
         *self.active_role.write().await = Some(params.role.clone());
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Registered as '{}' in session '{}' (session id: {}, agent_id: {})",
-            params.role, session, claude_sid,
-            if agent_id.is_empty() { "<main>" } else { agent_id.as_str() }
+            params.role,
+            session,
+            claude_sid,
+            if agent_id.is_empty() {
+                "<main>"
+            } else {
+                agent_id.as_str()
+            }
         ))]))
     }
 
-    #[tool(description = "Send a message to a teammate's role inbox in the active task session. The recipient sees a one-line doorbell on their next tool call and reads the body with workslate_inbox_read. Set urgent=true for mid-task steering that should interrupt. Pass your own session_id AND agent_id (the SessionStart/SubagentStart hint values) for correct sender attribution — when a session is in effect an omitted agent_id is rejected, since the leader and teammates share one session_id and a missing agent_id would mis-attribute the message as 'team-lead' (the leader passes an empty agent_id).")]
+    #[tool(
+        description = "Send a message to a teammate's role inbox in the active task session. The recipient sees a one-line doorbell on their next tool call and reads the body with workslate_inbox_read. Set urgent=true for mid-task steering that should interrupt. Pass your own session_id AND agent_id (the SessionStart/SubagentStart hint values) for correct sender attribution — when a session is in effect an omitted agent_id is rejected, since the leader and teammates share one session_id and a missing agent_id would mis-attribute the message as 'team-lead' (the leader passes an empty agent_id)."
+    )]
     async fn workslate_msg_send(
         &self,
         Parameters(params): Parameters<MsgSendParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if let Err(e) = self.require_session().await { return Ok(e); }
+        if let Err(e) = self.require_session().await {
+            return Ok(e);
+        }
         let session = self.active_session.read().await.clone().unwrap();
         let urgent: i64 = if params.urgent.unwrap_or(false) { 1 } else { 0 };
         // Read the active_role fallback BEFORE locking the DB: the async RwLock read
@@ -1453,7 +1616,10 @@ impl Workslate {
                     .to_string(),
             )]));
         }
-        let conn = match self.lock_db() { Ok(c) => c, Err(e) => return Ok(e) };
+        let conn = match self.lock_db() {
+            Ok(c) => c,
+            Err(e) => return Ok(e),
+        };
         // Sender attribution via the composite (session_id, agent_id) identity, not a
         // single in-process role cache (last-writer-wins when leader + teammates share
         // this one server process). A miss yields NULL, never the cache; an omitted
@@ -1468,33 +1634,58 @@ impl Workslate {
         conn.execute(
             "INSERT INTO messages (task_session, recipient_role, sender, subject, body, urgent) \
              VALUES (?, ?, ?, ?, ?, ?)",
-            rusqlite::params![session, params.recipient, sender, params.subject, params.body, urgent],
-        ).map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+            rusqlite::params![
+                session,
+                params.recipient,
+                sender,
+                params.subject,
+                params.body,
+                urgent
+            ],
+        )
+        .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Message sent to '{}': {}", params.recipient, params.subject
+            "Message sent to '{}': {}",
+            params.recipient, params.subject
         ))]))
     }
 
-    #[tool(description = "Read and mark-read all unread messages addressed to your role in the active task session. Call on startup and whenever the inbox doorbell reports unread messages. Atomic: concurrent reads will not double-deliver.")]
+    #[tool(
+        description = "Read and mark-read all unread messages addressed to your role in the active task session. Call on startup and whenever the inbox doorbell reports unread messages. Atomic: concurrent reads will not double-deliver."
+    )]
     async fn workslate_inbox_read(
         &self,
         Parameters(params): Parameters<InboxReadParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if let Err(e) = self.require_session().await { return Ok(e); }
+        if let Err(e) = self.require_session().await {
+            return Ok(e);
+        }
         let session = self.active_session.read().await.clone().unwrap();
-        let conn = match self.lock_db() { Ok(c) => c, Err(e) => return Ok(e) };
+        let conn = match self.lock_db() {
+            Ok(c) => c,
+            Err(e) => return Ok(e),
+        };
 
         // Single atomic UPDATE ... RETURNING: marks unread messages read and
         // returns them in one statement, so two concurrent readers of the same
         // role cannot both receive the same message.
-        let mut stmt = conn.prepare(
-            "UPDATE messages SET read_at = datetime('now') \
+        let mut stmt = conn
+            .prepare(
+                "UPDATE messages SET read_at = datetime('now') \
              WHERE task_session = ? AND recipient_role = ? AND read_at IS NULL \
              RETURNING id, sender, subject, body, urgent, created_at",
-        ).map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+            )
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
         let mut msgs: Vec<(i64, Option<String>, String, String, i64, String)> = stmt
             .query_map(rusqlite::params![session, params.role], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
             })
             .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?
             .filter_map(|r| r.ok())
@@ -1504,7 +1695,8 @@ impl Workslate {
 
         if msgs.is_empty() {
             return Ok(CallToolResult::success(vec![Content::text(format!(
-                "No unread messages for '{}'", params.role
+                "No unread messages for '{}'",
+                params.role
             ))]));
         }
 
@@ -1513,7 +1705,8 @@ impl Workslate {
             let flag = if *urgent != 0 { "🚨 " } else { "" };
             let from = sender.as_deref().unwrap_or("unknown");
             out.push_str(&format!(
-                "\n{}[{}]  from {}  ({})\n{}\n", flag, subject, from, created, body
+                "\n{}[{}]  from {}  ({})\n{}\n",
+                flag, subject, from, created, body
             ));
         }
         Ok(CallToolResult::success(vec![Content::text(out)]))
@@ -1526,15 +1719,14 @@ impl Workslate {
     async fn check_file_collision(&self, name: &str, file_path: &str) -> Option<CallToolResult> {
         let buffers = self.buffers.read().await;
         for (existing_name, buf) in buffers.iter() {
-            if existing_name != name {
-                if let Some(ref fp) = buf.file_path {
-                    if fp == file_path {
-                        return Some(CallToolResult::error(vec![Content::text(format!(
-                            "File '{}' is already targeted by buffer '{}'. Use that buffer or clear it first.",
-                            file_path, existing_name
-                        ))]));
-                    }
-                }
+            if existing_name != name
+                && let Some(ref fp) = buf.file_path
+                && fp == file_path
+            {
+                return Some(CallToolResult::error(vec![Content::text(format!(
+                    "File '{}' is already targeted by buffer '{}'. Use that buffer or clear it first.",
+                    file_path, existing_name
+                ))]));
             }
         }
         None
@@ -1542,7 +1734,8 @@ impl Workslate {
 
     fn save_buffer(&self, name: &str, buf: &BufferContent) {
         if let Ok(conn) = self.db.lock() {
-            let deps_json = serde_json::to_string(&buf.depends_on).unwrap_or_else(|_| "[]".to_string());
+            let deps_json =
+                serde_json::to_string(&buf.depends_on).unwrap_or_else(|_| "[]".to_string());
             conn.execute(
                 "INSERT OR REPLACE INTO buffers (name, content, file_path, depends_on, source_hash, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'))",
                 rusqlite::params![name, buf.content, buf.file_path, deps_json, buf.source_hash],
@@ -1552,7 +1745,11 @@ impl Workslate {
 
     fn delete_buffer(&self, name: &str) {
         if let Ok(conn) = self.db.lock() {
-            conn.execute("DELETE FROM buffers WHERE name = ?", rusqlite::params![name]).ok();
+            conn.execute(
+                "DELETE FROM buffers WHERE name = ?",
+                rusqlite::params![name],
+            )
+            .ok();
         }
     }
 
@@ -1568,7 +1765,9 @@ impl Workslate {
             Ok(c) => c,
             Err(_) => return map,
         };
-        let mut stmt = match conn.prepare("SELECT name, content, file_path, depends_on, source_hash FROM buffers") {
+        let mut stmt = match conn
+            .prepare("SELECT name, content, file_path, depends_on, source_hash FROM buffers")
+        {
             Ok(s) => s,
             Err(_) => return map,
         };
@@ -1579,7 +1778,15 @@ impl Workslate {
             let deps_json: String = row.get(3)?;
             let source_hash: Option<String> = row.get(4)?;
             let depends_on: Vec<String> = serde_json::from_str(&deps_json).unwrap_or_default();
-            Ok((name, BufferContent { content, file_path, depends_on, source_hash }))
+            Ok((
+                name,
+                BufferContent {
+                    content,
+                    file_path,
+                    depends_on,
+                    source_hash,
+                },
+            ))
         }) {
             Ok(r) => r,
             Err(_) => return map,
@@ -1592,7 +1799,10 @@ impl Workslate {
 
     fn lock_db(&self) -> Result<std::sync::MutexGuard<'_, rusqlite::Connection>, CallToolResult> {
         self.db.lock().map_err(|e| {
-            CallToolResult::error(vec![Content::text(format!("Database lock poisoned: {}", e))])
+            CallToolResult::error(vec![Content::text(format!(
+                "Database lock poisoned: {}",
+                e
+            ))])
         })
     }
 

@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::backend::{self, Backend};
+use crate::opencode;
 use crate::store;
 
 pub type DbHandle = Arc<StdMutex<rusqlite::Connection>>;
@@ -43,12 +44,16 @@ pub struct Job {
     pub skip_git_repo_check: bool,
     pub prompt: String,
     pub backend_version: Option<String>,
-    /// When set, resume this codex session id instead of starting fresh (the
+    pub state_dir: PathBuf,
+    /// When set, resume this backend session id instead of starting fresh (the
     /// `dispatch_steer` follow-up path).
     pub resume_session: Option<String>,
     /// Per-task identity marker embedded in the prompt (fresh submits only); lets
     /// `record_rollout` positively match the rollout this run produced. None for resume.
     pub nonce: Option<String>,
+    /// For backends with dispatch-owned logs (OpenCode), a resumed task appends to
+    /// the parent log instead of discovering an external rollout.
+    pub rollout_path: Option<PathBuf>,
 }
 
 /// Register a cancellation token for `job.id` and fire the detached run task.
@@ -99,6 +104,23 @@ async fn run(db: &DbHandle, job: &Job, ct: &CancellationToken) {
         resume_session: job.resume_session.as_deref(),
     };
 
+    if job.backend == Backend::Opencode {
+        let spec = opencode::RunSpec {
+            id: &job.id,
+            working_dir: &job.working_dir,
+            sandbox: &job.sandbox,
+            model: job.model.as_deref(),
+            reasoning_effort: job.reasoning_effort.as_deref(),
+            prompt: &job.prompt,
+            state_dir: &job.state_dir,
+            backend_version: job.backend_version.as_deref(),
+            resume_session: job.resume_session.as_deref(),
+            rollout_path: job.rollout_path.as_deref(),
+        };
+        finish_outcome(db, &job.id, opencode::run(db, spec, ct).await);
+        return;
+    }
+
     // Snapshot the rollouts that already exist BEFORE spawning, so record_rollout can
     // require a file that did not exist yet and never match a pre-existing same-cwd
     // session (e.g. an earlier aside run).
@@ -134,7 +156,11 @@ async fn run(db: &DbHandle, job: &Job, ct: &CancellationToken) {
     )
     .await;
 
-    match backend::capture(spawned, ct).await {
+    finish_outcome(db, &job.id, backend::capture(spawned, ct).await);
+}
+
+fn finish_outcome(db: &DbHandle, id: &str, outcome: backend::RunOutcome) {
+    match outcome {
         backend::RunOutcome::Done {
             exit_code,
             success,
@@ -157,7 +183,7 @@ async fn run(db: &DbHandle, job: &Job, ct: &CancellationToken) {
             };
             db_finish(
                 db,
-                &job.id,
+                id,
                 status,
                 exit_code.map(|c| c as i64),
                 Some(&result),
@@ -167,7 +193,7 @@ async fn run(db: &DbHandle, job: &Job, ct: &CancellationToken) {
         backend::RunOutcome::Cancelled => {
             db_finish(
                 db,
-                &job.id,
+                id,
                 store::STATUS_CANCELLED,
                 None,
                 None,
@@ -175,7 +201,7 @@ async fn run(db: &DbHandle, job: &Job, ct: &CancellationToken) {
             );
         }
         backend::RunOutcome::WaitFailed(e) => {
-            db_finish(db, &job.id, store::STATUS_FAILED, None, None, Some(&e));
+            db_finish(db, id, store::STATUS_FAILED, None, None, Some(&e));
         }
     }
 }

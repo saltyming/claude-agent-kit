@@ -43,13 +43,13 @@ pub struct SubmitParams {
     /// Optional free-form additional instructions.
     pub details: Option<String>,
 
-    /// Backend to delegate to. Default "codex".
+    /// Backend to delegate to: "codex" (default) or "opencode".
     pub backend: Option<String>,
 
-    /// Optional model override forwarded to the backend CLI.
+    /// Optional model override forwarded to the backend. OpenCode expects provider/model.
     pub model: Option<String>,
 
-    /// Optional reasoning effort (low / medium / high / xhigh).
+    /// Optional reasoning effort (low / medium / high / xhigh); OpenCode maps this to variant.
     pub reasoning_effort: Option<String>,
 
     /// Sandbox mode: "read-only" | "workspace-write" (default) | "danger-full-access"
@@ -105,18 +105,19 @@ pub struct LogsParams {
     #[serde(default, deserialize_with = "lenient_opt_u32")]
     pub line_end: Option<u32>,
     /// Curation categories to include: any of lifecycle / messages / tools / edits /
-    /// reasoning. Default: lifecycle + messages + tools + edits (reasoning is off —
-    /// codex reasoning is encrypted).
+    /// reasoning. Default is backend-aware: codex and unknown backends use lifecycle +
+    /// messages + tools + edits because codex reasoning is encrypted; opencode also
+    /// includes reasoning because OpenCode exposes plaintext reasoning text.
     #[serde(default, deserialize_with = "lenient_opt_vec_string")]
     pub kinds: Option<Vec<String>>,
-    /// Return raw rollout JSONL (within the line range) instead of the curated view.
+    /// Return raw JSONL (within the line range) instead of the curated view.
     #[serde(default, deserialize_with = "lenient_opt_bool")]
     pub raw: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct SteerParams {
-    /// Task id to steer — its codex session is resumed with the new instruction.
+    /// Task id to steer — its backend session is resumed with the new instruction.
     pub id: String,
     /// The new instruction to send to the resumed session.
     pub instruction: String,

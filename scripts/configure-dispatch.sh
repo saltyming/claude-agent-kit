@@ -17,6 +17,7 @@
 #   DISPATCH_POLICY        conservative|preference-only|proactive
 #   DISPATCH_APPROVAL      ask|auto
 #   DISPATCH_GRANULARITY   per-step|batch|ask
+#   DISPATCH_BACKEND       codex|opencode
 #   DISPATCH_MODEL         freeform model string or empty
 #   DISPATCH_EFFORT        low|medium|high|xhigh or empty
 #   DISPATCH_RECONFIGURE   yes|no — override the "existing prefs found, reconfigure?"
@@ -100,8 +101,13 @@ if [ "$KEEP_PREFS" = "no" ]; then
         "ask" \
         'per-step|batch|ask'
 
+    prompt_with_default BACKEND DISPATCH_BACKEND \
+        "Default backend [codex/opencode] (default: codex):" \
+        "codex" \
+        'codex|opencode'
+
     prompt_with_default MODEL DISPATCH_MODEL \
-        "Default model for codex (e.g. \"gpt-5.5\"; blank for CLI default):" \
+        "Default model (codex model id, or opencode provider/model; blank for backend default):" \
         ""
 
     prompt_with_default EFFORT DISPATCH_EFFORT \
@@ -136,6 +142,7 @@ if [ "$KEEP_PREFS" = "no" ]; then
         -e "s/{{POLICY}}/$(sed_escape "$POLICY")/g" \
         -e "s/{{APPROVAL}}/$(sed_escape "$APPROVAL")/g" \
         -e "s/{{GRANULARITY}}/$(sed_escape "$GRANULARITY")/g" \
+        -e "s/{{BACKEND}}/$(sed_escape "$BACKEND")/g" \
         -e "s/{{MODEL}}/$(sed_escape "$MODEL")/g" \
         -e "s/{{EFFORT}}/$(sed_escape "$EFFORT")/g" \
         "$TEMPLATE_CONTENT_PATH" > "$PREFS_DEST"
@@ -166,6 +173,7 @@ Dispatch preferences configured:
   execution policy:        $POLICY
   approval mode:           $APPROVAL
   default granularity:     $GRANULARITY
+  default backend:         $BACKEND
   default model / effort:  ${MODEL:-<CLI default>} / ${EFFORT:-<CLI default>}
 
 Edit anytime:   $PREFS_DEST

@@ -40,9 +40,18 @@ impl Backend {
 /// Structured outcome of a backend call. Returned to the tool layer which
 /// converts it into `CallToolResult`.
 pub enum InvokeOutcome {
-    Ok { stdout: String, truncated: bool },
-    NotFound { binary: &'static str, hint: String },
-    Failed { code: Option<i32>, stderr: String },
+    Ok {
+        stdout: String,
+        truncated: bool,
+    },
+    NotFound {
+        binary: &'static str,
+        hint: String,
+    },
+    Failed {
+        code: Option<i32>,
+        stderr: String,
+    },
     Spawn(String),
     /// Client cancelled the request (MCP CancelledNotification). The child
     /// process was killed as part of the select arm's future drop path
@@ -112,7 +121,10 @@ pub async fn invoke(
                 MAX_CAPTURED_STDERR, keep
             );
         }
-        return InvokeOutcome::Failed { code: output.status.code(), stderr };
+        return InvokeOutcome::Failed {
+            code: output.status.code(),
+            stderr,
+        };
     }
 
     let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();

@@ -349,7 +349,10 @@ pub fn render_task_footer(tasks: &[Task], session: &str, buffer_names: &[String]
         return String::new();
     }
 
-    let ws_total = tasks.iter().filter(|t| t.namespace == Namespace::Ws).count();
+    let ws_total = tasks
+        .iter()
+        .filter(|t| t.namespace == Namespace::Ws)
+        .count();
     let ws_done = tasks
         .iter()
         .filter(|t| t.namespace == Namespace::Ws && t.status == TaskStatus::Done)
@@ -395,10 +398,7 @@ pub fn render_task_footer(tasks: &[Task], session: &str, buffer_names: &[String]
     }
 
     let mut remaining_slots: usize = 3;
-    for task in tasks
-        .iter()
-        .filter(|t| t.status == TaskStatus::InProgress)
-    {
+    for task in tasks.iter().filter(|t| t.status == TaskStatus::InProgress) {
         if remaining_slots == 0 {
             break;
         }
@@ -622,10 +622,7 @@ pub fn resolve_sender(
         // as sent by `team-lead`. Refuse to guess (None → NULL sender). An explicit
         // empty string IS the leader's own identity and is honoured. The msg_send tool
         // rejects the omitted-agent_id case up front; this is defense in depth.
-        let agent_id = match agent_id {
-            Some(a) => a,
-            None => return None,
-        };
+        let agent_id = agent_id?;
         return conn
             .query_row(
                 "SELECT role FROM session_context WHERE claude_session_id = ? AND agent_id = ?",
@@ -747,7 +744,13 @@ mod tests {
 
         // Explicit sender always wins.
         assert_eq!(
-            resolve_sender(&conn, Some("explicit".into()), Some("sid"), Some(""), Some("fb".into())),
+            resolve_sender(
+                &conn,
+                Some("explicit".into()),
+                Some("sid"),
+                Some(""),
+                Some("fb".into())
+            ),
             Some("explicit".into())
         );
         // Composite lookup: same session id, explicit agent_id='' -> leader.

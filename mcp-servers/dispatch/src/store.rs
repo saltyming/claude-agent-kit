@@ -107,7 +107,7 @@ pub struct NewTask {
     pub sandbox: String,
     pub parent_id: Option<String>,
     /// Per-task identity marker embedded in the rendered prompt, used to positively
-    /// match the codex rollout this task produced (None for steer/resume tasks, which
+    /// match the backend log this task produced (None for steer/resume tasks, which
     /// already know their session id).
     pub nonce: Option<String>,
     /// For a steer/resume task: the rollout line count at resume time, so dispatch_logs

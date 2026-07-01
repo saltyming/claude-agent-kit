@@ -41,7 +41,9 @@ impl Aside {
         }
     }
 
-    #[tool(description = "List which backend CLIs (codex, copilot) are available on PATH, with their --version output. Call this when you're unsure which backends are installed on this machine.")]
+    #[tool(
+        description = "List which backend CLIs (codex, copilot) are available on PATH, with their --version output. Call this when you're unsure which backends are installed on this machine."
+    )]
     async fn aside_list(
         &self,
         Parameters(_params): Parameters<ListParams>,
@@ -51,7 +53,9 @@ impl Aside {
             let path = which(backend.binary());
             let entry = match path {
                 Some(p) => {
-                    let ver = version(backend).await.unwrap_or_else(|| "(unknown)".to_string());
+                    let ver = version(backend)
+                        .await
+                        .unwrap_or_else(|| "(unknown)".to_string());
                     json!({
                         "backend": backend.binary(),
                         "available": true,
@@ -73,7 +77,9 @@ impl Aside {
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
-    #[tool(description = "Ask OpenAI's codex CLI for a second opinion. include_transcript defaults to true — the current Claude conversation is forwarded automatically, but in REDACTED form (text blocks pass through; tool_use / tool_result / thinking blocks become placeholders). codex runs in `-s read-only` sandbox: it CAN read files and grep the workspace itself, but cannot write or exec shells. **Prefer passing file paths in `question` / `context` and let codex read them** (this is cheaper and avoids the transcript's 100 KB cap); embed an excerpt only when you want to focus codex on a specific line range OR when the data is transient tool output (command stdout, API response) that isn't on disk. Pass include_transcript=false for decontextualised questions. See claude-agent-kit--aside.md 'Transcript redaction' section. Costs third-party API quota.")]
+    #[tool(
+        description = "Ask OpenAI's codex CLI for a second opinion. include_transcript defaults to true — the current Claude conversation is forwarded automatically, but in REDACTED form (text blocks pass through; tool_use / tool_result / thinking blocks become placeholders). codex runs in `-s read-only` sandbox: it CAN read files and grep the workspace itself, but cannot write or exec shells. **Prefer passing file paths in `question` / `context` and let codex read them** (this is cheaper and avoids the transcript's 100 KB cap); embed an excerpt only when you want to focus codex on a specific line range OR when the data is transient tool output (command stdout, API response) that isn't on disk. Pass include_transcript=false for decontextualised questions. See claude-agent-kit--aside.md 'Transcript redaction' section. Costs third-party API quota."
+    )]
     async fn aside_codex(
         &self,
         Parameters(params): Parameters<AskParams>,
@@ -82,7 +88,9 @@ impl Aside {
         self.dispatch(Backend::Codex, params, ctx.ct).await
     }
 
-    #[tool(description = "Ask GitHub's standalone copilot CLI for a second opinion. include_transcript defaults to true — current conversation is forwarded in REDACTED form (tool_use / tool_result / thinking blocks become placeholders; only text passes through). Runs with --allow-all-tools + --available-tools=view,rg,glob,web_fetch — a read-only whitelist that lets copilot inspect files (view), grep the workspace (rg), pattern-match file paths (glob), and fetch URL bodies (web_fetch). NO shell exec, NO file mutation (bash/write_bash/task/sql and other mutating tools are excluded). **Prefer passing file paths in `question` / `context`** and let copilot read them; embed an excerpt only for focused line-range questions or for off-disk tool output. reasoning_effort maps to copilot --effort (low/medium/high/xhigh). See claude-agent-kit--aside.md 'Transcript redaction' section. Costs third-party API quota.")]
+    #[tool(
+        description = "Ask GitHub's standalone copilot CLI for a second opinion. include_transcript defaults to true — current conversation is forwarded in REDACTED form (tool_use / tool_result / thinking blocks become placeholders; only text passes through). Runs with --allow-all-tools + --available-tools=view,rg,glob,web_fetch — a read-only whitelist that lets copilot inspect files (view), grep the workspace (rg), pattern-match file paths (glob), and fetch URL bodies (web_fetch). NO shell exec, NO file mutation (bash/write_bash/task/sql and other mutating tools are excluded). **Prefer passing file paths in `question` / `context`** and let copilot read them; embed an excerpt only for focused line-range questions or for off-disk tool output. reasoning_effort maps to copilot --effort (low/medium/high/xhigh). See claude-agent-kit--aside.md 'Transcript redaction' section. Costs third-party API quota."
+    )]
     async fn aside_copilot(
         &self,
         Parameters(params): Parameters<AskParams>,
@@ -168,7 +176,10 @@ fn compose_prompt(context: Option<&str>, transcript: Option<&str>, question: &st
     if let Some(tx) = transcript {
         let tx = tx.trim();
         if !tx.is_empty() {
-            parts.push(format!("# Current Claude conversation transcript\n\n{}", tx));
+            parts.push(format!(
+                "# Current Claude conversation transcript\n\n{}",
+                tx
+            ));
         }
     }
     parts.push(format!("# Question\n\n{}", question.trim()));
@@ -195,14 +206,14 @@ fn render_outcome(
         InvokeOutcome::NotFound { binary, hint } => CallToolResult::error(vec![Content::text(
             format!("backend_not_found: `{}` is not on PATH — {}", binary, hint),
         )]),
-        InvokeOutcome::Failed { code, stderr } => CallToolResult::error(vec![Content::text(
-            format!(
+        InvokeOutcome::Failed { code, stderr } => {
+            CallToolResult::error(vec![Content::text(format!(
                 "backend_error: {} exited with status {:?}\n\nstderr:\n{}",
                 backend.binary(),
                 code,
                 stderr
-            ),
-        )]),
+            ))])
+        }
         InvokeOutcome::Spawn(msg) => {
             CallToolResult::error(vec![Content::text(format!("spawn_error: {}", msg))])
         }

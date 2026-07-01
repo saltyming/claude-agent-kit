@@ -32,6 +32,8 @@ For write-capable delegation you are a collaborator, not a silent executor. When
 
 **Delegated children inherit the scope rules.** A teammate or `Workflow` child that hits a forced spec/plan deviation stops and reports to the leader, who asks the user — a child never shrinks scope, reinterprets a budget, or substitutes a cleaner design on its own (same rule as `claude-agent-kit--task-execution.md`).
 
+**palette note.** When delegating a palette story, hand the delegate the *approved, tracked scope* (as a dispatch spec or team task), never the raw `story-*.rst`. A story's acceptance criteria pass the approval gate first, then become the delegate's brief — a child receives Tier-B scope, not a Tier-A artifact. See `claude-agent-kit--palette.md`.
+
 **Effort/model control differs by surface.** The interactive `Agent` tool exposes `model` but no reasoning-effort knob — a delegated `Agent` runs at the CLI's default reasoning level, which the leader can't raise. The `Workflow` `agent()` *does* expose `effort` (and `model`) — set them explicitly (they don't reliably inherit). So a `Workflow` can be the more controllable surface for large fan-out once opted in. This `Agent`-tool gap would only be revisited if the `Agent` tool itself gained effort control; `Workflow` having it does not change the `Agent`-tool calculus.
 
 **When unsure, do the work in-session and propose.** A slower in-session edit beats a fast-but-silently-wrong delegated one. If parallelism would genuinely help, surface it ("this splits into N independent edits — want me to fan out subagents, ~rough cost?") and proceed on agreement.
@@ -47,7 +49,7 @@ For write-capable delegation you are a collaborator, not a silent executor. When
 | Best for | **Independent** subtasks (no coordination, no mid-task steering) | **Dependent / coordinated** work (shared `depends_on`, cross-talk, mid-turn steering) |
 | Token cost | Lower | Higher (each teammate is a full Claude instance) |
 
-**Decision rule (by dependency structure):** independent, non-overlapping subtasks → **subagents**; coordinated streams that must talk to each other or be steered mid-task → **teammates**; a large breadth-first mechanical sweep (dozens+ of units) → a **`Workflow`** (see below). All three are write-gated identically — surface/propose → agree; the choice is which fits the work's shape, not whether you're allowed.
+Selection follows the dependency-structure decision rule already stated above in *Delegation* → "Keep two things distinct." All three are write-gated identically — surface/propose → agree; the choice is which fits the work's shape, not whether you're allowed.
 
 ## Spawn mechanism (read this before picking a parallel tool)
 
@@ -309,7 +311,7 @@ Leaders mark these as reserved by assigning owner to themselves via `workslate_t
 
 ### File Conflict Prevention
 
-**Cardinal rule: no two teammates modify the same file.**
+**Cardinal rule: no two teammates modify the same file** (full rationale in *Delegation* → "One writer per final target file" above).
 
 - Each teammate's file scope is defined in their creation prompt
 - Shared dependencies (types, constants) get their own task; other tasks depend on it via `depends_on`
@@ -506,7 +508,7 @@ When a system-reminder confirms `ultracode`, the standing posture is to author a
 
 - **Pipeline by default** (`pipeline`); reach for a barrier (`parallel` between stages) only when a stage genuinely needs all prior results (dedup/merge, zero-count early-exit).
 - **Verify before trusting a finding.** Independent/heterogeneous reviewers catch failure modes that redundant identical ones don't — homogeneous "debate" underperforms a plain majority vote, and extra rounds entrench errors. Diversify the lens, don't just add rounds.
-- **One writer per final target file** carries into workflows: parallel writers use `isolation: 'worktree'` and **you own the merge**; shared contracts/types stay leader-owned. Worktree isolation prevents disk clobber, not divergent edits.
+- **One writer per final target file** carries into workflows (full rationale in *Delegation* above): parallel writers use `isolation: 'worktree'` and **you own the merge**; shared contracts/types stay leader-owned.
 - **One well-scoped fan-out per workflow.** Read each result and decide the next phase yourself; don't fold understand → design → implement → review into one mega-run.
 - **Guard loops on `budget.total`** for "+Nk"-style directives, and **`log()` any silent cap** (top-N, sampling, no-retry) so truncation never reads as full coverage.
 - **Self-contained agent prompts** — workflow subagents don't inherit your conversation.

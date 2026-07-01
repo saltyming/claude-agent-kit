@@ -28,17 +28,18 @@ use tokio_util::sync::CancellationToken;
 const MAX_STDOUT: usize = 200 * 1024;
 const MAX_STDERR: usize = 16 * 1024;
 
-/// Which coding-agent CLI we delegate to. Codex is the only backend today; a
-/// future agent is a new variant + a match arm in `build_command`.
+/// Which coding-agent CLI we delegate to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
     Codex,
+    Opencode,
 }
 
 impl Backend {
     pub fn binary(&self) -> &'static str {
         match self {
             Backend::Codex => "codex",
+            Backend::Opencode => "opencode",
         }
     }
 
@@ -51,12 +52,13 @@ impl Backend {
     pub fn parse(s: &str) -> Option<Backend> {
         match s.trim().to_ascii_lowercase().as_str() {
             "" | "codex" => Some(Backend::Codex),
+            "opencode" => Some(Backend::Opencode),
             _ => None,
         }
     }
 
     pub fn all() -> &'static [Backend] {
-        &[Backend::Codex]
+        &[Backend::Codex, Backend::Opencode]
     }
 }
 
@@ -125,6 +127,7 @@ pub fn build_command(backend: Backend, spec: &SpawnSpec) -> (Command, Vec<String
             argv.extend(args);
             (cmd, argv)
         }
+        Backend::Opencode => unreachable!("opencode dispatch uses the server API runner"),
     }
 }
 
@@ -152,10 +155,64 @@ pub enum RunOutcome {
     WaitFailed(String),
 }
 
+/// Wraps a fully-built backend argv in a `dispatch __pdeath_guard <dispatch_pid>
+/// -- <argv...>` re-invocation of the current `dispatch` binary, so the guard
+/// (not the real backend) becomes the pgid leader `spawn_child` puts in its own
+/// process group. See `pdeath_guard.rs` for why a guard process is needed
+/// instead of a bare `PR_SET_PDEATHSIG` on the backend directly.
+#[cfg(unix)]
+pub(crate) fn wrap_with_guard(argv: &[String], working_dir: &Path) -> Result<Command, String> {
+    let self_exe = std::env::current_exe()
+        .map_err(|e| format!("resolve current_exe for pdeath_guard failed: {e}"))?;
+    let mut cmd = Command::new(self_exe);
+    cmd.arg("__pdeath_guard")
+        .arg(std::process::id().to_string())
+        .arg("--")
+        .args(argv);
+    cmd.current_dir(working_dir);
+    Ok(cmd)
+}
+
+/// Assigns `child` to a kill-on-close Job Object (`winjob::protect`), or on
+/// failure kills `child` and returns an error. Job Object setup failure is
+/// treated as fatal, not soft-logged — silently continuing would leave
+/// write-capable work running with no orphan protection at all (the same
+/// posture as `spawn_child` already failing outright when the binary is
+/// missing from PATH).
+#[cfg(windows)]
+pub(crate) fn protect_or_kill(
+    child: &mut tokio::process::Child,
+    pid: Option<u32>,
+    label: &str,
+) -> Result<(), String> {
+    let (pid, handle) = match (pid, child.raw_handle()) {
+        (Some(pid), Some(handle)) => (pid, handle),
+        _ => {
+            let _ = child.start_kill();
+            return Err(format!(
+                "Job Object setup for {label} failed: missing pid/handle"
+            ));
+        }
+    };
+    if let Err(e) = crate::winjob::protect(pid, handle as windows_sys::Win32::Foundation::HANDLE) {
+        let _ = child.start_kill();
+        return Err(format!("Job Object setup for {label} failed: {e}"));
+    }
+    Ok(())
+}
+
 /// Spawn the backend child: pipe stdio, put it in its own process group (so the
 /// whole subtree can be torn down on cancel), arm `kill_on_drop`, and stream the
 /// rendered prompt to stdin in a detached writer (a large prompt can't deadlock
 /// against the child filling stdout). Returns immediately after spawn.
+///
+/// On Unix, the actual OS-level child spawned here is a hidden
+/// `dispatch __pdeath_guard` re-invocation, not the real backend directly — the
+/// guard spawns the real backend as ITS OWN child once armed, so the whole
+/// subtree dies with dispatch even under a hard `SIGKILL` of dispatch itself.
+/// `Spawned.argv` still reports the real backend's argv (not the guard's
+/// wrapper argv) since that's what's meaningful for `dispatch_status`/logs; only
+/// the recorded `child_pid` refers to the guard on Unix — see `pdeath_guard.rs`.
 pub fn spawn_child(backend: Backend, spec: &SpawnSpec, prompt: &str) -> Result<Spawned, String> {
     if which(backend.binary()).is_none() {
         return Err(format!(
@@ -165,7 +222,16 @@ pub fn spawn_child(backend: Backend, spec: &SpawnSpec, prompt: &str) -> Result<S
         ));
     }
 
-    let (mut cmd, argv) = build_command(backend, spec);
+    let (built_cmd, argv) = build_command(backend, spec);
+
+    #[cfg(unix)]
+    let mut cmd = {
+        let _ = built_cmd; // superseded by the guard-wrapped Command below
+        wrap_with_guard(&argv, spec.working_dir)?
+    };
+    #[cfg(not(unix))]
+    let mut cmd = built_cmd;
+
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -173,15 +239,24 @@ pub fn spawn_child(backend: Backend, spec: &SpawnSpec, prompt: &str) -> Result<S
     #[cfg(unix)]
     {
         // New process group with pgid == child pid, so `kill(-pgid, …)` on cancel
-        // reaps codex AND any shells / test runners it spawned. kill_on_drop only
-        // reaps the direct child.
+        // reaps the guard, codex, AND any shells / test runners codex spawned.
+        // kill_on_drop only reaps the direct child.
         cmd.process_group(0);
     }
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("spawn {} failed: {}", backend.binary(), e))?;
+    let mut child = cmd.spawn().map_err(|e| {
+        #[cfg(unix)]
+        {
+            format!("spawn pdeath_guard for {} failed: {}", backend.binary(), e)
+        }
+        #[cfg(not(unix))]
+        {
+            format!("spawn {} failed: {}", backend.binary(), e)
+        }
+    })?;
     let child_pid = child.id();
+    #[cfg(windows)]
+    protect_or_kill(&mut child, child_pid, backend.binary())?;
 
     if let Some(mut stdin) = child.stdin.take() {
         let bytes = prompt.as_bytes().to_vec();
@@ -229,6 +304,12 @@ pub async fn capture(spawned: Spawned, ct: &CancellationToken) -> RunOutcome {
             kill_process_group(p);
         }
         let _ = child.wait().await;
+    } else if let Some(p) = child_pid {
+        // Natural exit: nothing to kill, but on Windows a Job Object was
+        // registered for this pid in spawn_child — release it (drop closes the
+        // handle) so the registry doesn't grow unboundedly. No-op on Unix,
+        // which has no such registry.
+        release_process_group(p);
     }
 
     // Drain the capped readers. Caveat: on a *natural* exit where a descendant
@@ -310,7 +391,7 @@ async fn read_capped<R: AsyncRead + Unpin>(mut r: R, cap: usize) -> std::io::Res
 // ── process-group teardown ────────────────────────────────
 
 #[cfg(unix)]
-fn kill_process_group(pid: u32) {
+pub(crate) fn kill_process_group(pid: u32) {
     // `spawn_child` made the child its own group leader (process_group(0)), so the
     // group id equals the child pid. A negative pid signals the whole group.
     unsafe {
@@ -319,9 +400,24 @@ fn kill_process_group(pid: u32) {
 }
 
 #[cfg(not(unix))]
-fn kill_process_group(_pid: u32) {
-    // Best-effort on non-unix: kill_on_drop reaps the direct child when the
-    // capture future is dropped. Process-group teardown is unix-only.
+pub(crate) fn kill_process_group(pid: u32) {
+    // The Job Object registered for `pid` in spawn_child/spawn_server carries
+    // KILL_ON_JOB_CLOSE, so terminating it kills the whole subtree — the actual
+    // process-group-equivalent behavior, not just the direct child.
+    crate::winjob::terminate(pid);
+}
+
+/// Cleans up any Windows Job Object bookkeeping for `pid` WITHOUT killing
+/// anything — used when the child already exited naturally and there is
+/// nothing left to tear down, only a registry entry to release. A no-op on
+/// Unix, which keeps no such registry (`kill_process_group`'s group-kill there
+/// is fully stateless).
+#[cfg(unix)]
+pub(crate) fn release_process_group(_pid: u32) {}
+
+#[cfg(not(unix))]
+pub(crate) fn release_process_group(pid: u32) {
+    crate::winjob::release(pid);
 }
 
 // ── discovery ─────────────────────────────────────────────
@@ -370,5 +466,21 @@ pub fn install_hint(backend: Backend) -> String {
             "install codex CLI (`npm i -g @openai/codex`; see https://github.com/openai/codex)"
                 .to_string()
         }
+        Backend::Opencode => "install opencode CLI (see https://opencode.ai/docs/cli/)".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_supported_backends() {
+        assert_eq!(Backend::parse(""), Some(Backend::Codex));
+        assert_eq!(Backend::parse("codex"), Some(Backend::Codex));
+        assert_eq!(Backend::parse("opencode"), Some(Backend::Opencode));
+        assert_eq!(Backend::parse("missing"), None);
+        assert!(Backend::all().contains(&Backend::Codex));
+        assert!(Backend::all().contains(&Backend::Opencode));
     }
 }

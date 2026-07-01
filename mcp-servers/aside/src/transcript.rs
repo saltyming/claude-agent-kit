@@ -79,10 +79,7 @@ pub fn render_transcript(cwd: &Path, home: &Path, tail: Option<u32>) -> Transcri
     let path = match newest_jsonl(&dir) {
         Some(p) => p,
         None => {
-            return TranscriptOutcome::Unavailable(format!(
-                "no .jsonl files in {}",
-                dir.display()
-            ));
+            return TranscriptOutcome::Unavailable(format!("no .jsonl files in {}", dir.display()));
         }
     };
     let content = match std::fs::read_to_string(&path) {
@@ -98,10 +95,7 @@ pub fn render_transcript(cwd: &Path, home: &Path, tail: Option<u32>) -> Transcri
 
     let want_tail = tail.map(|n| n as usize).unwrap_or(DEFAULT_TAIL).max(1);
 
-    let messages: Vec<String> = content
-        .lines()
-        .filter_map(render_entry)
-        .collect();
+    let messages: Vec<String> = content.lines().filter_map(render_entry).collect();
     let total = messages.len();
     if total == 0 {
         return TranscriptOutcome::Unavailable(format!(

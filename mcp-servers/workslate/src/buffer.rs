@@ -8,6 +8,8 @@ pub enum EditMode {
     Replace,
     After,
     Before,
+    AfterLine,
+    BeforeLine,
     Append,
 }
 
@@ -37,13 +39,18 @@ pub fn resolve_target(
     line_range: Option<(u32, u32)>,
 ) -> Result<ResolvedTarget, String> {
     if let Some((start, end)) = line_range {
+        // (line_start, content_end) per line, where content_end excludes the line
+        // terminator. Uses split_inclusive so the terminator length is counted exactly —
+        // "\r\n" is two bytes, not one — otherwise byte offsets drift on CRLF files.
         let line_offsets: Vec<(usize, usize)> = {
             let mut offsets = Vec::new();
             let mut pos = 0;
-            for line in file_content.lines() {
-                let end_pos = pos + line.len();
-                offsets.push((pos, end_pos));
-                pos = end_pos + 1; // skip \n
+            for piece in file_content.split_inclusive('\n') {
+                let start = pos;
+                pos += piece.len();
+                let content = piece.strip_suffix('\n').unwrap_or(piece);
+                let content = content.strip_suffix('\r').unwrap_or(content);
+                offsets.push((start, start + content.len()));
             }
             if offsets.is_empty() {
                 offsets.push((0, 0));
@@ -63,8 +70,12 @@ pub fn resolve_target(
         }
 
         let byte_start = line_offsets[s].0;
+        // End at the start of the line *after* the range (which includes this range's full
+        // terminator, \n or \r\n); for the final line with no following line, stop at its
+        // content end so a trailing terminator is preserved. On LF, line_offsets[e].0 equals
+        // the old `content_end + 1`, so this is a no-op change for LF files.
         let byte_end = if e < line_offsets.len() {
-            line_offsets[e - 1].1 + 1
+            line_offsets[e].0
         } else {
             line_offsets[e - 1].1
         };
@@ -111,7 +122,12 @@ pub fn resolve_target(
     }
 }
 
-pub fn apply_mode(file_content: &str, target: &ResolvedTarget, new_string: &str, mode: &EditMode) -> String {
+pub fn apply_mode(
+    file_content: &str,
+    target: &ResolvedTarget,
+    new_string: &str,
+    mode: &EditMode,
+) -> String {
     match mode {
         EditMode::Replace => format!(
             "{}{}{}",
@@ -131,6 +147,74 @@ pub fn apply_mode(file_content: &str, target: &ResolvedTarget, new_string: &str,
             new_string,
             &file_content[target.byte_start..]
         ),
+        EditMode::AfterLine => {
+            // Insert new_string as its own line(s) after the whole line containing the match.
+            // Inserting nothing is a no-op (an empty line-insert has no meaning; do not
+            // add a stray newline the way the non-empty path would).
+            if new_string.is_empty() {
+                return file_content.to_string();
+            }
+            // The caller does not manage newlines: a trailing newline is added if absent.
+            // If byte_end already sits at a line start (right after a newline — as with
+            // line-range targeting, or an old_string that itself ends in '\n'), the anchor's
+            // line has already ended there; insert at byte_end rather than skipping ahead to
+            // the *next* line's newline.
+            let at_line_boundary =
+                target.byte_end > 0 && file_content.as_bytes()[target.byte_end - 1] == b'\n';
+            let insert_at = if at_line_boundary {
+                target.byte_end
+            } else {
+                match file_content[target.byte_end..].find('\n') {
+                    Some(off) => target.byte_end + off + 1,
+                    None => file_content.len(),
+                }
+            };
+            let mut block = String::new();
+            if insert_at == file_content.len() && !file_content.ends_with('\n') {
+                block.push('\n');
+            }
+            block.push_str(new_string);
+            if !block.ends_with('\n') {
+                block.push('\n');
+            }
+            format!(
+                "{}{}{}",
+                &file_content[..insert_at],
+                block,
+                &file_content[insert_at..]
+            )
+        }
+        EditMode::BeforeLine => {
+            // Insert new_string as its own line(s) before the whole line containing the match.
+            if new_string.is_empty() {
+                return file_content.to_string();
+            }
+            // The caller does not manage newlines: a trailing newline is added if absent.
+            // Symmetric to AfterLine: if byte_start points at a newline (the anchor begins
+            // with a line terminator that belongs to the previous line), advance past it so
+            // we anchor on the line the anchor's content is actually on.
+            let byte_start = if target.byte_start < file_content.len()
+                && file_content.as_bytes()[target.byte_start] == b'\n'
+            {
+                target.byte_start + 1
+            } else {
+                target.byte_start
+            };
+            let insert_at = file_content[..byte_start]
+                .rfind('\n')
+                .map(|i| i + 1)
+                .unwrap_or(0);
+            let mut block = String::from(new_string);
+            if !block.ends_with('\n') {
+                block.push('\n');
+            }
+            format!(
+                "{}{}{}",
+                &file_content[..insert_at],
+                block,
+                &file_content[insert_at..]
+            )
+        }
         EditMode::Append => {
             if file_content.ends_with('\n') {
                 format!("{}{}", file_content, new_string)
@@ -170,11 +254,11 @@ pub struct EditBufferParams {
     pub name: String,
     /// Path to file. With file_path: loads from disk and edits. Without: edits existing buffer content.
     pub file_path: Option<String>,
-    /// The exact text to find. Required for replace/after/before (unless line_start is used). Ignored for append.
+    /// The exact text to find. Required for replace/after/before/after_line/before_line (unless line_start is used). Ignored for append.
     pub old_string: Option<String>,
     /// The replacement or insertion text
     pub new_string: String,
-    /// Position mode: "replace" (default), "after" (insert after old_string), "before" (insert before old_string), "append" (append to end of file)
+    /// Position mode: "replace" (default), "after"/"before" (raw insert adjacent to old_string — caller manages newlines), "after_line"/"before_line" (insert new_string as its own line after/before the line containing old_string — the newline is handled for you), "append" (append to end of file)
     pub position: Option<String>,
     /// Target the Nth occurrence of old_string (1-based, JSON integer like `2`).
     /// Without this, old_string must appear exactly once. Pass a raw number, not a string.
@@ -267,3 +351,132 @@ pub struct ClearParams {
     pub all: Option<bool>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn after_line(content: &str, anchor: &str, ins: &str) -> String {
+        let t = resolve_target(content, anchor, None, None).unwrap();
+        apply_mode(content, &t, ins, &EditMode::AfterLine)
+    }
+    fn before_line(content: &str, anchor: &str, ins: &str) -> String {
+        let t = resolve_target(content, anchor, None, None).unwrap();
+        apply_mode(content, &t, ins, &EditMode::BeforeLine)
+    }
+
+    #[test]
+    fn after_line_inserts_whole_line_no_glue() {
+        assert_eq!(after_line("A\nB\nC\n", "A", "X"), "A\nX\nB\nC\n");
+    }
+
+    #[test]
+    fn after_line_does_not_double_a_supplied_trailing_newline() {
+        assert_eq!(after_line("A\nB\n", "A", "X\n"), "A\nX\nB\n");
+    }
+
+    #[test]
+    fn after_line_on_last_line_without_trailing_newline() {
+        assert_eq!(after_line("A\nB", "B", "X"), "A\nB\nX\n");
+    }
+
+    #[test]
+    fn after_line_on_last_line_with_trailing_newline() {
+        assert_eq!(after_line("A\nB\n", "B", "X"), "A\nB\nX\n");
+    }
+
+    #[test]
+    fn after_line_anchors_on_the_whole_line_not_the_match_offset() {
+        // match is mid-line; insertion still lands after the entire line
+        assert_eq!(
+            after_line("foo bar\nbaz\n", "foo", "X"),
+            "foo bar\nX\nbaz\n"
+        );
+    }
+
+    #[test]
+    fn after_line_with_line_range_targeting_inserts_after_that_line_not_the_next() {
+        let t = resolve_target("A\nB\nC\n", "", None, Some((2, 2))).unwrap();
+        assert_eq!(
+            apply_mode("A\nB\nC\n", &t, "X", &EditMode::AfterLine),
+            "A\nB\nX\nC\n"
+        );
+    }
+
+    #[test]
+    fn after_line_with_anchor_ending_in_newline() {
+        let t = resolve_target("A\nB\nC\n", "B\n", None, None).unwrap();
+        assert_eq!(
+            apply_mode("A\nB\nC\n", &t, "X", &EditMode::AfterLine),
+            "A\nB\nX\nC\n"
+        );
+    }
+
+    #[test]
+    fn before_line_inserts_whole_line_no_glue() {
+        assert_eq!(before_line("A\nB\nC\n", "B", "X"), "A\nX\nB\nC\n");
+    }
+
+    #[test]
+    fn before_line_on_first_line() {
+        assert_eq!(before_line("A\nB\n", "A", "X"), "X\nA\nB\n");
+    }
+
+    #[test]
+    fn before_line_multiline_block_each_on_own_line() {
+        assert_eq!(before_line("A\nB\n", "B", "X\nY"), "A\nX\nY\nB\n");
+    }
+
+    #[test]
+    fn before_line_with_anchor_starting_with_newline() {
+        // anchor "\nB" begins with the newline that terminates the previous line; we still
+        // insert before B's line, not A's (symmetric to AfterLine's boundary handling)
+        let t = resolve_target("A\nB\nC\n", "\nB", None, None).unwrap();
+        assert_eq!(
+            apply_mode("A\nB\nC\n", &t, "X", &EditMode::BeforeLine),
+            "A\nX\nB\nC\n"
+        );
+    }
+
+    #[test]
+    fn empty_new_string_is_a_noop_for_line_modes() {
+        let after = resolve_target("A\nB\n", "A", None, None).unwrap();
+        assert_eq!(
+            apply_mode("A\nB\n", &after, "", &EditMode::AfterLine),
+            "A\nB\n"
+        );
+        let before = resolve_target("A\nB\n", "B", None, None).unwrap();
+        assert_eq!(
+            apply_mode("A\nB\n", &before, "", &EditMode::BeforeLine),
+            "A\nB\n"
+        );
+    }
+
+    #[test]
+    fn line_range_resolves_crlf_terminators_correctly() {
+        // line 1 spans "A\r\n" (bytes 0..3), not "A\r" (0..2) — no CRLF offset drift
+        let t1 = resolve_target("A\r\nB\r\n", "", None, Some((1, 1))).unwrap();
+        assert_eq!((t1.byte_start, t1.byte_end), (0, 3));
+        // last line: content "B" only (trailing terminator excluded, matching LF semantics)
+        let t2 = resolve_target("A\r\nB\r\n", "", None, Some((2, 2))).unwrap();
+        assert_eq!((t2.byte_start, t2.byte_end), (3, 4));
+        // a multi-line range spans both full CRLF lines
+        let t3 = resolve_target("A\r\nB\r\nC\r\n", "", None, Some((1, 2))).unwrap();
+        assert_eq!((t3.byte_start, t3.byte_end), (0, 6));
+    }
+
+    #[test]
+    fn line_range_lf_behavior_unchanged() {
+        // full-line range includes the newline
+        let a = resolve_target("A\nB\nC\n", "", None, Some((1, 2))).unwrap();
+        assert_eq!((a.byte_start, a.byte_end), (0, 4));
+        // last line excludes its trailing newline
+        let b = resolve_target("A\nB\nC\n", "", None, Some((3, 3))).unwrap();
+        assert_eq!((b.byte_start, b.byte_end), (4, 5));
+    }
+
+    #[test]
+    fn raw_after_still_glues_documenting_the_footgun_the_line_modes_fix() {
+        let t = resolve_target("A\nB\n", "A", None, None).unwrap();
+        assert_eq!(apply_mode("A\nB\n", &t, "X", &EditMode::After), "AX\nB\n");
+    }
+}

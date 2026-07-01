@@ -163,11 +163,7 @@ fn session_scoped_task_session(conn: &Connection, session_id: &str) -> Option<St
         .ok()?
         .filter_map(|r| r.ok())
         .collect();
-    if rows.len() == 1 {
-        rows.pop()
-    } else {
-        None
-    }
+    if rows.len() == 1 { rows.pop() } else { None }
 }
 
 /// Task-status doorbell: the same footer the MCP server used to append, now
@@ -393,7 +389,6 @@ pub fn uninstall_hooks() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -494,7 +489,10 @@ mod tests {
             [],
         )
         .unwrap();
-        assert_eq!(session_scoped_task_session(&conn, "s"), Some("sess".to_string()));
+        assert_eq!(
+            session_scoped_task_session(&conn, "s"),
+            Some("sess".to_string())
+        );
         // Unknown session id -> None.
         assert_eq!(session_scoped_task_session(&conn, "other"), None);
         // Ambiguous: two distinct task_sessions under one session id -> None (don't guess).

@@ -14,10 +14,15 @@
 mod backend;
 mod executor;
 mod lenient;
+mod opencode;
 mod params;
+#[cfg(unix)]
+mod pdeath_guard;
 mod render;
 mod rollout;
 mod store;
+#[cfg(windows)]
+mod winjob;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -77,15 +82,17 @@ struct Dispatch {
     /// to decide which stranded rows are safe to reconcile.
     owner_pid: i64,
     owner_instance: String,
-    /// codex --version probed once at boot, recorded on each run for audit.
-    backend_version: Option<String>,
+    /// Backend --version strings probed once at boot, recorded on each run for audit.
+    backend_versions: Arc<HashMap<String, Option<String>>>,
+    /// Per-project state directory (dispatch.db plus dispatch-owned logs).
+    state_dir: PathBuf,
     tool_router: ToolRouter<Self>,
 }
 
 #[tool_router]
 impl Dispatch {
     #[tool(
-        description = "Delegate ONE execution step to a coding-agent backend (codex) running as a headless, WRITE-CAPABLE subprocess in `working_dir` — codex may modify files there. Runs ASYNCHRONOUSLY: returns a task id immediately; poll dispatch_status(id) for progress and the result. Provide a structured spec — objective (required), working_dir (required, absolute), and optional target_files / constraints / acceptance — plus optional free-form context / details; the server renders them into the codex prompt. working_dir is rejected unless it canonicalizes within the project root (widen with the DISPATCH_EXTRA_ROOTS env var). sandbox defaults to workspace-write; danger-full-access is rejected unless the server enables it. One active run per working_dir unless allow_concurrent=true. POLICY: initiate dispatch according to claude-agent-kit--dispatch-prefs.md (`conservative` / `preference-only` / `proactive`). APPROVAL: before the FIRST dispatch in a session, confirm working_dir + the step scope + the approval mode with the user when approval mode is ask; skip that confirmation only when approval mode is auto."
+        description = "Delegate ONE execution step to a coding-agent backend (codex or opencode) running headless and WRITE-CAPABLE in `working_dir` — it may modify files there. Runs ASYNCHRONOUSLY: returns a task id immediately; poll dispatch_status(id) for progress and the result. Provide a structured spec — objective (required), working_dir (required, absolute), and optional target_files / constraints / acceptance — plus optional free-form context / details; the server renders them into the backend prompt. working_dir is rejected unless it canonicalizes within the project root (widen with the DISPATCH_EXTRA_ROOTS env var). sandbox defaults to workspace-write; danger-full-access is rejected unless the server enables it. One active run per working_dir unless allow_concurrent=true. POLICY: initiate dispatch according to claude-agent-kit--dispatch-prefs.md (`conservative` / `preference-only` / `proactive`) — under `proactive` + `auto`, submit directly for suitable steps; this policy governs dispatch specifically and is not subject to the general write-capable delegation propose-and-wait default used elsewhere. APPROVAL: before the FIRST dispatch in a session, confirm working_dir + the step scope + the approval granularity (per-step vs batch) with the user when approval mode is ask; skip that confirmation only when approval mode is auto."
     )]
     async fn dispatch_submit(
         &self,
@@ -107,7 +114,7 @@ impl Dispatch {
                 return Ok(err_struct(
                     ErrCode::UnknownBackend,
                     format!(
-                        "unknown backend {:?}; supported: codex",
+                        "unknown backend {:?}; supported: codex, opencode",
                         p.backend.as_deref().unwrap_or("")
                     ),
                 ));
@@ -184,9 +191,11 @@ impl Dispatch {
             reasoning_effort: nonempty(p.reasoning_effort),
             skip_git_repo_check: p.skip_git_repo_check.unwrap_or(false),
             prompt,
-            backend_version: self.backend_version.clone(),
+            backend_version: self.backend_version(backend),
+            state_dir: self.state_dir.clone(),
             resume_session: None,
             nonce: Some(nonce),
+            rollout_path: None,
         };
         executor::spawn(self.db.clone(), self.registry.clone(), job);
 
@@ -332,7 +341,7 @@ impl Dispatch {
     }
 
     #[tool(
-        description = "List which backend CLIs (codex) are available on PATH, with their --version output. Call this when you're unsure codex is installed on this machine."
+        description = "List which backend CLIs (codex, opencode) are available on PATH, with their --version output. Call this when you're unsure a dispatch backend is installed on this machine."
     )]
     async fn dispatch_backends(
         &self,
@@ -365,7 +374,7 @@ impl Dispatch {
     }
 
     #[tool(
-        description = "Show a curated, live-updating timeline of what a delegated codex run is doing, read from codex's own session rollout log. Noise (system prompts, token counts, encrypted reasoning) is filtered out; signal (user/codex messages, tool calls, file edits, lifecycle) is kept. Works WHILE the task is still running. Page with line_start/line_end (1-based; omitted = the tail) to avoid output limits — total_lines tells you how to page. kinds filters categories (lifecycle/messages/tools/edits/reasoning; reasoning off by default). raw=true returns the underlying rollout JSONL instead."
+        description = "Show a curated, live-updating timeline of what a delegated run is doing. Codex logs are read from codex's rollout; OpenCode logs are dispatch-owned normalized JSONL with native OpenCode events preserved. Noise (system prompts, token counts, encrypted codex reasoning, raw tool-call output) is filtered out; signal (user/backend messages, tool-call invocations, file edits, lifecycle, and plaintext OpenCode reasoning) is kept, and never truncated per-field — only the total response is size-capped (see line_start/line_end). Works WHILE the task is still running. Page with line_start/line_end (1-based; omitted = the tail) to avoid output limits — total_lines tells you how to page. kinds filters categories (lifecycle/messages/tools/edits/reasoning/tool_results; by default codex excludes reasoning, opencode includes it; tool_results — raw tool-call output — is excluded by default for both backends, request it explicitly). raw=true returns the underlying JSONL."
     )]
     async fn dispatch_logs(
         &self,
@@ -397,7 +406,7 @@ impl Dispatch {
             None => {
                 return Ok(json_ok(json!({
                     "id": id, "status": row.status, "session_pending": true, "log": "",
-                    "note": "no codex log associated yet — the run may not have written its rollout, or its association is still pending; try again shortly",
+                    "note": "no backend log associated yet — the run may not have written its log, or its association is still pending; try again shortly",
                 })));
             }
         };
@@ -426,7 +435,9 @@ impl Dispatch {
             })));
         }
 
-        let kinds = p.kinds.unwrap_or_else(rollout::default_kinds);
+        let kinds = p
+            .kinds
+            .unwrap_or_else(|| rollout::default_kinds(&row.backend));
         let rendered = rollout::curate(&jsonl, &kinds);
         let (text, s, e, capped) = rollout::window(&rendered.lines, start, end);
         Ok(json_ok(json!({
@@ -438,7 +449,7 @@ impl Dispatch {
     }
 
     #[tool(
-        description = "Interrupt a delegated task and steer it with a NEW instruction, continuing the SAME codex session (its accumulated context + the files it already wrote are preserved). If the task is still running it is cancelled first; then codex resumes the session with your instruction. Creates a new linked task (parent_id = the steered task) so the turn history shows in dispatch_list. Returns the new id — poll dispatch_status / dispatch_logs. Use this for mid-flight 'no, do it this way instead' redirection."
+        description = "Interrupt a delegated task and steer it with a NEW instruction, continuing the SAME backend session (its accumulated context + the files it already wrote are preserved when the backend supports sessions). If the task is still running it is cancelled first; then the backend resumes the session with your instruction. Creates a new linked task (parent_id = the steered task) so the turn history shows in dispatch_list. Returns the new id — poll dispatch_status / dispatch_logs. Use this for mid-flight 'no, do it this way instead' redirection."
     )]
     async fn dispatch_steer(
         &self,
@@ -477,7 +488,7 @@ impl Dispatch {
                 return Ok(err_struct(
                     ErrCode::SessionNotReady,
                     format!(
-                        "no codex session recorded for {id} yet — it may not have started; check dispatch_status / dispatch_logs first"
+                        "no backend session recorded for {id} yet — it may not have started; check dispatch_status / dispatch_logs first"
                     ),
                 ));
             }
@@ -523,7 +534,7 @@ impl Dispatch {
         }))
         .unwrap_or_else(|_| "{}".to_string());
 
-        // The parent's rollout file: codex resume appends its new turn here. We use it
+        // The parent's rollout file: resumed backends append their new turn here. We use it
         // for the steered row's start-line boundary (logs show only the new turn) and to
         // set the steered row's identity immediately (below).
         let parent_rollout = self.resolve_rollout(&parent);
@@ -596,9 +607,12 @@ impl Dispatch {
             reasoning_effort: eff_effort.clone(),
             skip_git_repo_check: true,
             prompt,
-            backend_version: self.backend_version.clone(),
+            backend_version: self
+                .backend_version(Backend::parse(&parent.backend).unwrap_or(Backend::Codex)),
+            state_dir: self.state_dir.clone(),
             resume_session: Some(session_id.clone()),
             nonce: None,
+            rollout_path: parent_rollout.as_deref().map(PathBuf::from),
         };
         executor::spawn(self.db.clone(), self.registry.clone(), job);
 
@@ -611,12 +625,12 @@ impl Dispatch {
             "sandbox": eff_sandbox,
             "model": eff_model,
             "reasoning_effort": eff_effort,
-            "note": "steering: the codex session was resumed with your new instruction (it inherits the echoed sandbox/model/reasoning_effort unless you overrode them) — poll dispatch_status / dispatch_logs",
+            "note": "steering: the backend session was resumed with your new instruction (it inherits the echoed sandbox/model/reasoning_effort unless you overrode them) — poll dispatch_status / dispatch_logs",
         })))
     }
 
     #[tool(
-        description = "Bounded long-poll: block until a dispatched task reaches a terminal status (succeeded / failed / cancelled / interrupted) or timeout_ms elapses (default 30s, capped at 120s), then return compact task status plus a small curated `log_tail` and `timed_out` flag. This is NOT an unbounded wait — a multi-minute run will time out and you simply re-invoke dispatch_wait; meanwhile you avoid busy-polling dispatch_status / dispatch_logs. Use dispatch_logs for the full timeline and dispatch_status for the full captured result/spec."
+        description = "Bounded long-poll: block until a dispatched task reaches a terminal status (succeeded / failed / cancelled / interrupted) or timeout_ms elapses (default 30s, capped at 120s), then return compact task status plus a small curated `log_tail` and `timed_out` flag. This is NOT an unbounded wait — a multi-minute run times out with `timed_out: true` and a non-terminal status. dispatch has NO push notification (unlike a backgrounded Agent/Workflow task, which auto-notifies on completion): if the task is still non-terminal, either re-invoke dispatch_wait now to keep blocking, or — if ending the turn — schedule a follow-up dispatch_status/dispatch_wait check first where a scheduling mechanism is available (e.g. ScheduleWakeup), or otherwise tell the user explicitly the task is still running and they'll need to ask you to check back. Ending the turn with nothing armed and no signal to the user strands the task with no way to learn it finished. Use dispatch_logs for the full timeline and dispatch_status for the full captured result/spec."
     )]
     async fn dispatch_wait(
         &self,
@@ -671,6 +685,12 @@ impl Dispatch {
 // ── guards + helpers (non-tool impl) ──────────────────────
 
 impl Dispatch {
+    fn backend_version(&self, backend: Backend) -> Option<String> {
+        self.backend_versions
+            .get(backend.as_str())
+            .and_then(|v| v.clone())
+    }
+
     fn lock_db(&self) -> Result<std::sync::MutexGuard<'_, rusqlite::Connection>, CallToolResult> {
         self.db
             .lock()
@@ -707,7 +727,7 @@ impl Dispatch {
                 "shown_lines": "0-0",
                 "byte_capped": false,
                 "text": "",
-                "note": "no codex log associated yet — the run may not have written its rollout, or its association is still pending",
+                    "note": "no backend log associated yet — the run may not have written its log, or its association is still pending",
             });
         };
         let jsonl = match rollout::read_to_string(Path::new(&rollout_path)) {
@@ -723,7 +743,7 @@ impl Dispatch {
                 });
             }
         };
-        let kinds = rollout::default_kinds();
+        let kinds = rollout::default_kinds(&row.backend);
         let rendered = rollout::curate(&jsonl, &kinds);
         let (text, s, e, capped) = rollout::window_with_limits(
             &rendered.lines,
@@ -742,7 +762,7 @@ impl Dispatch {
         })
     }
 
-    /// Resolve a task's codex rollout path. A cached value is trusted only if it still
+    /// Resolve a task's backend log path. A cached value is trusted only if it still
     /// validates as this task's (`rollout_is_ours`) — self-healing a row poisoned by the
     /// old cwd-guessing code. Otherwise it re-locates by identity (`locate_validated`).
     /// It never returns a bare cwd guess: with nothing matching it returns None (fail
@@ -762,7 +782,7 @@ impl Dispatch {
         Some(path_str)
     }
 
-    /// Resolve a task's codex session id (for `dispatch_steer`'s resume). The stored sid
+    /// Resolve a task's backend session id (for `dispatch_steer`'s resume). The stored sid
     /// is trusted only if its cached rollout still validates as this task's — otherwise it
     /// is re-derived by identity, so a steer can never resume a poisoned / unrelated session.
     fn resolve_session_id(&self, row: &store::TaskRow) -> Option<String> {
@@ -1077,7 +1097,15 @@ fn process_alive(pid: i32) -> bool {
     std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn process_alive(pid: i32) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    winjob::process_alive(pid as u32)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn process_alive(_pid: i32) -> bool {
     // No portable liveness check; assume alive so a peer server's tasks are never
     // clobbered. A crashed non-unix server may leave a stale 'running' row.
@@ -1124,8 +1152,8 @@ impl ServerHandler for Dispatch {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
             "Hierarchical delegation tools. Where `aside` asks another model family for a \
-             read-only second opinion, `dispatch` hands a coding-agent backend (codex) an \
-             execution task: codex runs as a headless, WRITE-CAPABLE subprocess that modifies \
+             read-only second opinion, `dispatch` hands a coding-agent backend (codex or opencode) an \
+             execution task: the backend runs headless and WRITE-CAPABLE, modifying \
              files under a target directory. Delegation is ASYNCHRONOUS — dispatch_submit returns \
              a task id immediately and the run continues in the background; poll dispatch_status, \
              enumerate with dispatch_list, and stop a run with dispatch_cancel. The server enforces \
@@ -1133,8 +1161,9 @@ impl ServerHandler for Dispatch {
              the project root (or a DISPATCH_EXTRA_ROOTS-allowlisted root), the sandbox ceiling \
              blocks danger-full-access unless DISPATCH_ALLOW_DANGER is set, and only one run is \
              allowed per working_dir unless allow_concurrent. The behavioral dispatch policy — \
-             when to initiate dispatch, and whether to confirm working_dir, step scope, and \
-             approval mode before the first dispatch of a session — lives in \
+             when to initiate dispatch (a `proactive` prefs policy means submitting directly, \
+             without a propose-and-wait step), and whether to confirm working_dir, step scope, \
+             and approval granularity before the first dispatch of a session — lives in \
              claude-agent-kit--dispatch.md and claude-agent-kit--dispatch-prefs.md.",
         )
     }
@@ -1167,8 +1196,26 @@ impl ServerHandler for Dispatch {
 
 // ── main ──────────────────────────────────────────────────
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// Sync entrypoint: argv-sniffs for the hidden `__pdeath_guard` re-invocation
+/// (Linux/macOS only — see `pdeath_guard`) BEFORE booting Tokio, since guard
+/// mode never needs an async runtime and stays deliberately minimal-surface.
+/// Everything else boots Tokio and runs the real server unchanged.
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(unix)]
+    {
+        let mut args = std::env::args_os();
+        let _argv0 = args.next();
+        if args.next().as_deref() == Some(std::ffi::OsStr::new("__pdeath_guard")) {
+            return pdeath_guard::run(args);
+        }
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run_server())
+}
+
+async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
@@ -1201,7 +1248,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(0);
     let owner_instance = format!("{owner_pid}-{nanos}");
 
-    let backend_version = backend::version(Backend::Codex).await;
+    let mut backend_versions = HashMap::new();
+    for b in Backend::all() {
+        backend_versions.insert(b.as_str().to_string(), backend::version(*b).await);
+    }
 
     let server = Dispatch {
         db: Arc::new(StdMutex::new(conn)),
@@ -1211,14 +1261,74 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         allow_danger: env_truthy("DISPATCH_ALLOW_DANGER"),
         owner_pid,
         owner_instance,
-        backend_version,
+        backend_versions: Arc::new(backend_versions),
+        state_dir,
         tool_router: Dispatch::tool_router(),
     };
 
+    let registry_for_shutdown = server.registry.clone();
     let transport = rmcp::transport::io::stdio();
     let running = server.serve(transport).await?;
-    running.waiting().await?;
+    tokio::select! {
+        r = running.waiting() => { r?; }
+        _ = shutdown_signal() => {
+            graceful_shutdown(&registry_for_shutdown).await;
+        }
+    }
     Ok(())
+}
+
+/// Resolves on Ctrl+C (all platforms) or SIGTERM (Unix only) — the
+/// interceptable-termination cases. Does nothing for a hard `SIGKILL`, which
+/// the native per-platform mechanisms (`pdeath_guard` on Linux/macOS, Job
+/// Objects on Windows — see those modules) exist specifically to cover.
+#[cfg(unix)]
+async fn shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut term = match signal(SignalKind::terminate()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("dispatch: failed to register SIGTERM handler: {e}");
+            // Fall back to Ctrl+C alone rather than return immediately, which
+            // would make this arm of the outer select! spuriously "win".
+            let _ = tokio::signal::ctrl_c().await;
+            return;
+        }
+    };
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = term.recv() => {}
+    }
+}
+
+#[cfg(not(unix))]
+async fn shutdown_signal() {
+    let _ = tokio::signal::ctrl_c().await;
+}
+
+/// Cancels every in-flight task's token and waits, bounded, for their cleanup
+/// to actually finish (each task removes itself from `registry` on completion
+/// — see `executor::spawn`) before returning. Only reachable via interceptable
+/// termination (see `shutdown_signal`); a hard `SIGKILL` never runs this.
+async fn graceful_shutdown(registry: &executor::Registry) {
+    let tokens: Vec<_> = match registry.lock() {
+        Ok(reg) => reg.values().cloned().collect(),
+        Err(_) => Vec::new(),
+    };
+    if tokens.is_empty() {
+        return;
+    }
+    for t in &tokens {
+        t.cancel();
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while tokio::time::Instant::now() < deadline {
+        let empty = registry.lock().map(|reg| reg.is_empty()).unwrap_or(true);
+        if empty {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 #[cfg(test)]

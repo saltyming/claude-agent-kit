@@ -6,6 +6,7 @@ BRANCH="main"
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
 CLAUDE_DIR="${HOME}/.claude"
 RULES_DIR="${CLAUDE_DIR}/rules"
+SKILLS_DIR="${CLAUDE_DIR}/skills"
 BIN_DIR="${HOME}/.local/bin"
 MANIFEST="${CLAUDE_DIR}/.claude-agent-kit-manifest"
 SIGNATURE="claude-agent-kit"
@@ -18,6 +19,15 @@ claude-agent-kit--framework-conventions.md
 claude-agent-kit--parallel-work.md
 claude-agent-kit--aside.md
 claude-agent-kit--dispatch.md
+claude-agent-kit--palette.md
+"
+
+SKILL_FILES="
+palette-init
+palette-spec
+palette-ux
+palette-ui
+palette-rules
 "
 
 uninstall() {
@@ -79,6 +89,14 @@ uninstall() {
         fi
     fi
     rm -f "$custom_list_file"
+    # Remove palette skill directories recorded in the manifest (core-signed only)
+    grep -E '/skills/palette-' "$MANIFEST" 2>/dev/null | while IFS= read -r d; do
+        if [ -d "$d" ] && [ -f "$d/SKILL.md" ] && grep -Fq "<!-- ${SIGNATURE} -->" "$d/SKILL.md"; then
+            rm -rf "$d" && echo "  removed $d"
+        elif [ -e "$d" ]; then
+            echo "  skipped $d (signature mismatch)"
+        fi
+    done
     rm -f "$MANIFEST"
     if command -v claude >/dev/null 2>&1; then
         for srv in workslate aside dispatch; do
@@ -170,11 +188,20 @@ for f in $RULE_FILES; do
     echo "$RULES_DIR/$f" >> "$MANIFEST"
 done
 
+# Palette skills (each is a directory holding one SKILL.md)
+echo "Downloading palette skills..."
+for s in $SKILL_FILES; do
+    mkdir -p "$SKILLS_DIR/$s"
+    download "$RAW_BASE/claude-skills/$s/SKILL.md" "$SKILLS_DIR/$s/SKILL.md"
+    echo "$SKILLS_DIR/$s" >> "$MANIFEST"
+done
+
 echo ""
 echo "Installed:"
 echo "  Binaries: $BIN_DIR/workslate, $BIN_DIR/aside, $BIN_DIR/dispatch"
 echo "  Config:   $CLAUDE_DIR/CLAUDE.md"
 echo "  Rules:    $RULES_DIR/claude-agent-kit--*.md"
+echo "  Skills:   $SKILLS_DIR/palette-*"
 echo ""
 
 # PATH check

@@ -14,7 +14,7 @@ const PREAMBLE: &str = "You are an autonomous coding agent delegated ONE self-co
 Work in the current directory, make the changes required to satisfy the task, and keep your \
 edits within the stated scope. When finished, end with a short summary of what you changed.";
 
-/// Compose the structured spec into a single codex prompt. Sections are emitted
+/// Compose the structured spec into a single backend prompt. Sections are emitted
 /// only when present, in a stable order. The `nonce` is appended as a trailing marker
 /// so dispatch can positively identify the rollout this task produces.
 pub fn render_prompt(p: &SubmitParams, nonce: &str) -> String {

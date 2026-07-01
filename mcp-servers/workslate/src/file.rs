@@ -6,9 +6,9 @@ pub fn validate_path(file_path: &str, project_root: &Path) -> Result<PathBuf, St
     let path = Path::new(file_path);
     let canonical = path.canonicalize().or_else(|_| {
         if let Some(parent) = path.parent() {
-            let canon_parent = parent.canonicalize().map_err(|e| {
-                format!("Path not accessible: {}: {}", file_path, e)
-            })?;
+            let canon_parent = parent
+                .canonicalize()
+                .map_err(|e| format!("Path not accessible: {}: {}", file_path, e))?;
             Ok(canon_parent.join(path.file_name().unwrap_or_default()))
         } else {
             Err(format!("Path not accessible: {}", file_path))

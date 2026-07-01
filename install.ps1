@@ -12,6 +12,7 @@ $Branch    = "main"
 $RawBase   = "https://raw.githubusercontent.com/$Repo/$Branch"
 $ClaudeDir = Join-Path $env:USERPROFILE ".claude"
 $RulesDir  = Join-Path $ClaudeDir "rules"
+$SkillsDir = Join-Path $ClaudeDir "skills"
 $BinDir    = Join-Path $env:USERPROFILE ".local\bin"
 $Manifest  = Join-Path $ClaudeDir ".claude-agent-kit-manifest"
 $Signature       = "claude-agent-kit"
@@ -24,9 +25,12 @@ $RuleFiles = @(
     "claude-agent-kit--parallel-work.md"
     "claude-agent-kit--aside.md"
     "claude-agent-kit--dispatch.md"
+    "claude-agent-kit--palette.md"
 )
 
 $Binaries = @("workslate", "aside", "dispatch")
+
+$SkillNames = @("palette-init", "palette-spec", "palette-ux", "palette-ui", "palette-rules")
 
 function Do-Uninstall {
     if (-not (Test-Path $Manifest)) {
@@ -40,7 +44,7 @@ function Do-Uninstall {
     }
     $customList = @()
     foreach ($f in Get-Content $Manifest) {
-        if (Test-Path $f) {
+        if (Test-Path $f -PathType Leaf) {
             if ($f -like "*.md") {
                 $first = Get-Content $f -TotalCount 1
                 if ($first -match [regex]::Escape("<!-- $CustomSignature")) {
@@ -81,6 +85,18 @@ function Do-Uninstall {
         }
     }
 
+    # Remove palette skill directories recorded in the manifest (core-signed only)
+    foreach ($d in Get-Content $Manifest) {
+        if ($d -like "*\skills\palette-*" -and (Test-Path $d -PathType Container)) {
+            $skillMd = Join-Path $d "SKILL.md"
+            if ((Test-Path $skillMd) -and (Select-String -Path $skillMd -Pattern ([regex]::Escape("<!-- $Signature -->")) -Quiet)) {
+                Remove-Item $d -Recurse -Force
+                Write-Host "  removed $d"
+            } else {
+                Write-Host "  skipped $d (signature mismatch)"
+            }
+        }
+    }
     Remove-Item $Manifest -Force
     if (Get-Command claude -ErrorAction SilentlyContinue) {
         foreach ($srv in $Binaries) {
@@ -151,11 +167,22 @@ foreach ($f in $RuleFiles) {
     Add-Content $Manifest $dest
 }
 
+
+# Palette skills (each is a directory holding one SKILL.md)
+Write-Host "Downloading palette skills..."
+foreach ($s in $SkillNames) {
+    $skillDir = Join-Path $SkillsDir $s
+    New-Item -ItemType Directory -Force -Path $skillDir | Out-Null
+    Invoke-WebRequest -Uri "$RawBase/claude-skills/$s/SKILL.md" -OutFile (Join-Path $skillDir "SKILL.md")
+    Add-Content $Manifest $skillDir
+}
+
 Write-Host ""
 Write-Host "Installed:"
 Write-Host "  Binaries: $BinDir\workslate.exe, $BinDir\aside.exe, $BinDir\dispatch.exe"
 Write-Host "  Config:   $claudeDest"
 Write-Host "  Rules:    $RulesDir\claude-agent-kit--*.md"
+Write-Host "  Skills:   $SkillsDir\palette-*"
 Write-Host ""
 
 # PATH check
@@ -315,11 +342,12 @@ if (-not $keepDispatchPrefs) {
     Write-Host "(set DISPATCH_* environment variables to run non-interactively)"
     Write-Host ""
 
-    $dispPolicy      = Prompt-WithDefault "Execution policy [conservative/preference-only/proactive] (default conservative)" "DISPATCH_POLICY"      "conservative" '^(conservative|preference-only|proactive)$'
-    $dispApproval    = Prompt-WithDefault "Approval mode [ask/auto] (default ask)"                          "DISPATCH_APPROVAL"    "ask" '^(ask|auto)$'
-    $dispGranularity = Prompt-WithDefault "Default approval granularity [per-step/batch/ask] (default ask)" "DISPATCH_GRANULARITY" "ask" '^(per-step|batch|ask)$'
-    $dispModel       = Prompt-WithDefault "Default model for codex (blank for CLI default)"                 "DISPATCH_MODEL"       ""    $null
-    $dispEffort      = Prompt-WithDefault "Default reasoning effort [low/medium/high/xhigh, blank]"         "DISPATCH_EFFORT"      ""    '^(low|medium|high|xhigh)?$'
+    $dispPolicy      = Prompt-WithDefault "Execution policy [conservative/preference-only/proactive] (default conservative)"          "DISPATCH_POLICY"      "conservative" '^(conservative|preference-only|proactive)$'
+    $dispApproval    = Prompt-WithDefault "Approval mode [ask/auto] (default ask)"                                               "DISPATCH_APPROVAL"    "ask" '^(ask|auto)$'
+    $dispGranularity = Prompt-WithDefault "Default approval granularity [per-step/batch/ask] (default ask)"                      "DISPATCH_GRANULARITY" "ask" '^(per-step|batch|ask)$'
+    $dispBackend     = Prompt-WithDefault "Default backend [codex/opencode] (default codex)"                                    "DISPATCH_BACKEND"     "codex" '^(codex|opencode)$'
+    $dispModel       = Prompt-WithDefault "Default model (codex model id, or opencode provider/model; blank for backend default)" "DISPATCH_MODEL"       ""    $null
+    $dispEffort      = Prompt-WithDefault "Default reasoning effort [low/medium/high/xhigh, blank]"                              "DISPATCH_EFFORT"      ""    '^(low|medium|high|xhigh)?$'
 
     $dtmplUrl = "$RawBase/scripts/claude-agent-kit--dispatch-prefs.md.tmpl"
     $dtmplTmp = New-TemporaryFile
@@ -328,6 +356,7 @@ if (-not $keepDispatchPrefs) {
     $dtmplContent = $dtmplContent.Replace("{{POLICY}}",      $dispPolicy)
     $dtmplContent = $dtmplContent.Replace("{{APPROVAL}}",    $dispApproval)
     $dtmplContent = $dtmplContent.Replace("{{GRANULARITY}}", $dispGranularity)
+    $dtmplContent = $dtmplContent.Replace("{{BACKEND}}",     $dispBackend)
     $dtmplContent = $dtmplContent.Replace("{{MODEL}}",       $dispModel)
     $dtmplContent = $dtmplContent.Replace("{{EFFORT}}",      $dispEffort)
 
@@ -339,6 +368,7 @@ if (-not $keepDispatchPrefs) {
     Write-Host "  Wrote $dispatchPrefsDest"
     Write-Host "  Dispatch execution policy: $dispPolicy"
     Write-Host "  Dispatch approval mode:    $dispApproval"
+    Write-Host "  Dispatch default backend:  $dispBackend"
 }
 
 # Shared custom-rules ingestion — a function (parity with cak-common.sh's

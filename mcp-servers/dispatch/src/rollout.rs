@@ -1,16 +1,16 @@
-//! Reading + curating codex rollout logs.
+//! Reading + curating backend JSONL logs.
 //!
 //! codex writes a JSONL "rollout" per session at
 //! `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<ts>-<session-uuid>.jsonl`, appended
-//! live while a run is in progress. `dispatch_logs` reads it to show progress —
-//! but the raw rollout is mostly noise (the giant system prompt, token counts,
-//! encrypted reasoning, duplicate developer messages), so we **curate** it to a
-//! compact timeline and slice it by **line range** so a long session can't blow
-//! the MCP output budget. The `locate_*` functions positively identify the rollout a
-//! task produced — by pre-spawn snapshot diff, by the prompt nonce, or by session id
-//! (which also feeds `codex exec resume`) — rather than guessing by cwd alone.
+//! live while a run is in progress. OpenCode runs write dispatch-owned normalized
+//! JSONL with the same top-level shape. `dispatch_logs` reads either source to
+//! show progress, then curates noise down to a compact timeline and slices it by
+//! **line range** so a long session can't blow the MCP output budget. The
+//! `locate_*` functions positively identify the log a task produced — by
+//! pre-spawn snapshot diff, by the prompt nonce, or by session id (which also
+//! feeds `codex exec resume`) — rather than guessing by cwd alone.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -23,22 +23,29 @@ const SCAN_CAP: usize = 60;
 /// dispatch prompt is recorded as a `user_message` among the first events.
 const NONCE_SCAN_LINES: usize = 64;
 
-/// The curation categories `dispatch_logs(kinds=…)` can select. `reasoning` is
-/// excluded by default — codex reasoning is encrypted and renders as a bare marker.
-pub fn default_kinds() -> Vec<String> {
-    ["lifecycle", "messages", "tools", "edits"]
+/// The curation categories `dispatch_logs(kinds=…)` can select. OpenCode exposes
+/// plaintext reasoning, so it includes `reasoning` by default; codex and unknown
+/// backends exclude it because codex reasoning is API-encrypted. `tool_results`
+/// (raw tool-call output, e.g. a full file read) is excluded by default for every
+/// backend — it's diagnostic noise, not narrative signal — and must be requested
+/// explicitly via `kinds=["tool_results", ...]`.
+pub fn default_kinds(backend: &str) -> Vec<String> {
+    let mut kinds: Vec<String> = ["lifecycle", "messages", "tools", "edits"]
         .iter()
         .map(|s| s.to_string())
-        .collect()
+        .collect();
+    if backend == "opencode" {
+        kinds.push("reasoning".to_string());
+    }
+    kinds
 }
 
 fn kind_of(t: &str, pt: &str) -> Option<&'static str> {
     match (t, pt) {
         ("event_msg", "task_started") | ("event_msg", "task_complete") => Some("lifecycle"),
         ("event_msg", "user_message") | ("event_msg", "agent_message") => Some("messages"),
-        ("response_item", "custom_tool_call") | ("response_item", "custom_tool_call_output") => {
-            Some("tools")
-        }
+        ("response_item", "custom_tool_call") => Some("tools"),
+        ("response_item", "custom_tool_call_output") => Some("tool_results"),
         ("event_msg", "patch_apply_end") => Some("edits"),
         ("response_item", "reasoning") => Some("reasoning"),
         // noise: session_meta, turn_context, event_msg/token_count, response_item/message
@@ -56,6 +63,7 @@ pub struct Rendered {
 /// codex is still appending) are skipped.
 pub fn curate(jsonl: &str, kinds: &[String]) -> Rendered {
     let mut lines = Vec::new();
+    let mut part_indexes: HashMap<String, usize> = HashMap::new();
     for raw in jsonl.lines() {
         let raw = raw.trim();
         if raw.is_empty() {
@@ -68,11 +76,27 @@ pub fn curate(jsonl: &str, kinds: &[String]) -> Rendered {
         if let Some((kind, line)) = render(&o)
             && kinds.iter().any(|k| k == kind)
         {
-            lines.push(line);
+            if let Some(part_id) = part_id(&o) {
+                if let Some(idx) = part_indexes.get(part_id).copied() {
+                    lines[idx] = line;
+                } else {
+                    part_indexes.insert(part_id.to_string(), lines.len());
+                    lines.push(line);
+                }
+            } else {
+                lines.push(line);
+            }
         }
     }
     let total = lines.len();
     Rendered { lines, total }
+}
+
+fn part_id(o: &Value) -> Option<&str> {
+    o.get("payload")?
+        .get("partID")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
 }
 
 fn render(o: &Value) -> Option<(&'static str, String)> {
@@ -85,15 +109,20 @@ fn render(o: &Value) -> Option<(&'static str, String)> {
         ("event_msg", "task_complete") => {
             let last = field_str(p, "last_agent_message");
             match p.get("duration_ms").and_then(|v| v.as_u64()) {
-                Some(d) => format!("✓ complete ({}s): {}", d / 1000, oneline(last, 200)),
-                None => format!("✓ complete: {}", oneline(last, 200)),
+                Some(d) => format!("✓ complete ({}s): {}", d / 1000, flatten(last)),
+                None => format!("✓ complete: {}", flatten(last)),
             }
         }
         ("event_msg", "user_message") => {
-            format!("[user] {}", oneline(field_str(p, "message"), 300))
+            format!("[user] {}", flatten(field_str(p, "message")))
         }
         ("event_msg", "agent_message") => {
-            format!("[codex] {}", oneline(field_str(p, "message"), 500))
+            let backend = o
+                .get("backend")
+                .and_then(|v| v.as_str())
+                .or_else(|| p.get("backend").and_then(|v| v.as_str()))
+                .unwrap_or("codex");
+            format!("[{backend}] {}", flatten(field_str(p, "message")))
         }
         ("response_item", "custom_tool_call") => {
             let name = field_str(p, "name");
@@ -110,7 +139,14 @@ fn render(o: &Value) -> Option<(&'static str, String)> {
                 patch_files(p)
             )
         }
-        ("response_item", "reasoning") => "[thinking] (reasoning)".to_string(),
+        ("response_item", "reasoning") => {
+            let text = field_str(p, "text");
+            if text.trim().is_empty() {
+                "[thinking] (reasoning)".to_string()
+            } else {
+                format!("[thinking] {}", flatten(text))
+            }
+        }
         _ => return None,
     };
     Some((kind, line))
@@ -128,6 +164,13 @@ fn oneline(s: &str, cap: usize) -> String {
     } else {
         one
     }
+}
+
+/// Like `oneline`, but never truncates. For signal fields (user/agent messages,
+/// thinking text) the total-output byte cap in `window_with_limits` is the right
+/// place to bound size — a per-field cut here would sever a sentence mid-thought.
+fn flatten(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn patch_files(p: &Value) -> String {
@@ -195,8 +238,13 @@ pub fn window_with_limits(
     let mut text = lines[(s - 1)..=(e - 1)].join("\n");
     let mut capped = false;
     if text.len() > byte_cap {
-        text = text.chars().take(byte_cap).collect();
-        text.push_str("\n…[truncated at byte cap — narrow the line range]");
+        // Keep the newest content: drop from the front so the most recent
+        // activity (completion status, latest tool call) always survives,
+        // instead of stranding it behind older lines that ate the cap.
+        let chars: Vec<char> = text.chars().collect();
+        let start_at = chars.len().saturating_sub(byte_cap);
+        let kept: String = chars[start_at..].iter().collect();
+        text = format!("…[truncated at byte cap — narrow the line range]\n{kept}");
         capped = true;
     }
     (text, s, e, capped)
@@ -253,7 +301,7 @@ fn locate_new_in(
 ) -> Option<(PathBuf, String)> {
     let mut files = Vec::new();
     collect(root, &mut files, 0);
-    files.sort_by(|a, b| b.1.cmp(&a.1)); // newest first
+    files.sort_by_key(|f| std::cmp::Reverse(f.1)); // newest first
     let want = working_dir.to_string_lossy().to_string();
     let want_canon = working_dir.canonicalize().ok();
     for (path, mtime) in files.into_iter().take(SCAN_CAP) {
@@ -311,7 +359,7 @@ fn locate_by_nonce_in(root: &Path, working_dir: &Path, nonce: &str) -> Option<(P
     }
     let mut files = Vec::new();
     collect(root, &mut files, 0);
-    files.sort_by(|a, b| b.1.cmp(&a.1)); // newest first
+    files.sort_by_key(|f| std::cmp::Reverse(f.1)); // newest first
     let want = working_dir.to_string_lossy().to_string();
     let want_canon = working_dir.canonicalize().ok();
     for (path, _) in files.into_iter().take(SCAN_CAP) {
@@ -478,7 +526,7 @@ mod tests {
 
     #[test]
     fn curate_keeps_signal_drops_noise_and_tolerates_partial_tail() {
-        let r = curate(SAMPLE, &default_kinds());
+        let r = curate(SAMPLE, &default_kinds("codex"));
         // default kinds exclude reasoning; keep: started, user, tool, edit, codex, complete = 6
         assert_eq!(r.total, 6, "lines: {:?}", r.lines);
         assert!(r.lines.iter().any(|l| l.starts_with("[user]")));
@@ -499,7 +547,107 @@ mod tests {
         let kinds: Vec<String> = vec!["reasoning".to_string()];
         let r = curate(SAMPLE, &kinds);
         assert_eq!(r.total, 1);
-        assert!(r.lines[0].starts_with("[thinking]"));
+        assert_eq!(r.lines[0], "[thinking] (reasoning)");
+    }
+
+    #[test]
+    fn default_kinds_are_backend_aware() {
+        let codex = default_kinds("codex");
+        assert_eq!(codex, vec!["lifecycle", "messages", "tools", "edits"]);
+        assert!(!codex.iter().any(|k| k == "reasoning"));
+
+        let opencode = default_kinds("opencode");
+        assert_eq!(
+            opencode,
+            vec!["lifecycle", "messages", "tools", "edits", "reasoning"]
+        );
+
+        let unknown = default_kinds("something-else");
+        assert_eq!(unknown, vec!["lifecycle", "messages", "tools", "edits"]);
+    }
+
+    #[test]
+    fn curate_renders_plaintext_reasoning_when_present() {
+        let jsonl = r#"
+{"type":"response_item","payload":{"type":"reasoning","text":"checking the state","partID":"part-reasoning"},"backend":"opencode"}
+"#;
+        let r = curate(jsonl, &default_kinds("opencode"));
+        assert_eq!(r.total, 1);
+        assert_eq!(r.lines[0], "[thinking] checking the state");
+    }
+
+    #[test]
+    fn curate_replaces_repeated_part_updates_by_part_id() {
+        let jsonl = r#"
+{"type":"event_msg","payload":{"type":"agent_message","message":"draft","partID":"part-text"},"backend":"opencode"}
+{"type":"response_item","payload":{"type":"reasoning","text":"initial thought","partID":"part-reasoning"},"backend":"opencode"}
+{"type":"event_msg","payload":{"type":"agent_message","message":"final","partID":"part-text"},"backend":"opencode"}
+{"type":"response_item","payload":{"type":"reasoning","text":"final thought","partID":"part-reasoning"},"backend":"opencode"}
+"#;
+        let r = curate(jsonl, &default_kinds("opencode"));
+        assert_eq!(r.total, 2, "lines: {:?}", r.lines);
+        assert_eq!(r.lines[0], "[opencode] final");
+        assert_eq!(r.lines[1], "[thinking] final thought");
+    }
+
+    #[test]
+    fn curate_excludes_tool_results_by_default_but_selectable() {
+        let jsonl = r#"
+{"type":"response_item","payload":{"type":"custom_tool_call","name":"read","input":"{\"path\":\"a.txt\"}"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":"file contents here"}}
+"#;
+        // default kinds (both backends) keep the call, drop the raw result
+        let r = curate(jsonl, &default_kinds("opencode"));
+        assert_eq!(r.total, 1, "lines: {:?}", r.lines);
+        assert!(r.lines[0].starts_with("[tool] read"));
+        let r_codex = curate(jsonl, &default_kinds("codex"));
+        assert_eq!(r_codex.total, 1, "lines: {:?}", r_codex.lines);
+
+        // explicit opt-in surfaces the result
+        let kinds: Vec<String> = vec!["tool_results".to_string()];
+        let r2 = curate(jsonl, &kinds);
+        assert_eq!(r2.total, 1);
+        assert_eq!(r2.lines[0], "[result] file contents here");
+    }
+
+    #[test]
+    fn curate_does_not_truncate_long_signal_text() {
+        let long_text = "word ".repeat(200); // ~1000 chars, well past the old 300/500-char caps
+        let long = long_text.trim();
+        let jsonl = format!(
+            "{{\"type\":\"event_msg\",\"payload\":{{\"type\":\"agent_message\",\"message\":\"{long}\"}},\"backend\":\"opencode\"}}\n\
+             {{\"type\":\"response_item\",\"payload\":{{\"type\":\"reasoning\",\"text\":\"{long}\"}},\"backend\":\"opencode\"}}\n\
+             {{\"type\":\"event_msg\",\"payload\":{{\"type\":\"user_message\",\"message\":\"{long}\"}}}}\n"
+        );
+        let r = curate(&jsonl, &default_kinds("opencode"));
+        assert_eq!(r.total, 3, "lines: {:?}", r.lines);
+        for line in &r.lines {
+            assert!(!line.ends_with('…'), "signal line was truncated: {line}");
+            assert!(line.contains(long), "signal line lost content: {line}");
+        }
+    }
+
+    #[test]
+    fn curate_still_truncates_tool_input_and_output() {
+        let long_input = "x".repeat(300);
+        let long_output = "y".repeat(300);
+        let jsonl = format!(
+            "{{\"type\":\"response_item\",\"payload\":{{\"type\":\"custom_tool_call\",\"name\":\"read\",\"input\":\"{long_input}\"}}}}\n\
+             {{\"type\":\"response_item\",\"payload\":{{\"type\":\"custom_tool_call_output\",\"output\":\"{long_output}\"}}}}\n"
+        );
+        let kinds: Vec<String> = vec!["tools".to_string(), "tool_results".to_string()];
+        let r = curate(&jsonl, &kinds);
+        assert_eq!(r.total, 2, "lines: {:?}", r.lines);
+        assert!(
+            r.lines[0].ends_with('…'),
+            "tool input should still be capped: {}",
+            r.lines[0]
+        );
+        assert!(
+            r.lines[1].ends_with('…'),
+            "tool output should still be capped: {}",
+            r.lines[1]
+        );
     }
 
     #[test]
@@ -526,7 +674,9 @@ mod tests {
         let long = vec!["abcdef".to_string(), "ghijkl".to_string()];
         let (txt, _s, _e, capped) = window_with_limits(&long, None, None, 2, 5);
         assert!(capped);
-        assert!(txt.starts_with("abcde"));
+        // newest content (the tail of the tail) survives; the marker sits up front
+        assert!(txt.starts_with('…'));
+        assert!(txt.ends_with("hijkl"));
     }
 
     // ── rollout locating ──────────────────────────────────

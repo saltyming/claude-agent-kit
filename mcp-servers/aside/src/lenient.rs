@@ -36,19 +36,23 @@ where
     let v = Value::deserialize(d)?;
     match v {
         Value::Null => Ok(None),
-        Value::Array(_) => serde_json::from_value::<Vec<String>>(v).map(Some).map_err(|e| {
-            D::Error::custom(format!(
-                "expected JSON array of strings like [\"ws:1\", \"team:2\"]: {}",
-                e
-            ))
-        }),
-        Value::String(s) => serde_json::from_str::<Vec<String>>(&s).map(Some).map_err(|_| {
-            D::Error::custom(format!(
-                "expected JSON array like [\"ws:1\", \"team:2\"], got stringified value {:?} — \
+        Value::Array(_) => serde_json::from_value::<Vec<String>>(v)
+            .map(Some)
+            .map_err(|e| {
+                D::Error::custom(format!(
+                    "expected JSON array of strings like [\"ws:1\", \"team:2\"]: {}",
+                    e
+                ))
+            }),
+        Value::String(s) => serde_json::from_str::<Vec<String>>(&s)
+            .map(Some)
+            .map_err(|_| {
+                D::Error::custom(format!(
+                    "expected JSON array like [\"ws:1\", \"team:2\"], got stringified value {:?} — \
                  send an actual JSON array, not a JSON-encoded string",
-                s
-            ))
-        }),
+                    s
+                ))
+            }),
         other => Err(D::Error::custom(format!(
             "expected JSON array like [\"ws:1\", \"team:2\"], got {} — \
              send a JSON array, not {0}",
@@ -175,7 +179,9 @@ mod tests {
     fn vec_native_array() {
         assert_eq!(
             de_vec(r#"{"v": ["ws:1", "team:2"]}"#).unwrap(),
-            VecWrap { v: Some(vec!["ws:1".into(), "team:2".into()]) }
+            VecWrap {
+                v: Some(vec!["ws:1".into(), "team:2".into()])
+            }
         );
     }
 
@@ -184,7 +190,9 @@ mod tests {
         // This is the main motivating case: agent sends `depends_on: "[\"ws:1\"]"`.
         assert_eq!(
             de_vec(r#"{"v": "[\"ws:1\"]"}"#).unwrap(),
-            VecWrap { v: Some(vec!["ws:1".into()]) }
+            VecWrap {
+                v: Some(vec!["ws:1".into()])
+            }
         );
     }
 
@@ -206,7 +214,11 @@ mod tests {
     #[test]
     fn vec_wrong_type_error_has_hint() {
         let err = de_vec(r#"{"v": 123}"#).unwrap_err().to_string();
-        assert!(err.contains("JSON array"), "error should hint at JSON array form: {}", err);
+        assert!(
+            err.contains("JSON array"),
+            "error should hint at JSON array form: {}",
+            err
+        );
     }
 
     // ── lenient_opt_bool ──────────────────────────────────
@@ -223,27 +235,51 @@ mod tests {
 
     #[test]
     fn bool_native() {
-        assert_eq!(de_bool(r#"{"v": true}"#).unwrap(), BoolWrap { v: Some(true) });
-        assert_eq!(de_bool(r#"{"v": false}"#).unwrap(), BoolWrap { v: Some(false) });
+        assert_eq!(
+            de_bool(r#"{"v": true}"#).unwrap(),
+            BoolWrap { v: Some(true) }
+        );
+        assert_eq!(
+            de_bool(r#"{"v": false}"#).unwrap(),
+            BoolWrap { v: Some(false) }
+        );
     }
 
     #[test]
     fn bool_stringified_is_tolerated() {
-        assert_eq!(de_bool(r#"{"v": "true"}"#).unwrap(), BoolWrap { v: Some(true) });
-        assert_eq!(de_bool(r#"{"v": "FALSE"}"#).unwrap(), BoolWrap { v: Some(false) });
+        assert_eq!(
+            de_bool(r#"{"v": "true"}"#).unwrap(),
+            BoolWrap { v: Some(true) }
+        );
+        assert_eq!(
+            de_bool(r#"{"v": "FALSE"}"#).unwrap(),
+            BoolWrap { v: Some(false) }
+        );
     }
 
     #[test]
     fn bool_bad_string_error_has_hint() {
         let err = de_bool(r#"{"v": "nope"}"#).unwrap_err().to_string();
-        assert!(err.contains("JSON boolean"), "error should hint at JSON boolean: {}", err);
-        assert!(err.contains("not a string"), "error should say not string: {}", err);
+        assert!(
+            err.contains("JSON boolean"),
+            "error should hint at JSON boolean: {}",
+            err
+        );
+        assert!(
+            err.contains("not a string"),
+            "error should say not string: {}",
+            err
+        );
     }
 
     #[test]
     fn bool_wrong_type_error_has_hint() {
         let err = de_bool(r#"{"v": 1}"#).unwrap_err().to_string();
-        assert!(err.contains("JSON boolean"), "error should hint at JSON boolean: {}", err);
+        assert!(
+            err.contains("JSON boolean"),
+            "error should hint at JSON boolean: {}",
+            err
+        );
     }
 
     // ── lenient_opt_u32 ───────────────────────────────────
@@ -272,26 +308,46 @@ mod tests {
     #[test]
     fn u32_negative_string_errors() {
         let err = de_u32(r#"{"v": "-1"}"#).unwrap_err().to_string();
-        assert!(err.contains("JSON integer"), "error should hint at JSON integer: {}", err);
+        assert!(
+            err.contains("JSON integer"),
+            "error should hint at JSON integer: {}",
+            err
+        );
     }
 
     #[test]
     fn u32_non_numeric_string_errors() {
         let err = de_u32(r#"{"v": "abc"}"#).unwrap_err().to_string();
-        assert!(err.contains("JSON integer"), "error should hint at JSON integer: {}", err);
-        assert!(err.contains("not a string"), "error should say not string: {}", err);
+        assert!(
+            err.contains("JSON integer"),
+            "error should hint at JSON integer: {}",
+            err
+        );
+        assert!(
+            err.contains("not a string"),
+            "error should say not string: {}",
+            err
+        );
     }
 
     #[test]
     fn u32_wrong_type_error_has_hint() {
         let err = de_u32(r#"{"v": true}"#).unwrap_err().to_string();
-        assert!(err.contains("JSON integer"), "error should hint at JSON integer: {}", err);
+        assert!(
+            err.contains("JSON integer"),
+            "error should hint at JSON integer: {}",
+            err
+        );
     }
 
     #[test]
     fn u32_overflow_errors() {
         // 2^32 = 4294967296, u32::MAX = 4294967295
         let err = de_u32(r#"{"v": 4294967296}"#).unwrap_err().to_string();
-        assert!(err.contains("4294967295"), "error should mention u32::MAX: {}", err);
+        assert!(
+            err.contains("4294967295"),
+            "error should mention u32::MAX: {}",
+            err
+        );
     }
 }

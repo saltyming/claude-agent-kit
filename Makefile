@@ -1,11 +1,13 @@
 CLAUDE_DIR := $(HOME)/.claude
 RULES_DIR  := $(CLAUDE_DIR)/rules
+SKILLS_DIR := $(CLAUDE_DIR)/skills
 BIN_DIR    := $(HOME)/.local/bin
 MANIFEST   := $(CLAUDE_DIR)/.claude-agent-kit-manifest
 SIGNATURE        := claude-agent-kit
 CUSTOM_SIGNATURE := claude-agent-kit-custom
 
 RULE_FILES := $(wildcard claude-rules/*.md)
+SKILL_DIRS := $(wildcard claude-skills/palette-*)
 
 PREFS_TEMPLATE     := scripts/claude-agent-kit--aside-prefs.md.tmpl
 DISPATCH_TEMPLATE  := scripts/claude-agent-kit--dispatch-prefs.md.tmpl
@@ -19,13 +21,21 @@ build:
 	cargo build --release -p workslate -p aside -p dispatch
 
 install: build
-	@mkdir -p $(RULES_DIR) $(BIN_DIR)
+	@mkdir -p $(RULES_DIR) $(BIN_DIR) $(SKILLS_DIR)
 	@: > $(MANIFEST)
 	cp CLAUDE.md $(CLAUDE_DIR)/CLAUDE.md
 	@echo $(CLAUDE_DIR)/CLAUDE.md >> $(MANIFEST)
 	@for f in $(RULE_FILES); do \
 		dest=$(RULES_DIR)/$$(basename $$f); \
 		cp $$f $$dest; \
+		echo $$dest >> $(MANIFEST); \
+	done
+	@# Install palette skills (directory-shaped; record dest dir in the manifest)
+	@for d in $(SKILL_DIRS); do \
+		name=$$(basename $$d); \
+		dest=$(SKILLS_DIR)/$$name; \
+		rm -rf "$$dest"; \
+		cp -R "$$d" "$$dest"; \
 		echo $$dest >> $(MANIFEST); \
 	done
 	@# Install binaries
@@ -141,6 +151,14 @@ uninstall:
 			echo "Remove manually with:  rm $$(printf "$$custom_list" | tr '\n' ' ')"; \
 		fi; \
 	fi
+	@# Remove palette skill directories recorded in the manifest (core-signed only)
+	@grep -E '/skills/palette-' $(MANIFEST) 2>/dev/null | while IFS= read -r d; do \
+		if [ -d "$$d" ] && [ -f "$$d/SKILL.md" ] && grep -Fq "<!-- $(SIGNATURE) -->" "$$d/SKILL.md"; then \
+			rm -rf "$$d" && echo "  removed $$d"; \
+		elif [ -e "$$d" ]; then \
+			echo "  skipped $$d (signature mismatch)"; \
+		fi; \
+	done
 	@rm -f $(MANIFEST)
 	@if command -v claude >/dev/null 2>&1; then \
 		for srv in workslate aside dispatch; do \
