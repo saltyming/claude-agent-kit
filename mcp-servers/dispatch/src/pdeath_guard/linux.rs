@@ -101,6 +101,7 @@ pub fn wait_for_either(
 mod tests {
     use super::*;
     use std::process::Command;
+    use std::time::{Duration, Instant};
 
     // Exercises the real prctl+signalfd arm + wait path end-to-end (not a
     // mock). `_dispatch_pid` is unused by this platform's `arm_parent_watch`
@@ -110,14 +111,70 @@ mod tests {
     // is exercised indirectly by `pdeath_guard.rs`'s own doc-verified logic and
     // the macOS sibling test, since triggering a real SIGTERM here would mean
     // killing the test harness's own parent.
+    //
+    // Runs the arm+spawn+wait dance in a forked child rather than directly on
+    // the test thread: `sigprocmask` blocks SIGCHLD only on the calling
+    // thread, but `cargo test`'s harness is itself multi-threaded (main
+    // thread + worker pool). Any other thread still has SIGCHLD unblocked
+    // with its default (Ignore) disposition, so the kernel can hand `true`'s
+    // exit signal to one of THOSE threads and silently discard it before our
+    // signalfd ever sees it — hanging the blocking `read()` forever. (This is
+    // exactly what happened the first time this test ran on real Linux CI.)
+    // A real `dispatch __pdeath_guard` process is genuinely single-threaded
+    // (see the module doc), so blocking "the calling thread" there really
+    // does block the whole process; `fork()` recreates that single-threaded
+    // guarantee here, since only the forking thread survives into the child.
     #[test]
     fn wait_for_either_detects_natural_child_exit() {
-        let watcher = arm_parent_watch(0).expect("arm_parent_watch");
-        let mut child = Command::new("true").spawn().expect("spawn `true`");
-        let child_pid = child.id();
-        match wait_for_either(0, child_pid, &mut child, watcher).expect("wait_for_either") {
-            Outcome::ChildExited(status) => assert!(status.success()),
-            Outcome::ParentDied => panic!("spuriously reported parent death"),
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork failed: {}", std::io::Error::last_os_error());
+
+        if pid == 0 {
+            // Child: exactly one thread exists here, so the signalfd
+            // approach is correct — this mirrors the real guard process.
+            let ok = std::panic::catch_unwind(|| {
+                let watcher = arm_parent_watch(0).expect("arm_parent_watch");
+                let mut child = Command::new("true").spawn().expect("spawn `true`");
+                let child_pid = child.id();
+                matches!(
+                    wait_for_either(0, child_pid, &mut child, watcher).expect("wait_for_either"),
+                    Outcome::ChildExited(status) if status.success()
+                )
+            })
+            .unwrap_or(false);
+            std::process::exit(if ok { 0 } else { 1 });
         }
+
+        // Parent: poll with WNOHANG instead of a blocking waitpid, so a
+        // regression of the exact bug this fork-based isolation fixes fails
+        // the test within a bounded time instead of wedging CI again.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let status = loop {
+            let mut raw_status: i32 = 0;
+            let r = unsafe { libc::waitpid(pid, &mut raw_status, libc::WNOHANG) };
+            assert!(
+                r >= 0,
+                "waitpid failed: {}",
+                std::io::Error::last_os_error()
+            );
+            if r == pid {
+                break raw_status;
+            }
+            if Instant::now() >= deadline {
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                    libc::waitpid(pid, &mut raw_status, 0);
+                }
+                panic!(
+                    "forked test child did not exit within 10s — likely a hang regression in wait_for_either"
+                );
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+
+        assert!(
+            libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
+            "forked child reported failure (raw status={status:#x})"
+        );
     }
 }
