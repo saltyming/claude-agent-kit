@@ -1,8 +1,8 @@
 <!-- claude-agent-kit -->
 # Claude Agent Operating Manual
 
-**Version**: 9.2.0
-**Last Updated**: 2026-07-01
+**Version**: 9.3.0
+**Last Updated**: 2026-07-02
 
 > Global operating rules for AI coding agents. Focuses on user-specific preferences and overrides — general tool usage, security, and communication rules are handled by the system prompt.
 
@@ -19,7 +19,7 @@
 ### Three-Phase Workflow
 1. **Understand** - Read all relevant files, trace execution flows, identify dependencies
 2. **Plan** - Document the problem, propose solutions, get approval
-3. **Execute** - Implement ALL changes completely, no placeholders. Non-trivial or multi-hunk code changes go through workslate buffers before applying to files; trivial single-block edits may use `Edit` directly per the exceptions in `claude-agent-kit--task-execution.md` > Code Staging.
+3. **Execute** - Implement ALL changes completely, no placeholders. Use `Edit` / `Write` directly for all code changes.
 
 > **When `_palette/` exists (a palette-active project):** this Three-Phase Workflow is the *inner* loop, run per story under palette's *outer* loop (backlog → slice → hand off → review). palette's advisory backlog informs planning but never authorizes an edit; the "Get approval" gate is the hand-off where a story's acceptance criteria enter this inner loop (Tier A → Tier B). Full mechanism in `claude-agent-kit--palette.md`.
 
@@ -54,7 +54,7 @@ In this project: extend that same verification-before-completion discipline to A
 **Scope judgment is user-owned.** The overrides above cover two sides of scope integrity (do not silently reduce what was asked; do not defer any of it to a follow-up). A third rule closes the remaining gap: **you do not unilaterally decide scope on the user's behalf**, whether the decision was explicitly deferred to inspection or arises mid-implementation. Three concrete cases, each with its own detailed rule file:
 
 1. **Post-inspection scope.** When a plan says *"actual scope will be determined after reading the code"* (or equivalent deferral, including Korean phrasings like *"코드 확인 후 정한다"*), inspection is a user-facing checkpoint. Report findings, propose a concrete scope, wait for explicit approval, *then* implement. Full rule in `claude-agent-kit--task-execution.md` → **Plan Integrity: Scope Confirmation After Post-Inspection Deferral**.
-2. **Undo / revert handling.** (a) *Model-initiated rollback is forbidden* — if you judge mid- or post-implementation that the scope is too large or the approach was wrong, you MUST NOT use any mechanism (destructive git ops, `Edit` / `Write` / `workslate_apply` used to overwrite your own work, file or directory deletion, or any other tool whose effect is to erase the incomplete state) to roll back, discard, or hide work. Stop, preserve state, report, wait. (b) *User-requested "revert" / "undo" / "되돌려" defaults to reversing session edits via file edits, not git* — the session's edits live in files; undo them by editing the files back. Git operations are the wrong tool because they touch repo state including the user's out-of-session work. (c) *Narrow carve-out*: when the user **explicitly names a git command** (e.g., *"run `git reset --hard HEAD~1`"*), apply propose-with-full-blast-radius → wait for explicit per-command authorization → execute only the authorized command. Generic phrasings like "revert it" / "undo that" / "roll back" do NOT name a git command and fall under (b). Full rule in `claude-agent-kit--task-execution.md` → **Undo / Revert Handling**.
+2. **Undo / revert handling.** (a) *Model-initiated rollback is forbidden* — if you judge mid- or post-implementation that the scope is too large or the approach was wrong, you MUST NOT use any mechanism (destructive git ops, `Edit` / `Write` used to overwrite your own work, file or directory deletion, or any other tool whose effect is to erase the incomplete state) to roll back, discard, or hide work. Stop, preserve state, report, wait. (b) *User-requested "revert" / "undo" / "되돌려" defaults to reversing session edits via file edits, not git* — the session's edits live in files; undo them by editing the files back. Git operations are the wrong tool because they touch repo state including the user's out-of-session work. (c) *Narrow carve-out*: when the user **explicitly names a git command** (e.g., *"run `git reset --hard HEAD~1`"*), apply propose-with-full-blast-radius → wait for explicit per-command authorization → execute only the authorized command. Generic phrasings like "revert it" / "undo that" / "roll back" do NOT name a git command and fall under (b). Full rule in `claude-agent-kit--task-execution.md` → **Undo / Revert Handling**.
 3. **Forced spec/plan deviation.** When implementation or verification reveals the approved spec is genuinely *impossible* to deliver as written (not merely hard), that you must *reorder* planned operations to prevent an ordering-induced regression, or that you'd need a *design that deviates* from the approved plan — STOP, preserve work-so-far, propose the concrete deviation, and re-request explicit approval. You may not implement the deviation, a reduction, or a preferred alternative on your own judgment. Full rule in `claude-agent-kit--task-execution.md` → **Forced Spec/Plan Deviation: Re-request Approval**.
 
 Rationale: treating scope as an agent-owned variable rather than a user-owned one is the common root of both failure modes; the deep rules linked above cover the specific mechanics.
@@ -111,17 +111,10 @@ User Request
 ├─ Code change requested?
 │  ├─ Multi-step (2+ files / 2+ deliverables)?
 │  │  └─ workslate_task_init + create tasks (FIRST)
-│  ├─ Read all relevant files
-│  │  ├─ Need line numbers? → workslate_read(file_path) or workslate_read(file_path, start_line, end_line)
-│  │  └─ Need to find a symbol? → workslate_search(file_path, pattern, regex?) → get line numbers from Summary
+│  ├─ Read all relevant files (Read / Grep / Glob)
 │  ├─ Create task document
 │  ├─ Get approval   ← palette: Tier A→B hand-off when _palette/ present
-│  ├─ Trivial? (single-line, import, string literal, rename)
-│  │  └─ Edit directly
-│  └─ Everything else
-│     ├─ Existing file? → workslate_edit(name, file_path, old, new) → workslate_apply
-│     └─ New file?      → workslate_write(name, content, file_path) → workslate_apply
-│     └─ Fix staged content? → workslate_edit(name, old, new) (no file_path = buffer mode)
+│  └─ Implement with Edit / Write directly
 │
 ├─ Mid-implementation: forced to deviate from approved scope/design/order?
 │  └─ STOP → preserve work → propose the ONE deviation → wait for explicit approval

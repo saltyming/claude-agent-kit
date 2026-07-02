@@ -81,7 +81,7 @@ When your question is about code that lives on disk in this workspace, **pass th
 
 Embed an excerpt in `context` only when:
 1. **You want to focus the backend on a specific line range** and not let it wander the rest of the file — pass the excerpt with file:line anchors.
-2. **The data is not on disk** — transient tool output like command stdout, API response bodies, staged diffs that are in a workslate buffer but not yet applied, in-memory state.
+2. **The data is not on disk** — transient tool output like command stdout, API response bodies, or other in-memory state.
 3. **The backend would not be able to locate the path on its own** — e.g., a file outside the spawn cwd that a backend's sandbox might refuse.
 
 Do not paste whole files into `context` when a path reference would do. Agents were historically doing this because the old rule read "MUST embed the relevant excerpt"; that rule is now narrowed to the three cases above.
@@ -110,7 +110,7 @@ If your question depends on **code that is on disk in this workspace**, the defa
 
 When to embed an excerpt rather than a path:
 1. **Line-range focus.** You want the backend to examine a specific function / block, not wander the whole file. Paste the region with file:line anchors and tell the backend it can read the rest of the file if it needs to.
-2. **Off-disk data.** Command stdout, API response body, a staged workslate buffer that is not yet applied, in-memory state. The backend cannot read this; the transcript redacts it. Embed it.
+2. **Off-disk data.** Command stdout, API response body, or other in-memory state. The backend cannot read this; the transcript redacts it. Embed it.
 3. **Out-of-workspace path.** A backend's sandbox may refuse a path outside the spawn cwd; if the file is outside (e.g., `/tmp`), embed the excerpt. Codex and copilot reads are scoped by their sandboxes and may fail on out-of-scope paths.
 
 Example — **bad** (pastes a whole file when a path would do):

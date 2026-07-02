@@ -8,11 +8,8 @@ license = "MIT"
 rmcp = { version = "1", features = ["server", "transport-io", "macros"] }
 tracing = "0.1"
 tokio = { version = "1", features = ["full"] }
-similar = "3"
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-regex = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }
-sha2 = "0.10"

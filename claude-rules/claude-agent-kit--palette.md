@@ -1,7 +1,7 @@
 <!-- claude-agent-kit -->
 # palette — Product-Intent Outer Loop
 
-palette is an **outer loop** that wraps this framework's existing **inner loop** — the Three-Phase Workflow (Understand → Plan → Execute) plus workslate staging/tasks and dispatch/Agent-Team delegation. The inner loop finishes one task correctly and then everything about it evaporates at the task boundary: there is no durable, cross-session record of *what we are building and why*, and no re-planning cadence. palette adds exactly that missing layer above the inner loop — a durable backlog of intent, a thin-slice step that feeds the inner loop one increment at a time, and a review step that harvests each completion back into the backlog.
+palette is an **outer loop** that wraps this framework's existing **inner loop** — the Three-Phase Workflow (Understand → Plan → Execute) plus workslate tasks and dispatch/Agent-Team delegation. The inner loop finishes one task correctly and then everything about it evaporates at the task boundary: there is no durable, cross-session record of *what we are building and why*, and no re-planning cadence. palette adds exactly that missing layer above the inner loop — a durable backlog of intent, a thin-slice step that feeds the inner loop one increment at a time, and a review step that harvests each completion back into the backlog.
 
 palette is a **loop, not a product-planning suite**. It is: durable backlog → thin slice → hand off → review → re-plan, expressed in this framework's own terms (agent-loop design + harness-assist tooling, alongside workslate and dispatch). Design artifacts (tech spec, UX flow, UI/design brief, project rules) are **optional, pull-only helpers** — the `palette-*` skills — never part of the default loop.
 
@@ -65,15 +65,15 @@ OUTER (palette · strategic · cross-session)
       |  PLAN        story AC -> task doc / (large -> Plan Mode)  |
       |  == GET APPROVAL ==  <- Tier A->B. No edit before here.   |
       |  EXECUTE     workslate task (projection of approved AC,   |
-      |              not new scope) + buffer staging + optional   |
-      |              dispatch / Agent Team + verify (test/build)  |
+      |              not new scope) + optional dispatch / Agent  |
+      |              Team + verify (test/build)                  |
       +----------------------------------------------------------+
       record story done in index.rst (bookkeeping) + one-line report
   [3] REVIEW   -> reviews.rst; triage new/deferred into backlog (with consent)
   [4] RE-PLAN  -> next phase
 ```
 
-Where the existing primitives plug in: **workslate task** = the inner Execute's tactical projection of an approved story's AC (a translation, not a second backlog); **workslate buffer** = inner code staging, unchanged; **dispatch / Agent Team** = inner execution delegation, unchanged — the *approved scope*, not the raw story artifact, becomes the dispatch spec / team task; **native memory** = outside the loop (facts, not intent).
+Where the existing primitives plug in: **workslate task** = the inner Execute's tactical projection of an approved story's AC (a translation, not a second backlog); **dispatch / Agent Team** = inner execution delegation, unchanged — the *approved scope*, not the raw story artifact, becomes the dispatch spec / team task; **native memory** = outside the loop (facts, not intent).
 
 ## backlog vs native memory — routing
 

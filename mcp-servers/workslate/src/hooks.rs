@@ -173,7 +173,7 @@ fn task_doorbell(conn: &Connection, task_session: &str) -> Option<String> {
     if tasks.is_empty() {
         return None;
     }
-    let footer = render_task_footer(&tasks, task_session, &[]);
+    let footer = render_task_footer(&tasks, task_session);
     if footer.is_empty() {
         None
     } else {

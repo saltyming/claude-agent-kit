@@ -136,7 +136,7 @@ When NOT to refactor:
 - Write comments only when the **WHY** is non-obvious. Do not explain WHAT code does — the code itself should be readable.
 - Do not remove existing comments unless you are removing the code they describe.
 - No boilerplate comments, no restating the function signature in prose.
-- **No chain-of-thought in output.** Never write your reasoning process — self-corrections ("Actually:", "Correction:"), step-by-step deliberation, working through alternatives, or false starts — into code comments, commit messages, conversation text, or workslate buffers. Resolve your thinking internally. Only the final, correct conclusion belongs in output. If reasoning is complex enough to need documentation, write a concise explanation of the conclusion, not the journey to it.
+- **No chain-of-thought in output.** Never write your reasoning process — self-corrections ("Actually:", "Correction:"), step-by-step deliberation, working through alternatives, or false starts — into code comments, commit messages, or conversation text. Resolve your thinking internally. Only the final, correct conclusion belongs in output. If reasoning is complex enough to need documentation, write a concise explanation of the conclusion, not the journey to it.
 
 ## Forced Spec/Plan Deviation: Re-request Approval (HARD RULE)
 
@@ -178,14 +178,14 @@ In a Claude Code session, "revert" / "undo" / "discard" / "roll back" / "되돌�
 If you judge mid- or post-implementation that the scope is too large, that your approach was wrong, or that the work so far should be thrown away, you MUST NOT use any mechanism to undo, destroy, or hide the work. Forbidden mechanisms include (non-exhaustive — the list extends to any tool whose effect is to erase the incomplete state):
 
 - **Destructive git operations.** `git checkout --` / `git restore` / `git reset --hard` / `git revert` / `git clean -f*` / `git stash drop` / `git branch -D` / `git push --force*`, and any equivalent.
-- **`Edit` / `Write` / `workslate_apply` used to overwrite, blank out, or replace your own work.** Using `Edit` with an empty `new_string`, or `Write` / `workslate_write` with a cleared buffer, to erase code you just wrote is the same failure mode as `git checkout --`, just through a different tool surface.
+- **`Edit` / `Write` used to overwrite, blank out, or replace your own work.** Using `Edit` with an empty `new_string`, or `Write` with cleared content, to erase code you just wrote is the same failure mode as `git checkout --`, just through a different tool surface.
 - **File or directory deletion** — `rm`, Bash-level deletes, or deleting new files you created earlier in the session.
 - **Any shell command, MCP tool, or action whose purpose is to erase the incomplete state**, regardless of tool surface.
 
 Required procedure when the trigger fires:
 
 1. **Stop.** Do not run any of the mechanisms above.
-2. **Preserve state.** Files, buffers, commits, stashes, and branches stay exactly as they are.
+2. **Preserve state.** Files, commits, stashes, and branches stay exactly as they are.
 3. **Report to the user.** Cover (a) what was completed, (b) what remains, (c) why you believe the current direction is wrong or the scope cannot be finished, (d) the current state of files and repo.
 4. **Wait for direction.** The user decides whether to roll back, split the work, change approach, or keep partial work. Rollback-direction choice is a user decision with consequences you do not own.
 
@@ -205,10 +205,10 @@ Why: the edits made in the session are edits. They live in the files on disk. Un
 
 Required procedure:
 
-1. **Identify what edits the model made in this session.** Sources, in order of reliability: the `Edit` / `Write` / `workslate_apply` tool uses visible in the conversation history; workslate buffer / task records (`workslate_task_sessions`, `workslate_diff` against disk); the conversation's narration of what was changed.
-2. **Confirm reconstructibility.** If you cannot reconstruct the pre-edit content with high confidence — long session with compacted history, direct `Edit` calls not captured in workslate, auto-cleared workslate buffers, or changes whose exact prior content the conversation did not preserve — do NOT perform an approximate undo. Report exactly which parts you are and are not confident about, and ask the user whether to inspect `git diff` / file history or to name an explicit git command.
+1. **Identify what edits the model made in this session.** Sources, in order of reliability: the `Edit` / `Write` tool uses visible in the conversation history; the conversation's narration of what was changed.
+2. **Confirm reconstructibility.** If you cannot reconstruct the pre-edit content with high confidence — long session with compacted history, or changes whose exact prior content the conversation did not preserve — do NOT perform an approximate undo. Report exactly which parts you are and are not confident about, and ask the user whether to inspect `git diff` / file history or to name an explicit git command.
 3. **Confirm scope with the user.** Which edits specifically — all of them, just the most recent, a specific file, a specific hunk? If the user's phrasing is ambiguous, ask before touching anything.
-4. **Reverse the edits via `Edit` / `Write` / `workslate_edit` / `workslate_apply`.** Write the inverse operation: delete the lines you added, restore the lines you replaced, remove the files you created in this session.
+4. **Reverse the edits via `Edit` / `Write`.** Write the inverse operation: delete the lines you added, restore the lines you replaced, remove the files you created in this session.
 5. **Do NOT reach for git for session-edit undo.** Not `checkout --`, not `restore`, not `revert`, not `reset`, not `stash`, not any other git command. None of those are the right tool for undoing session edits. (See step 6 for the case where the user's request is actually about a commit / branch / ref, not session edits.)
 6. **If the user identifies a commit / branch / ref** (e.g., *"revert commit abc123"*, *"undo what's on main since yesterday"*, *"remove the commit you just made"*), stop and clarify which git operation they want — this is NOT session-edit undo regardless of whether the commit came from this session. Do not reinterpret it as file-edit undo. Subsection C applies once the user names a specific git command.
 7. **If the undo would require touching files the model did NOT edit in this session**, stop and clarify. Those files' state is user-owned, not session-owned; you need explicit authorization before changing them.
@@ -235,124 +235,6 @@ If the surgical option the user named does not exist, or if the user's named com
 
 The user owns **what** to undo, **which specific command** runs, and **when** it runs. The model's role is to surface the option space and the blast radius of each candidate — not to choose or execute on the user's behalf.
 
-## Code Staging
-
-**Non-trivial or multi-hunk code changes go through workslate first.** Trivial single-block edits may use direct `Edit` per the exceptions below. For everything else, the review step before application catches chain-of-thought leaking into comments and unintentional scope reduction, both of which occur frequently with direct edits. **Never call `workslate_apply` without first reviewing the diff** — the diff step is the entire point.
-
-Three staging modes exist — all return the diff for review:
-
-| Tool | Use case |
-|------|----------|
-| `workslate_edit(name, file_path, old, new, position?, match_index?, line_start?, line_end?)` | Load file from disk + edit (creates/overwrites buffer) |
-| `workslate_edit(name, old, new)` | Edit existing buffer content (no file_path = buffer mode) |
-| `workslate_write(name, content, file_path, depends_on?)` | Full file creation/rewrite (new files show full content with line numbers) |
-
-`file_path` is the disambiguator: present = load from disk, absent = edit buffer.
-
-**One buffer per file.** The server enforces this: creating a second buffer targeting the same file returns an error. Use a single buffer and chain edits, or clear the old buffer first. Buffers persist in SQLite and survive server restarts.
-
-Two read tools support the staging workflow:
-
-| Tool | Use case |
-|------|----------|
-| `workslate_read(file_path)` | Read a file from disk with line numbers — use to get precise line coordinates before editing |
-| `workslate_search(file_path, pattern, regex?, context?)` | Find patterns and return matches with line numbers. Plain substring by default; use `regex=true` for regex (e.g. `FOO\|BAR`) |
-
-**Typical precision-edit workflow:**
-1. `workslate_search(file_path, "fn target_function")` — find the function, get line numbers from Summary
-2. `workslate_read(file_path, start_line, end_line)` — read the exact range with line numbers to confirm
-3. `workslate_edit(name, file_path, line_start, line_end, new_string)` — edit by line range, review diff
-4. `workslate_apply(name)` — apply
-
-**Large file editing pattern (buffer-first):**
-1. `workslate_edit(name, file_path, old_string, new_string)` — load file + first edit
-2. `workslate_edit(name, old_string, new_string)` — subsequent edits on stable buffer (no line drift)
-3. `workslate_diff(name, summary=true)` — quick check: "2 hunks, +15/-8 lines"
-4. `workslate_diff(name)` — full diff for review if needed
-5. `workslate_apply(name)` — apply
-
-This avoids the line-shifting problem: once loaded into the buffer, edits operate on stable content regardless of external file changes.
-
-`position` values for `workslate_edit`:
-- omitted or `"replace"` — find old_string, replace with new_string (default)
-- `"after"` — find old_string as anchor, insert new_string **immediately** after it (anchor stays; raw byte-splice — no newline is added, so to land on a *new line* you must start new_string with `\n`)
-- `"before"` — find old_string as anchor, insert new_string **immediately** before it (anchor stays; raw byte-splice — end new_string with `\n` to keep the anchor on its own line)
-- `"after_line"` — insert new_string as its **own whole line(s)** after the line containing old_string; the newline is handled for you. Prefer this over `"after"` for line insertion — it avoids the glue-onto-the-anchor-line footgun.
-- `"before_line"` — insert new_string as its **own whole line(s)** before the line containing old_string; the newline is handled for you. Prefer this over `"before"` for line insertion.
-- `"append"` — append new_string to end of file (old_string not needed)
-
-**Insert modes keep the anchor.** `after` / `before` / `after_line` / `before_line` are inserts, not replaces — do NOT repeat old_string inside new_string (it will be duplicated). Use `"replace"` when you mean to swap the anchor out.
-
-Targeting options (apply to all position modes except append):
-- **Default** — old_string must appear exactly once in the file
-- `match_index: N` — target the Nth occurrence of old_string (1-based). Use when old_string isn't unique.
-- `line_start: N` (+ optional `line_end: M`) — target by line range instead of old_string. 1-based, inclusive. old_string is not needed.
-
-**When to use Edit directly (exceptions):**
-- Small single contiguous change (single-block replacement, NOT a full-file rewrite — rewrites must still go through workslate)
-- Import additions/removals
-- String/message literal updates
-- Renaming (use `replace_all`)
-
-**When workslate is mandatory (no exceptions):**
-- Editing 2+ non-adjacent sections of the same file
-- Inserting code between existing code (`position: "after"` / `"before"`)
-- Appending to a file (`position: "append"`)
-- Any file creation with more than trivial content
-
-**Partial replacement workflow (existing file):**
-1. `workslate_edit(name, file_path, old_string, new_string)` — load file from disk, apply edit, review diff
-2. If more edits needed: `workslate_edit(name, old_string, new_string)` — edits buffer (no file_path = chains with previous)
-3. `workslate_apply(name)` — uses stored file_path; buffer auto-clears on success
-
-**Full file workflow (new file):**
-1. `workslate_write(name, content, file_path)` — draft the full content, review the returned diff
-2. If issues found: `workslate_edit(name, old_string, new_string)` — edits buffer directly (no file_path = buffer mode)
-3. `workslate_apply(name)` — uses stored file_path; buffer auto-clears on success
-
-`workslate_clear` is only needed to abandon a buffer without applying it. Successful `workslate_apply` removes the buffer from both memory and SQLite automatically.
-
-`workslate_diff(name)` remains available for re-checking a buffer against its target file at any time. Use `workslate_diff(name, summary=true)` for a one-line stat ("N hunks, +X/-Y lines") to save context.
-
-**Buffer dependencies:** `workslate_write(name, content, file_path, depends_on=["buf-a", "buf-b"])` declares that this buffer must be applied after buf-a and buf-b. `workslate_apply` enforces the ordering.
-
-**Dry run:** `workslate_apply(name, dry_run=true)` shows the final file content with line numbers without writing to disk.
-
-**Parameter types (HARD RULE).** Workslate MCP fields take **native JSON types** — pass JSON arrays, booleans, and numbers, never JSON-encoded strings:
-
-```
-depends_on: ["ws:1", "team:2"]   ✓ JSON array
-depends_on: "[\"ws:1\"]"          ✗ stringified array — don't
-
-dry_run: true                     ✓ JSON boolean
-dry_run: "true"                   ✗ string
-
-match_index: 2                    ✓ JSON integer
-match_index: "2"                  ✗ string
-```
-
-The server tolerates the stringified forms as a best-effort shim, but treat this as a bug in your tool call — aim to send raw JSON values every time. Applies to every array/bool/int field across `workslate_task_create`, `workslate_write`, `workslate_edit`, `workslate_read`, `workslate_search`, `workslate_diff`, `workslate_apply`, `workslate_clear`.
-
-**Rules:**
-- **Always pass `file_path` to `workslate_write`** so the diff is returned for review. Omitting it skips the review — only acceptable for scratch buffers not destined for files.
-- Use descriptive buffer names that indicate the target (e.g., `auth-middleware`, `lock-ordering-fix`)
-- Chain-of-thought prohibition applies equally to staged code — no reasoning in comments
-- `workslate_apply` auto-clears the buffer on success; only call `workslate_clear(name=...)` to **abandon** a buffer you no longer want to apply
-- When working in Agent Teams, each teammate should use buffer names prefixed with their scope to avoid collisions
-
-### Workslate safety rules (HARD RULES)
-
-These rules prevent catastrophic loss of staged work. The code enforces the first rule; the others are behavioral.
-
-- **`workslate_clear()` without arguments is forbidden.** The tool now requires either `name="<buffer>"` or `all=true` explicitly. This exists because a bare call in Agent Team scenarios can wipe every teammate's staged work in one step. If you want to clear everything, pass `all=true` and you will see the list of buffers being cleared — use that as a last checkpoint.
-- **Buffer names must be prefixed with context** so multiple agents in the same project (solo sessions, team leader, teammates) do not collide on a shared key:
-  - Solo work: `<module>-<file>` — e.g., `vfs-main-rs`, `auth-middleware`
-  - Team leader: `leader-<file>` — e.g., `leader-types-rs`
-  - Teammate: `<teammate-name>-<file>` — e.g., `posix-libs-at-rs`, `backend-api-routes`
-- **`workslate_apply` auto-clears the applied buffer on success** — both from memory and from SQLite. You do not need (and should not) call `workslate_clear` after a successful apply. If apply fails (write error, stale buffer without `force`, unapplied dependency), the buffer is preserved so you can retry. `workslate_clear(name=...)` is only for abandoning a buffer you decided not to apply.
-- **Stale buffer detection is on by default.** When `workslate_edit` or `workslate_write` loads a file from disk, the current SHA-256 is recorded. At apply time, if the disk file has changed, apply refuses with an error pointing at `workslate_diff`. If you intentionally want to overwrite the changed file, pass `force=true`. Do not habitually pass `force=true` — it defeats the safety net. Investigate the divergence first.
-- **Track staged buffers with `workslate_list`.** The task footer is rendered by the doorbell hook, which runs in a separate process and cannot see the MCP server's in-memory buffers — so staged buffers do **not** appear in the footer. Call `workslate_list` to see live buffers, and clean up any left behind from a prior task before starting new work.
-
 ## Task Sessions
 
 **`workslate_task_init(name)` is mandatory before using any task tool.** Tasks are stored in SQLite (`workslate.db`) and shared across all agent instances in the same project. The project standardizes on `workslate_task_*` for both solo and team tracking — only it is surfaced by the doorbell footer on every tool call and shared cross-session via the DB. The built-in `TaskCreate` / `TaskList` / `TaskUpdate` tools also exist under the single implicit team (with native self-claiming), but `workslate_task_*` is the system of record here — do not split coordination across both.
@@ -378,7 +260,6 @@ These rules prevent catastrophic loss of staged work. The code enforces the firs
 - Only one session is active at a time per MCP server instance
 - Switching sessions does NOT clear the previous session's tasks (SQLite persists)
 - Restarting the MCP server clears the active session — call `workslate_task_init` again to resume
-- Buffers are shared across sessions (not scoped)
 - Multiple agent instances can read/write the same session concurrently (SQLite WAL mode)
 
 ## Team Messaging Tools (Agent Teams)
@@ -392,5 +273,4 @@ For multi-agent coordination, workslate exposes `workslate_register(role, sessio
 - [ ] Tests pass (if applicable) — **actually verified, not assumed**
 - [ ] No regression in related features
 - [ ] Linting/type checking passes (if applicable)
-- [ ] No live workslate buffers remain — successful `workslate_apply` auto-clears on success; only abandoned buffers need explicit `workslate_clear(name=...)`
 - [ ] Outcome reported faithfully — failures disclosed, not hidden

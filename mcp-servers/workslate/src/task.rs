@@ -344,8 +344,8 @@ pub struct InboxReadParams {
 
 // ── Task footer rendering ────────────────────────────────
 
-pub fn render_task_footer(tasks: &[Task], session: &str, buffer_names: &[String]) -> String {
-    if tasks.is_empty() && buffer_names.is_empty() {
+pub fn render_task_footer(tasks: &[Task], session: &str) -> String {
+    if tasks.is_empty() {
         return String::new();
     }
 
@@ -441,28 +441,6 @@ pub fn render_task_footer(tasks: &[Task], session: &str, buffer_names: &[String]
         lines.push(format!("    ... and {} more", hidden));
     }
 
-    if !buffer_names.is_empty() {
-        const MAX_NAMES: usize = 5;
-        let mut sorted: Vec<&String> = buffer_names.iter().collect();
-        sorted.sort();
-        let shown: Vec<String> = sorted
-            .iter()
-            .take(MAX_NAMES)
-            .map(|s| (*s).clone())
-            .collect();
-        let overflow = sorted.len().saturating_sub(MAX_NAMES);
-        let list = if overflow > 0 {
-            format!("{}, +{} more", shown.join(", "), overflow)
-        } else {
-            shown.join(", ")
-        };
-        lines.push(format!(
-            "── Buffers: {} staged ({}) ──",
-            buffer_names.len(),
-            list
-        ));
-    }
-
     lines.push("──────────────────────────────────────────".to_string());
     lines.join("\n")
 }
@@ -492,15 +470,6 @@ CREATE TABLE IF NOT EXISTS task_counters (
     namespace TEXT NOT NULL,
     next_id   INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (session, namespace)
-);
-
-CREATE TABLE IF NOT EXISTS buffers (
-    name        TEXT PRIMARY KEY,
-    content     TEXT    NOT NULL,
-    file_path   TEXT,
-    depends_on  TEXT    NOT NULL DEFAULT '[]',
-    source_hash TEXT,
-    updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -540,23 +509,9 @@ CREATE TABLE IF NOT EXISTS session_context (
 ///
 /// Each migration must be idempotent — safe to re-run on an already-migrated DB.
 pub fn migrate_db(conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
-    // v8.3: add buffers.source_hash for stale buffer detection
-    let has_source_hash = {
-        let mut stmt = conn.prepare("PRAGMA table_info(buffers)")?;
-        let mut found = false;
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            let col_name: String = row.get(1)?;
-            if col_name == "source_hash" {
-                found = true;
-                break;
-            }
-        }
-        found
-    };
-    if !has_source_hash {
-        conn.execute("ALTER TABLE buffers ADD COLUMN source_hash TEXT", [])?;
-    }
+    // v9.3: drop the legacy buffers table (buffer-staging tools removed).
+    // Idempotent — a no-op on a fresh DB where SCHEMA_SQL never created it.
+    conn.execute("DROP TABLE IF EXISTS buffers", [])?;
 
     // v8.9: session_context identity is the composite (claude_session_id, agent_id).
     // Subagents share the parent's CLAUDE_CODE_SESSION_ID, so agent_id (handed to a
@@ -640,6 +595,46 @@ pub fn resolve_sender(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migrate_drops_legacy_buffers_table() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_SQL).unwrap();
+        // Simulate a pre-9.3 DB that still has the buffers table (with a staged row).
+        conn.execute_batch(
+            "CREATE TABLE buffers (
+                 name        TEXT PRIMARY KEY,
+                 content     TEXT    NOT NULL,
+                 file_path   TEXT,
+                 depends_on  TEXT    NOT NULL DEFAULT '[]',
+                 source_hash TEXT,
+                 updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+             );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO buffers (name, content) VALUES ('leftover', 'staged content')",
+            [],
+        )
+        .unwrap();
+
+        migrate_db(&mut conn).unwrap();
+        // Idempotent: a second run (matching a fresh DB where SCHEMA_SQL never
+        // created the table) must not error.
+        migrate_db(&mut conn).unwrap();
+
+        let exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'buffers'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            !exists,
+            "legacy buffers table should be dropped after migration"
+        );
+    }
 
     #[test]
     fn migrate_rebuilds_session_context_to_composite_pk() {

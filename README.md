@@ -1,8 +1,8 @@
 # Claude Agent Kit
 
-A battle-tested `CLAUDE.md` for Claude Code, plus three custom MCP servers — `workslate` (staged code editing + SQLite-backed task tracking), `aside` (cross-family second opinions, wrapping the OpenAI codex and GitHub copilot CLIs so Claude can consult another model family mid-session), and `dispatch` (asynchronous hierarchical delegation — handing an execution step to an external coding agent like codex, running write-capable in a target directory). It also ships **palette** — a rules-plus-skills *product-intent outer loop* that wraps the per-task workflow with a durable, cross-session backlog and a slice → build → review cadence (opt in per project via the `palette-init` skill).
+A battle-tested `CLAUDE.md` for Claude Code, plus three custom MCP servers — `workslate` (SQLite-backed task tracking + cross-agent messaging), `aside` (cross-family second opinions, wrapping the OpenAI codex and GitHub copilot CLIs so Claude can consult another model family mid-session), and `dispatch` (asynchronous hierarchical delegation — handing an execution step to an external coding agent like codex, running write-capable in a target directory). It also ships **palette** — a rules-plus-skills *product-intent outer loop* that wraps the per-task workflow with a durable, cross-session backlog and a slice → build → review cadence (opt in per project via the `palette-init` skill).
 
-> **Honest caveat.** These rules reduce common failure modes but don't eliminate them — treat the kit as a strong prior, not a guarantee. Two patterns still recur and need manual correction: **silent scope reduction** (splitting or deferring requested work despite the `[OVERRIDE]`s) and **skipping workslate / aside** (falling back to direct `Edit`, or calling `advisor()` without the paired aside call under `policy: proactive`). Review completion reports critically and name the miss when you see it.
+> **Honest caveat.** These rules reduce common failure modes but don't eliminate them — treat the kit as a strong prior, not a guarantee. Two patterns still recur and need manual correction: **silent scope reduction** (splitting or deferring requested work despite the `[OVERRIDE]`s) and **skipping the aside pairing** (calling `advisor()` without the paired aside call under `policy: proactive`). Review completion reports critically and name the miss when you see it.
 
 ## What's Inside
 
@@ -17,7 +17,7 @@ Claude Code's stock system prompt is tuned for casual Q&A, not deep engineering.
 | "Do not create files unless absolutely necessary." | Create every file the spec calls for. |
 | (no verification required) | Verify before claiming completion; never fake a green result. |
 
-It also covers **delegation** (subagents / teammates / the separate `Workflow` tool, with a surface-propose-agree gate and dependency-structure selection), **Agent Teams coordination** (self-claim policy, leader intervention, a token-capped completion-report format), **code staging via workslate**, a **unified `workslate_task_*` task system** (`ws:` / `team:` namespaces), and **quality guardrails** (comment discipline, verification-before-done).
+It also covers **delegation** (subagents / teammates / the separate `Workflow` tool, with a surface-propose-agree gate and dependency-structure selection), **Agent Teams coordination** (self-claim policy, leader intervention, a token-capped completion-report format), a **unified `workslate_task_*` task system** (`ws:` / `team:` namespaces), and **quality guardrails** (comment discipline, verification-before-done).
 
 ### palette — product-intent outer loop (rules + skills, no server)
 
@@ -32,15 +32,10 @@ Lives in the always-loaded rule `claude-agent-kit--palette.md` plus the `palette
 
 ### workslate MCP server
 
-Staged code editing and task tracking:
+SQLite-backed task tracking and cross-agent messaging:
 
-- **Staged editing** — write to a buffer, review the diff, then apply. New files show full content with line numbers; buffers persist across restarts (SQLite).
-- **Stale-buffer detection** — records a SHA-256 at load and refuses to apply if the file changed since (`force=true` overrides).
-- **One buffer per file**, **auto-clear on apply**, and **safe clear** (a bare `workslate_clear()` is rejected) — friction that prevents conflicting edits and accidental wipes.
-- **File read + pattern search with line numbers** — feeds precise line-range edits.
-- **SQLite task tracking** — `ws:` / `team:` namespaces with cross-namespace dependencies, named resumable sessions, WAL concurrency for multiple agents.
+- **Task tracking** — `ws:` / `team:` namespaces with cross-namespace dependencies, named resumable sessions, WAL concurrency for multiple agents.
 - **Doorbell hooks** — a `PostToolUse` footer shows the active session and task progress; a `PreToolUse` inbox nudge delivers role-addressed team messages mid-turn (`workslate_msg_send` → `workslate_inbox_read`), so an Agent Teams leader can steer a teammate before its turn ends. Identity is the composite `(session_id, agent_id)` from the `SessionStart` / `SubagentStart` hooks.
-- **Project-root guard** — file operations are confined to the working-directory tree, even via symlinks.
 
 ### aside MCP server
 

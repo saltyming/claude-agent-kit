@@ -516,7 +516,7 @@ When a system-reminder confirms `ultracode`, the standing posture is to author a
 
 ### Code staging inside a workflow
 
-Workflow subagents editing files in isolated worktrees use direct `Edit`/`Write` — the workslate staging discipline is impractical across parallel writers (shared SQLite, one-buffer-per-file). This is a **reasoned exception, not a license to skip review**: the review step is supplied by the workflow's own verify stages **plus** your post-hoc diff review of the synthesized output. The chain-of-thought-in-comments ban and the scope-integrity rules still bind workflow agents; and when **you** integrate a workflow's output into the working tree, you follow the normal workslate staging discipline for non-trivial merges.
+Workflow subagents editing files in isolated worktrees use direct `Edit`/`Write`. This is not a license to skip review: the review step is supplied by the workflow's own verify stages **plus** your post-hoc diff review of the synthesized output. The chain-of-thought-in-comments ban and the scope-integrity rules still bind workflow agents; and when **you** integrate a workflow's output into the working tree, you review the diff carefully before merging.
 
 ### aside / advisor inside a workflow
 
