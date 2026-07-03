@@ -4,6 +4,17 @@ All notable changes to Claude Agent Kit are documented here. Format loosely base
 
 Version numbers track the `Version` field in `CLAUDE.md`. Most entries correspond to operating-manual revisions and accompanying MCP server changes; the two ship together.
 
+## [10.1.0] - 2026-07-03
+
+**INV-QUALITY-1 — durable implementation (rules-only release).** The corpus defended delivery *scope* (no shrinking, no placeholder stubs) but had no invariant against short-horizon *implementation* — patches that satisfy the triggering case on the authoring machine while breaking elsewhere in the code's already-declared support surface. Prompted by a real CI failure in the shared MCP crates: a unix-only path-separator test assertion and slash-only slug formulas that broke on Windows.
+
+- **Kernel**: new `### Quality` invariant **INV-QUALITY-1** — every change must hold across the code's *declared operating envelope* (platforms, harnesses, input classes, callers), derived from repo evidence (docs, CI matrix, public APIs, tests, existing callers), never read down for convenience nor invented up (YAGNI still governs speculative capability); fix causes, not symptoms — and a defective test does not end the inquiry when the implementation carries the same environment assumption. The envelope governs how well the approved change must hold; it authorizes no unrelated cleanup.
+- **Execution loop**: Root Cause Analysis names the envelope evidence before coding; new durability check in Execution Requirements and the After Completion checklist.
+- **Delegation loop**: new prompt rule — name the operating envelope in every delegate brief; delegates optimize for making the immediate step pass.
+- **dispatch rule**: carry INV-QUALITY-1 into `dispatch_submit` specs explicitly (`constraints` = envelope + "fix the cause", `acceptance` written against the contract, not the triggering case) — external backends may not carry this corpus at all.
+- **Claude bindings**: the YAGNI/minimal-change [OVERRIDE] now states that the declared envelope is present-tense scope, not a "hypothetical future requirement".
+- Amendment cross-reviewed by `aside_codex` (proactive policy); its five findings (envelope evidence test, test-only-fix loophole, envelope-quartet consistency across delegation surfaces, scope-creep guard, pre-coding hook) are folded in.
+
 ## [10.0.0] - 2026-07-03
 
 **Slate consolidation (breaking).** claude-agent-kit is now a rendered member of the [slate-agent-kit](https://github.com/saltyming/slate-agent-kit) family:

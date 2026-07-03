@@ -83,6 +83,8 @@ After the first-dispatch confirmation, follow the agreed granularity for the res
 
 Frame one self-contained step per dispatch. A step that depends on another's output should wait for that one to reach `succeeded` (poll, then submit the next) — dispatch does not sequence steps for you.
 
+**Carry INV-QUALITY-1 into the spec explicitly.** The backend behind a dispatch is an external agent that optimizes for making the immediate step pass, and it may not carry this rule corpus at all — left unconstrained it will deliver a short-horizon patch that satisfies the triggering case and nothing else. Put the operating envelope into `constraints` (the platforms, harnesses, input classes, and callers the change must hold under; "fix the cause, not the symptom"), and write `acceptance` against the contract rather than the triggering case (e.g. "path handling also holds for Windows separators", not just "this test passes"). A `succeeded` on a spec without an envelope proves only that the backend satisfied itself.
+
 For a palette story, the spec's `objective` / `acceptance` come from the *approved* acceptance criteria, never the raw Tier-A artifact (`claude-agent-kit--palette.md` § Gate bindings).
 
 ## Model fallback and partial state

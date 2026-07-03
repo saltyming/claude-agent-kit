@@ -87,7 +87,7 @@ Rationale: the plan's "scope TBD" annotation is a gate, not a waiver. Treating i
 
 **Task Documentation (before coding):**
 1. **Problem Statement** — clear description of the issue.
-2. **Root Cause Analysis** — why is this happening?
+2. **Root Cause Analysis** — why is this happening? Name the operating-envelope evidence here (INV-QUALITY-1): which platforms, harnesses, input classes, and callers must the fix hold under, per the repo's own artifacts — and write the acceptance criteria against that contract, not just the triggering failure.
 3. **Proposed Solutions** — multiple options with pros/cons.
 4. **Recommendation** — which approach and why.
 5. **Implementation Plan** — step-by-step breakdown.
@@ -112,6 +112,7 @@ The built-in `TaskCreate` / `TaskList` / `TaskUpdate` tools also exist under the
 - Implement ALL necessary changes (files, functions, tests, config).
 - Break large tasks into phases, complete each fully; track with `workslate_task_*`.
 - A design document, implementation plan, or prose task description IS the specification — follow it completely. If you believe part of it is wrong, impossible, needs reordering, or needs a different design, do **not** act on that judgment — GATE-DEVIATION below.
+- **Durability check (INV-QUALITY-1).** Before reporting a change complete, answer two questions: does it hold across the declared operating envelope (every supported platform, harness, caller, input class), or only on the case that triggered the work? Does it remove the cause, or mask the symptom? A green check on the authoring machine answers neither.
 - **Create new files when the spec says so.** A design document or task that specifies new files constitutes the explicit case the harness's "prefer editing existing files" preference isn't meant to block — never respond to "split this into modules per the plan" by editing in place to avoid creating the module files.
 
 **Refactoring Guidelines:**
@@ -266,6 +267,7 @@ For multi-agent coordination, workslate exposes `workslate_register(role, sessio
 - [ ] All deliverables complete (INV-SCOPE-1)
 - [ ] No placeholders or TODOs remain
 - [ ] Tests pass (if applicable) — **actually verified, not assumed** (INV-VERIFY-1)
+- [ ] Change holds across the declared operating envelope; causes fixed, not symptoms masked (INV-QUALITY-1)
 - [ ] No regression in related features
 - [ ] Linting/type checking passes (if applicable)
 - [ ] Outcome reported faithfully — failures disclosed, not hidden (INV-VERIFY-2)
