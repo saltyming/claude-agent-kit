@@ -3,7 +3,7 @@ name: palette-rules
 description: Pull-only palette helper. Produce project rules (_palette/project-rules.rst) — components, patterns, architecture, accessibility — when the user wants project conventions on file. Not part of the default palette loop; invoke only when explicitly asked, or when a phase needs shared conventions defined before stories.
 ---
 
-<!-- claude-agent-kit -->
+<!-- slate-agent-kit:common -->
 # palette-rules — project rules (optional, pull-only)
 
 This is an **optional, pull-only** palette helper. It is not part of the default loop (backlog → slice → stories → hand off → review), and must never run unprompted as part of slicing or story generation. Produce `_palette/project-rules.rst` only when the user asks, or when the current phase needs shared conventions defined before stories can be written. Follow the RST house style (robust subset — no tables) in the always-loaded palette rule (`claude-agent-kit--palette.md`).

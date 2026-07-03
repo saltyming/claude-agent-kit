@@ -1,17 +1,17 @@
-<!-- claude-agent-kit -->
+<!-- slate-agent-kit:common -->
 # palette — Product-Intent Outer Loop
 
-palette is an **outer loop** that wraps this framework's existing **inner loop** — the Three-Phase Workflow (Understand → Plan → Execute) plus workslate tasks and dispatch/Agent-Team delegation. The inner loop finishes one task correctly and then everything about it evaporates at the task boundary: there is no durable, cross-session record of *what we are building and why*, and no re-planning cadence. palette adds exactly that missing layer above the inner loop — a durable backlog of intent, a thin-slice step that feeds the inner loop one increment at a time, and a review step that harvests each completion back into the backlog.
+palette is an **outer loop** that wraps this project's inner loop — the Three-Phase Workflow (Understand → Plan → Execute) plus a `workslate_task_*` for tactical tracking and `Agent / Workflow / dispatch` / `Workflow` for delegation when needed. The inner loop finishes one task correctly and then everything about it evaporates at the task boundary: there is no durable, cross-session record of *what we are building and why*, and no re-planning cadence. palette adds exactly that missing layer above the inner loop — a durable backlog of intent, a thin-slice step that feeds the inner loop one increment at a time, and a review step that harvests each completion back into the backlog.
 
-palette is a **loop, not a product-planning suite**. It is: durable backlog → thin slice → hand off → review → re-plan, expressed in this framework's own terms (agent-loop design + harness-assist tooling, alongside workslate and dispatch). Design artifacts (tech spec, UX flow, UI/design brief, project rules) are **optional, pull-only helpers** — the `palette-*` skills — never part of the default loop.
+palette is a **loop, not a product-planning suite**. It is: durable backlog → thin slice → hand off → review → re-plan, expressed in this project's own terms (agent-loop discipline + workslate_task_* + harness delegation). Design artifacts (tech spec, UX flow, UI/design brief, project rules) are **optional, pull-only helpers** — the `palette-*` skills — never part of the default loop.
 
 ## Engagement — folder-gated (HARD)
 
 palette's trigger is the presence of a `_palette/` directory in the project. There is no separate progress file and no heuristic guessing about "is this multi-increment enough".
 
 - **`_palette/` exists → engaged.** You are in a palette project. On non-trivial work, weave the outer loop into your normal inner loop *without being asked*: consult `_palette/backlog.rst` for product intent as you plan, and update it as work completes. This is the always-on behavior — but only inside a project that has opted in.
-- **`_palette/` absent → dormant.** Do not read, create, update, or mention `_palette/`. One exception: if the work is genuinely project- or roadmap-shaped (multi-increment, spans sessions, framed by the user as "a project / MVP / phase / milestone / roadmap"), you may **offer one line** — "Want me to set up palette for this? Run the `palette-init` skill." — and nothing more. Do not scaffold on your own. For a single bug fix, a bounded one-off feature, a lone refactor, or a failing CI, do not even offer.
-- **Opt-in is explicit: the `palette-init` skill.** Only the user running `palette-init` creates `_palette/`. palette never ambushes a project.
+- **`_palette/` absent → dormant.** Do not read, create, update, or mention `_palette/`. One exception: if the work is genuinely project- or roadmap-shaped (multi-increment, spans sessions, framed by the user as "a project / MVP / phase / milestone / roadmap"), you may **offer one line** — "Want me to set up palette for this? Invoke the `palette-init` skill." — and nothing more. Do not scaffold on your own. For a single bug fix, a bounded one-off feature, a lone refactor, or a failing CI, do not even offer.
+- **Opt-in is explicit: the `palette-init` skill.** Only the user invoking `palette-init` creates `_palette/`. palette never ambushes a project.
 - **The distinction is multi-increment, not multi-file.** Multi-file work already belongs to the inner loop; palette wakes only when *product intent and sequencing* are part of the task.
 
 ### Auto-engagement ≠ auto-authority (HARD)
@@ -20,10 +20,10 @@ The folder's presence switches on the *advisory* loop — it does **not** grant 
 
 ## Authority firewall — Tier A / Tier B (HARD)
 
-palette adds a durable record of intent. To keep it from silently becoming a second, competing definition of "current scope" — which would undercut this framework's scope-integrity rules — the authority split is strict:
+This section is INV-AUTH-1's procedure (the invariant is defined in `CLAUDE.md`). palette adds a durable record of intent. To keep it from silently becoming a second, competing definition of "current scope" — which would undercut this project's scope-integrity rules — the authority split is strict:
 
-- **Tier A — the palette artifacts** (everything under `_palette/`: `backlog.rst`, `phase-brief.rst`, `story-*.rst`, `index.rst`, and any optional `tech-spec.rst` / `ux-flow.rst` / `design-brief.rst` / `project-rules.rst`). **Advisory only.** They *propose* scope; they never *authorize* an edit. **The backlog is an intent ledger, not an execution authority.** A backlog item may only inform questions and proposals. It becomes executable only after it is promoted into a current story/plan, approved by the user, and tracked with workslate/dispatch.
-- **Tier B — the existing execution machinery.** The user's approval at the generic "Get approval" gate *authorizes*; workslate `ws:`/`team:` tasks and dispatch specs *track*. These are binding.
+- **Tier A — the palette artifacts** (everything under `_palette/`: `backlog.rst`, `phase-brief.rst`, `story-*.rst`, `index.rst`, and any optional `tech-spec.rst` / `ux-flow.rst` / `design-brief.rst` / `project-rules.rst`). **Advisory only.** They *propose* scope; they never *authorize* an edit. **The backlog is an intent ledger, not an execution authority.** A backlog item may only inform questions and proposals. It becomes executable only after it is promoted into a current story/plan, approved by the user, and tracked with `workslate_task_*` (and delegated via `Agent / Workflow / dispatch` when appropriate).
+- **Tier B — the existing execution machinery.** The user's approval at the generic "Get approval" gate *authorizes*; `workslate_task_*` entries *track*. These are binding.
 
 **Precedence, highest first:** (1) the current turn's explicit user instruction → (2) the current Tier-B approved-and-tracked scope (what execution actually follows) → (3) a story's acceptance criteria / "Not this story" → (4) the phase brief (context) → (5) the backlog (future intent, explicitly *not* current scope).
 
@@ -37,21 +37,33 @@ The single most important safety rule, and it runs in **both** directions:
 
 ### Deviation and ambiguity — reuse the existing rules
 
-palette invents no new deviation vocabulary. Once a story has passed the hand-off approval gate, its `Done when` + `Not this story` **are** the "approved spec/plan" that `claude-agent-kit--task-execution.md` → *Forced Spec/Plan Deviation: Re-request Approval* governs: if delivering the story as written turns out genuinely impossible, requires reordering that changes the approved sequence, or needs a design that deviates from the plan — stop, preserve work, propose, wait. Plain undecided ambiguity is handled by the existing Clarification heuristic (ask about WHAT, decide HOW yourself).
+palette invents no new deviation vocabulary. Once a story has passed the hand-off approval gate, its `Done when` + `Not this story` **are** the "approved spec/plan" that GATE-DEVIATION (`claude-agent-kit--task-execution.md`) governs: if delivering the story as written turns out genuinely impossible, requires reordering that changes the approved sequence, or needs a design that deviates from the plan — stop, preserve work, propose, wait. Plain undecided ambiguity is handled by the existing Clarification heuristic (ask about WHAT, decide HOW yourself).
+
+## Gate bindings — every gate's palette meaning, in one place
+
+The scattered "palette note" pattern is consolidated here. When engaged:
+
+- **The approval gate (Tier A → Tier B).** The execution loop's "Get approval" node IS the palette hand-off: a pending story's `Done when` criteria enter the inner loop only through it. Nothing is edited before the gate.
+- **GATE-SCOPE-CONFIRM.** palette runs this checkpoint every cycle: proposing a phase/story scope is a user-facing gate — report the proposed slice, wait for explicit approval, *then* hand off. The backlog *proposes*; the user's approval *authorizes*.
+- **`workslate_task_*` projection.** Tracker entries created for a story are the tactical *projection of already-approved acceptance criteria* — a translation, not a second backlog and not new scope.
+- **GATE-DEVIATION.** A story's `Done when` + `Not this story` are the approved spec it protects; moving unmet acceptance criteria into the backlog is not an escape hatch.
+- **GATE-DELEGATE / GATE-DISPATCH.** A delegate (native subagent or dispatch step) receives the *approved, tracked scope* — never the raw `story-*.rst`. A dispatch spec's `objective`/`acceptance` come from the approved criteria (Tier-B scope, not a Tier-A artifact).
+- **Thin-slicing vs INV-SCOPE-1.** Choosing a thinner slice is a planning-time, user-owned decision made *before* approval — not the agent shrinking approved work. Once a slice is approved, "implement the entire scope" applies to that slice; deferring any of it to the backlog needs explicit, specific consent.
+- **Git.** `_palette/` is the developer's personal planning record — never auto-committed by the agent. `palette-init` offers a self-contained `_palette/.gitignore`; a developer who wants sharing commits it themselves.
 
 ## The loop
 
 When engaged (`_palette/` present):
 
 1. **Backlog** (`_palette/backlog.rst`) — a single durable file: the cross-session ledger of product intent (durable product principles + items, each with `:Type:` / `:Source:` / `:Status:`). Advisory (Tier A).
-2. **Slice → phase** — with the user, cut the next thin increment from the backlog into a phase (`_palette/phase-<N>/phase-brief.rst`, with entry/exit criteria); rank candidates first with the next-slice rubric (Scoring rubrics, below). This is the user-owned scope decision the framework already mandates.
+2. **Slice → phase** — with the user, cut the next thin increment from the backlog into a phase (`_palette/phase-<N>/phase-brief.rst`, with entry/exit criteria); rank candidates first with the next-slice rubric (Scoring rubrics, below). This is the user-owned scope decision the project already mandates.
 3. **Stories** — decompose the phase into implementable stories with acceptance criteria (`_palette/phase-<N>/stories/story-<n>-<slug>.rst` + `index.rst`); use the story-boundary rubric (below) to recommend where one story ends and the next begins. Advisory.
-4. **Hand off** — at the existing "Get approval" gate. A pending story's acceptance criteria feed the normal inner loop (Understand → Plan → Execute + workslate/dispatch). **Nothing is edited before this gate** — it is the Tier A → Tier B transition.
+4. **Hand off** — at the existing "Get approval" gate. A pending story's acceptance criteria feed the normal inner loop (Understand → Plan → Execute + `workslate_task_*` + harness delegation). **Nothing is edited before this gate** — it is the Tier A → Tier B transition.
 5. **Review + re-plan** — when a story/phase completes, step back: what shipped, what was learned, what surfaced. Record it (`_palette/reviews.rst` at phase close) and triage new/deferred items into the backlog **with explicit user consent**, scoring each with the review-triage rubric (below) first. Then slice the next increment.
 
 ### The combined loop — how it sits on the inner loop
 
-palette does not replace the inner loop; it **wraps** it. The Three-Phase Workflow, workslate, and dispatch are unchanged. The two loops meet at exactly two points: the **hand-off gate** (a story's acceptance criteria enter Understand → Plan → Execute, via the existing "Get approval" node) and the **completion harvest** (the inner loop's verified result returns to the review / backlog update).
+palette does not replace the inner loop; it **wraps** it. The Three-Phase Workflow and `workslate_task_*` tracking are unchanged. The two loops meet at exactly two points: the **hand-off gate** (a story's acceptance criteria enter Understand → Plan → Execute, via the existing "Get approval" node) and the **completion harvest** (the inner loop's verified result returns to the review / backlog update).
 
 ```
 OUTER (palette · strategic · cross-session)
@@ -59,29 +71,30 @@ OUTER (palette · strategic · cross-session)
   [1] SLICE    -> phase-brief.rst          (Tier A · user-owned scope)
   [2] STORIES  -> stories/*.rst + index    (Tier A · advisory)
   per pending story:
-      +-- INNER (existing Three-Phase · unchanged) --------------+
-      |  UNDERSTAND  read files (+ preserve user-owned changes /  |
-      |              staleness check)                            |
-      |  PLAN        story AC -> task doc / (large -> Plan Mode)  |
-      |  == GET APPROVAL ==  <- Tier A->B. No edit before here.   |
-      |  EXECUTE     workslate task (projection of approved AC,   |
-      |              not new scope) + optional dispatch / Agent  |
-      |              Team + verify (test/build)                  |
-      +----------------------------------------------------------+
+      +-- INNER (Three-Phase · unchanged) ----------------+
+      |  UNDERSTAND  read files (+ preserve user-owned     |
+      |              changes / staleness check)           |
+      |  PLAN        story AC -> task doc / harness plan  |
+      |              surface when needed                  |
+      |  == GET APPROVAL ==  <- Tier A->B. No edit here.  |
+      |  EXECUTE     workslate_task_* (projection of approved AC, |
+      |              not new scope) + optional            |
+      |              Workflow (gated) + verify          |
+      +---------------------------------------------------+
       record story done in index.rst (bookkeeping) + one-line report
   [3] REVIEW   -> reviews.rst; triage new/deferred into backlog (with consent)
   [4] RE-PLAN  -> next phase
 ```
 
-Where the existing primitives plug in: **workslate task** = the inner Execute's tactical projection of an approved story's AC (a translation, not a second backlog); **dispatch / Agent Team** = inner execution delegation, unchanged — the *approved scope*, not the raw story artifact, becomes the dispatch spec / team task; **native memory** = outside the loop (facts, not intent).
+Where the existing primitives plug in: **workslate_task_*** = the inner Execute's tactical projection of an approved story's AC (a translation, not a second backlog); **Agent / Workflow / dispatch / Workflow** = inner execution delegation, unchanged — the *approved scope*, not the raw story artifact, becomes the delegate's brief; **native memory** = outside the loop (facts, not intent).
 
 ## backlog vs native memory — routing
 
-Both persist across sessions; keep them distinct. Evolving intent / scope / deferrals → `_palette/backlog.rst`. Stable facts about the user, project, or a settled decision → native memory (`memory/` + `MEMORY.md`). Never record the same thing in both.
+Both persist across sessions; keep them distinct. Evolving intent / scope / deferrals → `_palette/backlog.rst`. Stable facts about the user, project, or a settled decision → the harness's native memory surface, plus a local `MEMORY.md` if you keep one. Never record the same thing in both.
 
 ## `_palette/` and git
 
-Default: **not committed.** The backlog is the developer's personal planning record, not shared team state; its cross-session value holds from being on disk in the working copy, and git is not required for that. `palette-init` *asks* whether to add a self-contained `_palette/.gitignore` (contents `*`); a developer who wants clone/team sharing wires up committing themselves. The framework does not commit `_palette/` on its own.
+Default: **not committed.** The backlog is the developer's personal planning record, not shared team state; its cross-session value holds from being on disk in the working copy, and git is not required for that. `palette-init` *asks* whether to add a self-contained `_palette/.gitignore` (contents `*`); a developer who wants clone/team sharing wires up committing themselves. The project does not commit `_palette/` on its own.
 
 ## RST house style — robust subset (read before writing any artifact)
 

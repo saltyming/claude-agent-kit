@@ -3,7 +3,7 @@ name: palette-ui
 description: Pull-only palette helper. Produce a visual design brief (_palette/design-brief.rst) and an optional design-preview.html for the current phase when the user wants that depth. Not part of the default palette loop; invoke only when explicitly asked, or when a phase needs a visual language defined before stories.
 ---
 
-<!-- claude-agent-kit -->
+<!-- slate-agent-kit:common -->
 # palette-ui — design brief (optional, pull-only)
 
 This is an **optional, pull-only** palette helper. It is not part of the default loop (backlog → slice → stories → hand off → review), and must never run unprompted as part of slicing or story generation. Produce `_palette/design-brief.rst` (and, if useful, `_palette/design-preview.html`) only when the user asks, or when the current phase needs a visual language defined before stories can be written. Follow the RST house style (robust subset — no tables) in the always-loaded palette rule (`claude-agent-kit--palette.md`).

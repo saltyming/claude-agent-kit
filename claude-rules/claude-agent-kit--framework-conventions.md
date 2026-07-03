@@ -1,5 +1,7 @@
-<!-- claude-agent-kit -->
+<!-- slate-agent-kit:common -->
 # Framework Conventions
+
+These are the project's language- and framework-specific conventions. Stack choices are project-owned; this file collects the patterns you follow on whichever stack the project uses.
 
 ## React / Next.js
 

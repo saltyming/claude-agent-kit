@@ -3,7 +3,7 @@ name: palette-init
 description: Opt a project into palette (the product-intent outer loop). Scaffolds the _palette/ backlog through a light intake and asks about git handling. Use when the user wants to start managing a project or roadmap with palette, or accepts the offer to set palette up. Does not scope a phase — the palette loop does that afterward.
 ---
 
-<!-- claude-agent-kit -->
+<!-- slate-agent-kit:common -->
 # palette-init — opt a project into palette
 
 This skill turns palette on for a project: it scaffolds `_palette/` and seeds the backlog through a **light** intake. It does not scope a phase and writes no source code. After init, the palette loop (defined in the always-loaded `claude-agent-kit--palette.md` rule) takes over automatically, because `_palette/` now exists.

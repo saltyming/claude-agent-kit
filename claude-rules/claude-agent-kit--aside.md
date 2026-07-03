@@ -1,34 +1,40 @@
-<!-- claude-agent-kit -->
+<!-- slate-agent-kit:common -->
 # Aside Guidance
 
-Policy for the `aside` MCP server (`mcp__aside__aside_codex` / `aside_copilot` / `aside_list`). These tools wrap locally-installed third-party CLIs so Claude can ask OpenAI or GitHub model families for a second opinion. The built-in `advisor()` tool (Anthropic Opus reviewer) is a separate mechanism and stays unchanged.
+Policy for the `aside` MCP server (`mcp__aside__aside_codex` / `aside_copilot` / `aside_list`; Kimi plugin installs may expose the same tools under a plugin-prefixed MCP name). These tools wrap locally-installed third-party CLIs so the agent can ask OpenAI or GitHub model families for a second opinion. If the active harness has its own native advisor/reviewer surface, that surface is separate and stays governed by the harness-specific rule.
 
-## [OVERRIDE] system prompt's `# Advisor Tool` section
+## Relation to native advisor surfaces
 
-Aside tools are independent of built-in `advisor()`. If `advisor()` exists in this environment, keep calling it at its lifecycle checkpoints — that behavior does not change. Aside tools are **not** a replacement and **not** strictly a supplement either: they fire on their own triggers, described below. In some environments only aside is available; those triggers still apply.
+Aside tools are independent of any harness-native advisor. If such a surface exists in the current environment, keep calling it at the lifecycle checkpoints defined by that harness — aside does not replace it. Aside tools are **not** strictly a supplement either: they fire on their own triggers, described below. In some environments only aside is available; those triggers still apply.
+
+**In Claude Code, the native advisor surface is the built-in `advisor()` tool** (an Anthropic Opus reviewer that auto-forwards the full transcript, no parameters). Claude-specific bindings, replacing the generic wording elsewhere in this file where they conflict:
+
+- Every "native advisor" mention below means `advisor()`. Keep calling it at its lifecycle checkpoints as the system prompt describes — unchanged.
+- **The no-concurrency hazard is concrete here:** the Claude Code harness currently breaks `advisor()` when an aside tool call is running at the same time (aside's stdio transport interferes with `advisor()`'s transcript forwarding). Sequential-in-one-turn is fine; same-block or overlapping is not.
+- **`advisor()` receives the full, unredacted transcript** including tool inputs and outputs — aside receives the redacted form. When the same session goes to both, they see fundamentally different things; the aside-first pairing remains meaningful because `advisor()` later sees the aside exchange too.
 
 Two surfaces that may coexist:
 
 | Surface | What | When |
 |---|---|---|
-| built-in `advisor()` (if available) | Anthropic Opus reviewer, auto-forwards the full transcript, no parameters. | Lifecycle checkpoints as the system prompt describes. Unchanged. |
-| `mcp__aside__aside_{codex,copilot}` | Cross-family second opinion via local CLIs. `include_transcript` defaults to `true` — the current conversation is forwarded automatically, **but in redacted form** (text passes through verbatim; `tool_use` / `tool_result` / `thinking` blocks are replaced with placeholders — see **Transcript redaction — aside ≠ advisor()** below). Both backends run read-only with file-read tools available, so they can inspect files the caller names by path — see **Backend capabilities** below. Hits paid third-party API quota. | Per the user's preference file (see below). Trigger list for `proactive` policy below. |
+| harness-native advisor/reviewer (if available) | Native second-review surface. Transcript behavior and parameters are harness-specific. | Lifecycle checkpoints as that harness describes. Unchanged. |
+| `mcp__aside__aside_{codex,copilot}` | Cross-family second opinion via local CLIs. `include_transcript` defaults to `true` — the current conversation is forwarded automatically, **but in redacted form** (text passes through verbatim; `tool_use` / `tool_result` / `thinking` blocks are replaced with placeholders — see **Transcript redaction** below). Both backends run read-only with file-read tools available, so they can inspect files the caller names by path — see **Backend capabilities** below. Hits paid third-party API quota. | Per the user's preference file (see below). Trigger list for `proactive` policy below. |
 
-**Relation to `dispatch` (the execution complement).** `aside` is *horizontal* consultation — a read-only second opinion; the agent stays in charge. Its sibling is **`dispatch`** (`claude-agent-kit--dispatch.md`): *hierarchical* delegation that hands a **write-capable** execution step to an external codex and tracks it asynchronously. Same backend family (codex), opposite posture — `aside_codex` *asks*, `dispatch_submit` *does* (and edits files under a target dir). Don't conflate the surfaces: a read-only opinion is `aside`; entrusting a build / edit step to codex is `dispatch`, which carries its own approval gate and server guards. See also the delegation taxonomy in `claude-agent-kit--parallel-work.md`.
+**Relation to `dispatch`.** `aside` *asks* (read-only); `dispatch` *does* (write-capable, async). The full aside↔dispatch↔native-delegate taxonomy is stated once in `claude-agent-kit--parallel-work.md` — don't conflate the surfaces.
 
 ## Decision rules
 
-1. **Check `~/.claude/rules/claude-agent-kit--aside-prefs.md` before any aside call.** It carries the user's preferred backend, default models, default reasoning effort, and auto-call policy. Apply those preferences when the user hasn't named a backend or model explicitly.
+1. **Check `$HOME/.claude/rules/claude-agent-kit--aside-prefs.md` before any aside call.** It carries the user's preferred backend, default models, default reasoning effort, and auto-call policy. Apply those preferences when the user hasn't named a backend or model explicitly.
 2. **Without preferences, stay conservative.** Call aside tools only on explicit user request — "codex에게 물어봐", "ask copilot", "copilot 의견". Do not auto-call.
 3. **When the user names a backend, honor it.** Preference file is the fallback, not an override of the user's current instruction.
 4. **Call `aside_list` first** if you're unsure which CLIs are installed on this machine. Unavailable backends are reported, not errored — you can pivot to an available one.
-5. **If `advisor()` is also available, do not substitute one for the other.** They answer different questions: `advisor()` is a stronger Claude reviewing your work; aside tools are *different model families* giving cross-ecosystem perspective.
-6. **A current-turn explicit user instruction scoping the consultation to one surface overrides Decision rule 5 and the Proactive policy below — in both directions.** It applies *only* when the user's latest message directly names a surface/backend **and** uses exclusivity or prohibition language — e.g. "only aside", "only `advisor()`", "ask codex, not advisor", "skip/no/don't call aside", "don't pair them", "use both", "use neither". It does **not** apply to: merely naming one backend ("ask codex"), asking for "a second opinion", cost / privacy / risk concerns the agent infers on its own, or the agent's own reassessment of how high-stakes the work is. When it applies, honor it and do **not** fire the other surface. When the scoping is ambiguous, ask or follow prefs — never treat ambiguity as license to skip a required proactive pair. (Self-generated doubt is governed by the Proactive policy's re-audit ban, not by this rule.)
-   - Directional / boundary cases: **only aside** → fire aside, do not call `advisor()`. **only `advisor()`** → call `advisor()`, do not fire aside ("I was about to call `advisor()`" is not a reason to fire aside against an explicit instruction not to). **use both** → run both, sequenced aside-first (the no-concurrency rule still holds). **use neither** → run neither for that decision. **"get a second opinion"** with no surface named → not exclusive; pick per prefs. **"ask codex"** without only/not/skip → names a backend but does not suppress `advisor()` pairing if it is independently triggered.
+5. **If a native advisor is also available, do not substitute one for the other.** They answer different questions: native advisors review within the harness's own review channel; aside tools are *different model families* giving cross-ecosystem perspective.
+6. **A current-turn explicit user instruction scoping the consultation to one surface overrides Decision rule 5 and the Proactive policy below — in both directions.** It applies *only* when the user's latest message directly names a surface/backend **and** uses exclusivity or prohibition language — e.g. "only aside", "only the native advisor", "ask codex, not the native advisor", "skip/no/don't call aside", "don't pair them", "use both", "use neither". It does **not** apply to: merely naming one backend ("ask codex"), asking for "a second opinion", cost / privacy / risk concerns the agent infers on its own, or the agent's own reassessment of how high-stakes the work is. When it applies, honor it and do **not** fire the other surface. When the scoping is ambiguous, ask or follow prefs — never treat ambiguity as license to skip a required proactive pair. (Self-generated doubt is governed by the Proactive policy's re-audit ban, not by this rule.)
+   - Directional / boundary cases: **only aside** → fire aside, do not call the native advisor. **only native advisor** → call the native advisor, do not fire aside ("I was about to call the native advisor" is not a reason to fire aside against an explicit instruction not to). **use both** → run both, sequenced aside-first (the no-concurrency rule still holds). **use neither** → run neither for that decision. **"get a second opinion"** with no surface named → not exclusive; pick per prefs. **"ask codex"** without only/not/skip → names a backend but does not suppress native-advisor pairing if it is independently triggered.
 
 ## Proactive policy (when prefs sets `policy: proactive`)
 
-When the user's `claude-agent-kit--aside-prefs.md` sets `policy: proactive`, you **SHOULD** call the preferred backend on the triggers below. "SHOULD", not "may" — these are active instructions, not permissions. The call is required whether or not built-in `advisor()` also exists in this environment (unless the user explicitly scoped the request to one surface — Decision rule 6).
+When the user's `claude-agent-kit--aside-prefs.md` sets `policy: proactive`, you **SHOULD** call the preferred backend on the triggers below. "SHOULD", not "may" — these are active instructions, not permissions. The call is required whether or not a native advisor also exists in this environment (unless the user explicitly scoped the request to one surface — Decision rule 6).
 
 ### Triggers (proactive mode — non-exhaustive)
 
@@ -38,20 +44,20 @@ Fire one aside call to the preferred backend when ANY of these happen, regardles
 - API / wire-protocol / schema / public contract changes visible to callers outside the change set.
 - Concurrency, locking, invariant, or ordering-assumption changes.
 - Security-sensitive code: authentication, authorisation, crypto, access control, input sanitisation, privilege boundaries.
-- **Whenever you are about to call `advisor()` — *and the user has not scoped the work to one surface (Decision rule 6)* — fire the aside call FIRST, before `advisor()` runs, not alongside it.** The act of *proactively* deciding to call `advisor()` is itself the signal that you want a second opinion — pairing is the whole point; but an explicit current-turn instruction to use only one surface overrides this in both directions (Decision rule 6).
+- **Whenever you are about to call a native advisor — *and the user has not scoped the work to one surface (Decision rule 6)* — fire the aside call FIRST, before the native advisor runs, not alongside it.** The act of *proactively* deciding to call a native advisor is itself the signal that you want a second opinion — pairing is the whole point; but an explicit current-turn instruction to use only one surface overrides this in both directions (Decision rule 6).
 
-  **HARD RULE — no concurrency.** Do NOT call aside and `advisor()` **concurrently** — not in the same tool-use block, and not while an aside call is still running. The Claude Code harness currently breaks `advisor()` when an aside tool call is running at the same time (aside's stdio transport interferes with `advisor()`'s transcript forwarding). The constraint is **non-concurrency, not a turn boundary**: the two MAY run **sequentially within the same turn** — fire aside, await its full reply, then call `advisor()` in a later tool-use block, with no need to yield to the user between them.
+  **HARD RULE — no concurrency.** Do NOT call aside and a native advisor **concurrently** — not in the same tool-use block, and not while an aside call is still running. Some harnesses multiplex stdio/MCP traffic in ways that can interfere with native transcript forwarding when another MCP call is active. The constraint is **non-concurrency, not a turn boundary**: the two MAY run **sequentially within the same turn** — fire aside, await its full reply, then call the native advisor in a later tool-use block, with no need to yield to the user between them.
 
   **Required sequence:**
     1. Fire the aside call and wait for its reply.
     2. Summarise the reply for the user per the Reporting section below.
-    3. Once the aside call has fully returned, call `advisor()` — a later tool-use block in the **same turn** is fine (no need to wait for a subsequent response or yield to the user); never in the same block, and never while aside is still running.
+    3. Once the aside call has fully returned, call the native advisor — a later tool-use block in the **same turn** is fine (no need to wait for a subsequent response or yield to the user); never in the same block, and never while aside is still running.
 
-  **Do NOT re-audit the decision to pair.** Once you've decided to call `advisor()`, aside fires — full stop. The other triggers above (architecture / API / concurrency / security) gate the *other* proactive calls, not this one. *"I decided this isn't really high-stakes after all"* is a failure mode, not caution.
+  **Do NOT re-audit the decision to pair.** Once you've decided to call the native advisor, aside fires — full stop. The other triggers above (architecture / API / concurrency / security) gate the *other* proactive calls, not this one. *"I decided this isn't really high-stakes after all"* is a failure mode, not caution.
 
-  **Explicit user scoping overrides this pair — see Decision rule 6.** The re-audit ban directly above targets *your own* second-guessing; it does **not** override a direct, current-turn user instruction. If the user this turn scoped the work to one surface ("only aside" / "only `advisor()`" / "skip the aside call" / "use neither"), honor that per Decision rule 6 and do not fire the other surface.
+  **Explicit user scoping overrides this pair — see Decision rule 6.** The re-audit ban directly above targets *your own* second-guessing; it does **not** override a direct, current-turn user instruction. If the user this turn scoped the work to one surface ("only aside" / "only native advisor" / "skip the aside call" / "use neither"), honor that per Decision rule 6 and do not fire the other surface.
 
-  **Legitimate reasons to skip aside here:** the user's prefs set `policy: conservative` or `policy: preference-only`, OR no aside backend is installed on this machine (`aside_list` reports all unavailable), OR the user this turn explicitly scoped the work to `advisor()` only / told you to skip the aside call (Decision rule 6 — explicit scoping overrides the pair in both directions).
+  **Legitimate reasons to skip aside here:** the user's prefs set `policy: conservative` or `policy: preference-only`, OR no aside backend is installed on this machine (`aside_list` reports all unavailable), OR the user this turn explicitly scoped the work to native-advisor only / told you to skip the aside call (Decision rule 6 — explicit scoping overrides the pair in both directions).
 
 Announce the call briefly when you fire it ("I'm also asking codex because this is a Next.js routing question") so the user sees the reasoning.
 
@@ -69,7 +75,7 @@ If both surfaces exist, both run by default on these triggers, unless the user e
 
 ## Backend capabilities
 
-The aside MCP server spawns each CLI in the Claude Code session's cwd with a read-only configuration. **Every backend can read files and grep the workspace itself** — the agent does not need to paste file contents in to let the backend "see" code. Capability matrix:
+The aside MCP server spawns each CLI in the active harness session's cwd with a read-only configuration. **Every backend can read files and grep the workspace itself** — the agent does not need to paste file contents in to let the backend "see" code. Capability matrix:
 
 | Backend | CLI flags | Read files | Grep | Web fetch | Write / exec | Notes |
 |---|---|---|---|---|---|---|
@@ -87,9 +93,9 @@ Embed an excerpt in `context` only when:
 
 Do not paste whole files into `context` when a path reference would do. Agents were historically doing this because the old rule read "MUST embed the relevant excerpt"; that rule is now narrowed to the three cases above.
 
-## Transcript redaction — aside ≠ advisor()
+## Transcript redaction — aside differs from native advisors
 
-`include_transcript=true` forwards the session's `.jsonl` transcript, but the aside renderer (`mcp-servers/aside/src/transcript.rs::render_content`) redacts tool-related content before it reaches the third-party CLI:
+`include_transcript=true` forwards a tail of the invoking harness's own session log — aside reads it **natively per harness** (Claude Code project transcripts, Codex rollouts excluding headless `codex exec` children, Kimi `wire.jsonl`; selection via `ASIDE_HARNESS`, set at registration) — but the renderer redacts tool-related content before it reaches the third-party CLI, identically across harnesses:
 
 | Content block | What the aside backend actually sees |
 |---|---|
@@ -100,7 +106,7 @@ Do not paste whole files into `context` when a path reference would do. Agents w
 
 This redaction is intentional: tool results routinely contain file contents, grep output, command stdout, API responses, and secrets. Forwarding them raw to OpenAI / Google / GitHub CLIs crosses a trust boundary, and a single large tool output would blow the 100 KB transcript budget anyway.
 
-**Built-in `advisor()` is different.** `advisor()` is an Anthropic-internal reviewer and receives the full transcript including tool inputs and outputs. When the same session is sent to `advisor()` and aside, **they see fundamentally different things**. Do not assume an aside backend has any of the substance your tool calls produced just because the transcript was "forwarded."
+**Native advisors may be different.** Some harness-native reviewers receive a fuller transcript, including tool inputs and outputs; others may not. When the same session is sent to a native advisor and aside, **assume they may see fundamentally different things**. Do not assume an aside backend has any of the substance your tool calls produced just because the transcript was "forwarded."
 
 ### HARD RULE: hand the backend file paths; embed only when necessary
 
@@ -136,7 +142,7 @@ Example — **good** (off-disk data, exception 2):
 
 ### What this does not change
 
-- The aside-first-then-advisor() sequencing rule (above) still holds. `advisor()` still sees the full transcript when it runs in the subsequent turn, so it will pick up both the aside exchange and the original tool inputs/outputs — the pairing remains meaningful.
+- The aside-first-then-native-advisor sequencing rule (above) still holds. A native advisor may see a different transcript when it runs later, so the pairing remains meaningful.
 - `include_transcript=false` is still the right choice for fully decontextualised questions ("what is 2+2", "give me idiomatic Rust for X"). Do not pass a redacted transcript when the question doesn't need session context at all — it only wastes tokens.
 
 ## Cost awareness

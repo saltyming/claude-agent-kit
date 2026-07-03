@@ -160,14 +160,14 @@ if [ "$KEEP_PREFS" = "no" ]; then
     fi
 
     sed \
-        -e "s/{{PREFERRED_BACKEND}}/$(sed_escape "$PREFERRED_BACKEND")/g" \
-        -e "s/{{CODEX_MODEL}}/$(sed_escape "$CODEX_MODEL")/g" \
-        -e "s/{{COPILOT_MODEL}}/$(sed_escape "$COPILOT_MODEL")/g" \
-        -e "s/{{CODEX_EFFORT}}/$(sed_escape "$CODEX_EFFORT")/g" \
-        -e "s/{{COPILOT_EFFORT}}/$(sed_escape "$COPILOT_EFFORT")/g" \
-        -e "s/{{CODEX_MODEL_FALLBACK}}/$(sed_escape "$CODEX_MODEL_FALLBACK")/g" \
-        -e "s/{{COPILOT_MODEL_FALLBACK}}/$(sed_escape "$COPILOT_MODEL_FALLBACK")/g" \
-        -e "s/{{POLICY}}/$(sed_escape "$POLICY")/g" \
+        -e "s/@@ASIDE_PREFERRED@@/$(sed_escape "$PREFERRED_BACKEND")/g" \
+        -e "s/@@ASIDE_CODEX_MODEL@@/$(sed_escape "$CODEX_MODEL")/g" \
+        -e "s/@@ASIDE_COPILOT_MODEL@@/$(sed_escape "$COPILOT_MODEL")/g" \
+        -e "s/@@ASIDE_CODEX_EFFORT@@/$(sed_escape "$CODEX_EFFORT")/g" \
+        -e "s/@@ASIDE_COPILOT_EFFORT@@/$(sed_escape "$COPILOT_EFFORT")/g" \
+        -e "s/@@ASIDE_CODEX_FALLBACK@@/$(sed_escape "$CODEX_MODEL_FALLBACK")/g" \
+        -e "s/@@ASIDE_COPILOT_FALLBACK@@/$(sed_escape "$COPILOT_MODEL_FALLBACK")/g" \
+        -e "s/@@ASIDE_POLICY@@/$(sed_escape "$POLICY")/g" \
         "$TEMPLATE_CONTENT_PATH" > "$PREFS_DEST"
 
     # Record in manifest (avoid duplicate entries if re-running `make configure`).

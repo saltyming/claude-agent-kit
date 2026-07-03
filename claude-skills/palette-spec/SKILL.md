@@ -3,7 +3,7 @@ name: palette-spec
 description: Pull-only palette helper. Produce a technical spec (_palette/tech-spec.rst) for the current phase when the user wants that depth. Not part of the default palette loop; invoke only when explicitly asked, or when a phase clearly needs stack / data-model / API decisions settled before stories.
 ---
 
-<!-- claude-agent-kit -->
+<!-- slate-agent-kit:common -->
 # palette-spec — tech spec (optional, pull-only)
 
 This is an **optional, pull-only** palette helper. It is not part of the default loop (backlog → slice → stories → hand off → review), and must never run unprompted as part of slicing or story generation. Produce `_palette/tech-spec.rst` only when the user asks, or when the current phase clearly needs technical decisions settled before stories can be written. Follow the RST house style (robust subset — no tables) in the always-loaded palette rule (`claude-agent-kit--palette.md`).

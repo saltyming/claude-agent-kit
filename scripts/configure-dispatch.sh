@@ -144,13 +144,13 @@ if [ "$KEEP_PREFS" = "no" ]; then
     fi
 
     sed \
-        -e "s/{{POLICY}}/$(sed_escape "$POLICY")/g" \
-        -e "s/{{APPROVAL}}/$(sed_escape "$APPROVAL")/g" \
-        -e "s/{{GRANULARITY}}/$(sed_escape "$GRANULARITY")/g" \
-        -e "s/{{BACKEND}}/$(sed_escape "$BACKEND")/g" \
-        -e "s/{{MODEL}}/$(sed_escape "$MODEL")/g" \
-        -e "s/{{EFFORT}}/$(sed_escape "$EFFORT")/g" \
-        -e "s/{{MODEL_FALLBACK}}/$(sed_escape "$MODEL_FALLBACK")/g" \
+        -e "s/@@DISPATCH_POLICY@@/$(sed_escape "$POLICY")/g" \
+        -e "s/@@DISPATCH_APPROVAL@@/$(sed_escape "$APPROVAL")/g" \
+        -e "s/@@DISPATCH_GRANULARITY@@/$(sed_escape "$GRANULARITY")/g" \
+        -e "s/@@DISPATCH_BACKEND@@/$(sed_escape "$BACKEND")/g" \
+        -e "s/@@DISPATCH_MODEL@@/$(sed_escape "$MODEL")/g" \
+        -e "s/@@DISPATCH_EFFORT@@/$(sed_escape "$EFFORT")/g" \
+        -e "s/@@DISPATCH_FALLBACK@@/$(sed_escape "$MODEL_FALLBACK")/g" \
         "$TEMPLATE_CONTENT_PATH" > "$PREFS_DEST"
 
     # Record in manifest (avoid duplicate entries if re-running `make configure`).

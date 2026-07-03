@@ -1,7 +1,8 @@
-CLAUDE_DIR := $(HOME)/.claude
+CLAUDE_DIR ?= $(HOME)/.claude
 RULES_DIR  := $(CLAUDE_DIR)/rules
 SKILLS_DIR := $(CLAUDE_DIR)/skills
-BIN_DIR    := $(HOME)/.local/bin
+BIN_DIR    ?= $(HOME)/.local/bin
+SKIP_MCP   ?= 0
 MANIFEST   := $(CLAUDE_DIR)/.claude-agent-kit-manifest
 SIGNATURE        := claude-agent-kit
 CUSTOM_SIGNATURE := claude-agent-kit-custom
@@ -15,10 +16,10 @@ CONFIGURE_ASIDE    := scripts/configure-aside.sh
 CONFIGURE_DISPATCH := scripts/configure-dispatch.sh
 CAK_COMMON         := scripts/cak-common.sh
 
-.PHONY: install uninstall build configure
+.PHONY: install uninstall build configure install-mcp
 
 build:
-	cargo build --release -p workslate -p aside -p dispatch
+	cargo build --release -p workslate
 
 install: build
 	@mkdir -p $(RULES_DIR) $(BIN_DIR) $(SKILLS_DIR)
@@ -38,9 +39,9 @@ install: build
 		cp -R "$$d" "$$dest"; \
 		echo $$dest >> $(MANIFEST); \
 	done
-	@# Install binaries
-	@for bin in workslate aside dispatch; do \
-		cp target/release/$$bin $(BIN_DIR)/$$bin; \
+	@# Install the workslate binary (aside/dispatch are shared — see install-mcp)
+	@for bin in workslate; do \
+		cp target/release/$$bin $(BIN_DIR)/$$bin.tmp.$$$$ && mv -f $(BIN_DIR)/$$bin.tmp.$$$$ $(BIN_DIR)/$$bin || cp target/release/$$bin $(BIN_DIR)/$$bin; \
 		if [ "$$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then \
 			codesign --force --sign - $(BIN_DIR)/$$bin 2>/dev/null && \
 				echo "  Code signed (ad-hoc): $$bin." || true; \
@@ -49,20 +50,18 @@ install: build
 	done
 	@# Register PreToolUse doorbell hooks in settings.json
 	@$(BIN_DIR)/workslate --install-hooks || echo "  Hook registration failed. Run manually: $(BIN_DIR)/workslate --install-hooks"
-	@# Register both MCP servers
+	@# Register the workslate MCP server (Claude-only)
 	@if command -v claude >/dev/null 2>&1; then \
-		for srv in workslate aside dispatch; do \
-			echo "Registering $$srv MCP server..."; \
-			claude mcp add $$srv -s user --transport stdio -- $$srv 2>/dev/null && \
-				echo "  $$srv registered." || \
-				echo "  $$srv registration failed. Run manually: claude mcp add $$srv -s user --transport stdio -- $$srv"; \
-		done; \
+		echo "Registering workslate MCP server..."; \
+		claude mcp add workslate -s user --transport stdio -- workslate 2>/dev/null && \
+			echo "  workslate registered." || \
+			echo "  workslate registration failed. Run manually: claude mcp add workslate -s user --transport stdio -- workslate"; \
 	else \
-		echo "Claude Code CLI not found. Register MCP servers manually:"; \
+		echo "Claude Code CLI not found. Register manually:"; \
 		echo "  claude mcp add workslate -s user --transport stdio -- workslate"; \
-		echo "  claude mcp add aside -s user --transport stdio -- aside"; \
-		echo "  claude mcp add dispatch -s user --transport stdio -- dispatch"; \
 	fi
+	@# Build + register the SHARED aside/dispatch servers from slate-agent-kit
+	@$(MAKE) --no-print-directory install-mcp
 	@# Interactive aside configuration
 	@CLAUDE_DIR=$(CLAUDE_DIR) RULES_DIR=$(RULES_DIR) MANIFEST=$(MANIFEST) \
 		TEMPLATE_SRC=$(PREFS_TEMPLATE) \
@@ -77,6 +76,23 @@ install: build
 	@echo ""
 	@echo "Installed to $(CLAUDE_DIR) and $(BIN_DIR)/{workslate,aside,dispatch}"
 	@echo "Manifest: $(MANIFEST)"
+
+install-mcp:
+	@if [ "$(SKIP_MCP)" = "1" ]; then \
+		echo "Skipping shared aside/dispatch registration because SKIP_MCP=1."; \
+	else \
+		slate_dir=""; \
+		if [ -n "$${SLATE_AGENT_KIT_DIR:-}" ] && [ -x "$${SLATE_AGENT_KIT_DIR}/tooling/install-mcp.sh" ]; then slate_dir="$$SLATE_AGENT_KIT_DIR"; fi; \
+		if [ -z "$$slate_dir" ] && [ -x "../slate-agent-kit/tooling/install-mcp.sh" ]; then slate_dir="../slate-agent-kit"; fi; \
+		if [ -z "$$slate_dir" ] && [ -x "../../tooling/install-mcp.sh" ]; then slate_dir="../.."; fi; \
+		if [ -z "$$slate_dir" ]; then \
+			echo "slate-agent-kit not found — aside/dispatch (shared crates) were NOT installed."; \
+			echo "Set SLATE_AGENT_KIT_DIR to a slate checkout and run 'make install-mcp',"; \
+			echo "or run slate's tooling/install-mcp.sh --configure-claude directly."; \
+			exit 1; \
+		fi; \
+		BIN_DIR="$(BIN_DIR)" CLAUDE_DIR="$(CLAUDE_DIR)" "$$slate_dir/tooling/install-mcp.sh" --configure-claude; \
+	fi
 
 configure:
 	@mkdir -p $(RULES_DIR)
@@ -108,7 +124,7 @@ uninstall:
 					first="$$(head -1 "$$f" 2>/dev/null || true)"; \
 					if printf '%s' "$$first" | grep -Fq "<!-- $(CUSTOM_SIGNATURE)"; then \
 						custom_list="$$custom_list$$f\n"; \
-					elif printf '%s' "$$first" | grep -Fq "<!-- $(SIGNATURE) -->"; then \
+					elif printf '%s' "$$first" | grep -Eq "<!-- (slate-agent-kit:common|$(SIGNATURE)) -->"; then \
 						rm -f "$$f"; \
 						echo "  removed $$f"; \
 					else \
@@ -153,7 +169,7 @@ uninstall:
 	fi
 	@# Remove palette skill directories recorded in the manifest (core-signed only)
 	@grep -E '/skills/palette-' $(MANIFEST) 2>/dev/null | while IFS= read -r d; do \
-		if [ -d "$$d" ] && [ -f "$$d/SKILL.md" ] && grep -Fq "<!-- $(SIGNATURE) -->" "$$d/SKILL.md"; then \
+		if [ -d "$$d" ] && [ -f "$$d/SKILL.md" ] && grep -Eq "<!-- (slate-agent-kit:common|$(SIGNATURE)) -->" "$$d/SKILL.md"; then \
 			rm -rf "$$d" && echo "  removed $$d"; \
 		elif [ -e "$$d" ]; then \
 			echo "  skipped $$d (signature mismatch)"; \
@@ -165,4 +181,5 @@ uninstall:
 			claude mcp remove $$srv -s user 2>/dev/null && echo "  $$srv unregistered." || true; \
 		done; \
 	fi
+	@echo "Note: the shared aside/dispatch binaries in $(BIN_DIR) are slate-owned; remove them via slate's tooling if desired."
 	@echo "Uninstalled"

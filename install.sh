@@ -168,10 +168,9 @@ detect_platform
 mkdir -p "$RULES_DIR" "$BIN_DIR"
 : > "$MANIFEST"
 
-# Binaries from latest GitHub Release
+# workslate binary from the latest GitHub Release (aside/dispatch are shared
+# slate-agent-kit crates — built and registered by install_shared_mcp below)
 install_binary workslate
-install_binary aside
-install_binary dispatch
 
 # Register PreToolUse doorbell hooks in settings.json
 "$BIN_DIR/workslate" --install-hooks || echo "  Hook registration failed. Run manually: $BIN_DIR/workslate --install-hooks"
@@ -198,7 +197,7 @@ done
 
 echo ""
 echo "Installed:"
-echo "  Binaries: $BIN_DIR/workslate, $BIN_DIR/aside, $BIN_DIR/dispatch"
+echo "  Binary:   $BIN_DIR/workslate (aside/dispatch installed via slate-agent-kit below)"
 echo "  Config:   $CLAUDE_DIR/CLAUDE.md"
 echo "  Rules:    $RULES_DIR/claude-agent-kit--*.md"
 echo "  Skills:   $SKILLS_DIR/palette-*"
@@ -227,20 +226,52 @@ case ":$PATH:" in
         echo "" ;;
 esac
 
-# Register MCP servers
+# Register the workslate MCP server (Claude-only)
 if command -v claude >/dev/null 2>&1; then
-    for srv in workslate aside dispatch; do
-        echo "Registering $srv MCP server..."
-        claude mcp add "$srv" -s user --transport stdio -- "$srv" 2>/dev/null && \
-            echo "  $srv registered." || \
-            echo "  $srv registration failed. Add manually: claude mcp add $srv -s user --transport stdio -- $srv"
-    done
+    echo "Registering workslate MCP server..."
+    claude mcp add workslate -s user --transport stdio -- workslate 2>/dev/null && \
+        echo "  workslate registered." || \
+        echo "  workslate registration failed. Add manually: claude mcp add workslate -s user --transport stdio -- workslate"
 else
-    echo "Claude Code CLI not found. Register MCP servers manually:"
+    echo "Claude Code CLI not found. Register manually:"
     echo "  claude mcp add workslate -s user --transport stdio -- workslate"
-    echo "  claude mcp add aside -s user --transport stdio -- aside"
-    echo "  claude mcp add dispatch -s user --transport stdio -- dispatch"
 fi
+
+# Build + register the SHARED aside/dispatch servers from slate-agent-kit
+find_slate_dir() {
+    if [ -n "${SLATE_AGENT_KIT_DIR:-}" ] && [ -x "$SLATE_AGENT_KIT_DIR/tooling/install-mcp.sh" ]; then
+        printf '%s' "$SLATE_AGENT_KIT_DIR"
+        return 0
+    fi
+    for candidate in "../slate-agent-kit" "../.."; do
+        if [ -x "$candidate/tooling/install-mcp.sh" ]; then
+            (CDPATH= cd -- "$candidate" && pwd)
+            return 0
+        fi
+    done
+    return 1
+}
+
+install_shared_mcp() {
+    if [ "${SKIP_MCP:-0}" = "1" ]; then
+        echo "Skipping shared aside/dispatch installation because SKIP_MCP=1."
+        return 0
+    fi
+    if slate_dir="$(find_slate_dir 2>/dev/null)"; then
+        BIN_DIR="$BIN_DIR" CLAUDE_DIR="$CLAUDE_DIR" "$slate_dir/tooling/install-mcp.sh" --configure-claude
+        return 0
+    fi
+    command -v git >/dev/null 2>&1 || {
+        echo "Error: git is required to fetch slate-agent-kit for aside/dispatch. Re-run with SKIP_MCP=1 to install workslate + rules only." >&2
+        exit 1
+    }
+    slate_tmp=$(mktemp -d)
+    git clone --depth=1 --branch "${SLATE_BRANCH:-main}" "https://github.com/${SLATE_REPO:-saltyming/slate-agent-kit}.git" "$slate_tmp/slate-agent-kit"
+    BIN_DIR="$BIN_DIR" CLAUDE_DIR="$CLAUDE_DIR" "$slate_tmp/slate-agent-kit/tooling/install-mcp.sh" --configure-claude
+    rm -rf "$slate_tmp"
+}
+
+install_shared_mcp
 
 # Interactive aside + dispatch configuration (shared helpers in cak-common.sh)
 echo ""

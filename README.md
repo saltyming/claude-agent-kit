@@ -1,6 +1,6 @@
 # Claude Agent Kit
 
-A battle-tested `CLAUDE.md` for Claude Code, plus three custom MCP servers — `workslate` (SQLite-backed task tracking + cross-agent messaging), `aside` (cross-family second opinions, wrapping the OpenAI codex and GitHub copilot CLIs so Claude can consult another model family mid-session), and `dispatch` (asynchronous hierarchical delegation — handing an execution step to an external coding agent like codex, running write-capable in a target directory). It also ships **palette** — a rules-plus-skills *product-intent outer loop* that wraps the per-task workflow with a durable, cross-session backlog and a slice → build → review cadence (opt in per project via the `palette-init` skill).
+A battle-tested `CLAUDE.md` for Claude Code, plus the `workslate` MCP server (SQLite-backed task tracking + cross-agent messaging, Claude-only) and the two **shared** Slate MCP servers — `aside` (cross-family second opinions) and `dispatch` (asynchronous hierarchical delegation to codex / opencode / claude backends) — whose source lives in [`slate-agent-kit`](https://github.com/saltyming/slate-agent-kit)`/shared/mcp-servers` and is built + registered from there. It also ships **palette** — a rules-plus-skills *product-intent outer loop* that wraps the per-task workflow with a durable, cross-session backlog and a slice → build → review cadence (opt in per project via the `palette-init` skill).
 
 > **Honest caveat.** These rules reduce common failure modes but don't eliminate them — treat the kit as a strong prior, not a guarantee. Two patterns still recur and need manual correction: **silent scope reduction** (splitting or deferring requested work despite the `[OVERRIDE]`s) and **skipping the aside pairing** (calling `advisor()` without the paired aside call under `policy: proactive`). Review completion reports critically and name the miss when you see it.
 
@@ -79,7 +79,7 @@ irm https://raw.githubusercontent.com/saltyming/claude-agent-kit/main/install.ps
 irm https://raw.githubusercontent.com/saltyming/claude-agent-kit/main/install.ps1 -OutFile install.ps1; .\install.ps1 -Uninstall
 ```
 
-The installer pulls the pre-built `workslate` / `aside` / `dispatch` binaries from GitHub Releases (no Rust needed), installs `CLAUDE.md` + rule files, registers the MCP servers and workslate's doorbell hooks with Claude Code, re-signs binaries on macOS (so endpoint security like Kaspersky doesn't block them), then runs interactive `aside` and `dispatch` config. All prompts accept ENTER for the default; `ASIDE_*` and `DISPATCH_*` env vars skip them for CI.
+The installer pulls the pre-built `workslate` binary from GitHub Releases, builds + registers the shared `aside` / `dispatch` from a slate-agent-kit checkout (`SLATE_AGENT_KIT_DIR`, a sibling `../slate-agent-kit`, or a shallow clone — needs Rust; `SKIP_MCP=1` skips), installs `CLAUDE.md` + rule files, registers the MCP servers and workslate's doorbell hooks with Claude Code, re-signs binaries on macOS (so endpoint security like Kaspersky doesn't block them), then runs interactive `aside` and `dispatch` config. All prompts accept ENTER for the default; `ASIDE_*` and `DISPATCH_*` env vars skip them for CI.
 
 **From source** (requires Rust):
 
@@ -96,8 +96,10 @@ Uninstall branches on a first-line signature: `<!-- claude-agent-kit -->` files 
 
 ```bash
 cp CLAUDE.md ~/.claude/CLAUDE.md && mkdir -p ~/.claude/rules && cp claude-rules/*.md ~/.claude/rules/
-cargo build --release -p workslate -p aside -p dispatch && cp target/release/workslate target/release/aside target/release/dispatch ~/.local/bin/
-codesign --force --sign - ~/.local/bin/workslate ~/.local/bin/aside ~/.local/bin/dispatch   # macOS only
+cargo build --release -p workslate && cp target/release/workslate ~/.local/bin/
+codesign --force --sign - ~/.local/bin/workslate   # macOS only
+# shared aside/dispatch come from a slate-agent-kit checkout:
+#   <slate>/tooling/install-mcp.sh --configure-claude
 claude mcp add workslate -s user --transport stdio -- workslate
 claude mcp add aside     -s user --transport stdio -- aside
 claude mcp add dispatch  -s user --transport stdio -- dispatch

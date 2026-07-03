@@ -57,19 +57,17 @@ jobs:
 
       - name: Build (Linux via zigbuild)
         if: runner.os == 'Linux'
-        run: cargo zigbuild --release --target ${{ matrix.target }} -p workslate -p aside -p dispatch
+        run: cargo zigbuild --release --target ${{ matrix.target }} -p workslate
 
       - name: Build (macOS / Windows)
         if: runner.os != 'Linux'
-        run: cargo build --release --target ${{ matrix.target }} -p workslate -p aside -p dispatch
+        run: cargo build --release --target ${{ matrix.target }} -p workslate
 
       - name: Package (unix)
         if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
           tar czf ../../../workslate-${{ matrix.platform }}.tar.gz workslate
-          tar czf ../../../aside-${{ matrix.platform }}.tar.gz aside
-          tar czf ../../../dispatch-${{ matrix.platform }}.tar.gz dispatch
           cd ../../..
 
       - name: Package (windows)
@@ -77,8 +75,6 @@ jobs:
         shell: pwsh
         run: |
           Compress-Archive -Path "target/${{ matrix.target }}/release/workslate.exe" -DestinationPath "workslate-${{ matrix.platform }}.zip"
-          Compress-Archive -Path "target/${{ matrix.target }}/release/aside.exe" -DestinationPath "aside-${{ matrix.platform }}.zip"
-          Compress-Archive -Path "target/${{ matrix.target }}/release/dispatch.exe" -DestinationPath "dispatch-${{ matrix.platform }}.zip"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -86,10 +82,6 @@ jobs:
           path: |
             workslate-${{ matrix.platform }}.tar.gz
             workslate-${{ matrix.platform }}.zip
-            aside-${{ matrix.platform }}.tar.gz
-            aside-${{ matrix.platform }}.zip
-            dispatch-${{ matrix.platform }}.tar.gz
-            dispatch-${{ matrix.platform }}.zip
           if-no-files-found: ignore
 
   release:
