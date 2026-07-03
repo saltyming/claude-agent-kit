@@ -236,11 +236,12 @@ impl Workslate {
             Err(e) => return Ok(e),
         };
 
-        let (cur_status, cur_desc, cur_owner): (String, Option<String>, Option<String>) = match conn.query_row(
-            "SELECT status, description, owner FROM tasks WHERE session = ? AND namespace = ? AND id = ?",
-            rusqlite::params![session, tid.namespace.as_str(), tid.id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        ) {
+        let (cur_status, cur_desc, cur_owner): (String, Option<String>, Option<String>) = match conn
+            .query_row(
+                "SELECT status, description, owner FROM tasks WHERE session = ? AND namespace = ? AND id = ?",
+                rusqlite::params![session, tid.namespace.as_str(), tid.id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ) {
             Ok(vals) => vals,
             Err(rusqlite::Error::QueryReturnedNoRows) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -261,9 +262,18 @@ impl Workslate {
         };
 
         conn.execute(
-            "UPDATE tasks SET status = ?, description = ?, owner = ?, updated_at = datetime('now') WHERE session = ? AND namespace = ? AND id = ?",
-            rusqlite::params![new_status, new_desc, new_owner, session, tid.namespace.as_str(), tid.id],
-        ).map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+            "UPDATE tasks SET status = ?, description = ?, owner = ?, updated_at = datetime('now') \
+             WHERE session = ? AND namespace = ? AND id = ?",
+            rusqlite::params![
+                new_status,
+                new_desc,
+                new_owner,
+                session,
+                tid.namespace.as_str(),
+                tid.id
+            ],
+        )
+        .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
         if let Err(e) = recompute_blocked_status(&conn, &session) {
             tracing::warn!("Failed to recompute blocked status: {}", e);

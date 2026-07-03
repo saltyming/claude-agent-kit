@@ -65,6 +65,7 @@ If both surfaces exist, both run by default on these triggers, unless the user e
 - Otherwise, read the default from `claude-agent-kit--aside-prefs.md` for that backend and pass it as `model`.
 - If neither is set, omit `model` so the CLI uses its own default.
 - Same flow for `reasoning_effort` (both codex and copilot accept it).
+- If the user named a fallback chain this turn, or `claude-agent-kit--aside-prefs.md` sets a default model fallback chain for the backend in play (a comma-separated list), split it on commas, trim whitespace, and pass it as `model_fallback`. A transient failure (rate limit, quota, model unavailable, auth/permission) automatically retries against the next entry; the response notes when a fallback model answered instead of the first one tried.
 
 ## Backend capabilities
 
@@ -142,6 +143,7 @@ Example — **good** (off-disk data, exception 2):
 
 Every aside call consumes the user's third-party API quota. Rules:
 - Single question per call. No loops. No duplicate calls for the same question.
+- **A `model_fallback` retry is not the loop this rule forbids.** When `model_fallback` is set — via the tool param or a default configured in `claude-agent-kit--aside-prefs.md` — a same-question retry against the next model in that chain, fired automatically by the aside server itself because the prior model failed with a transient backend error (rate limit, quota, model unavailable, auth/permission), is one logical call that happens to make more than one subprocess attempt under the hood — not a second question, and not a speculative duplicate call. "No loops. No duplicate calls for the same question" targets *you* re-asking the same or a rephrased question out of hedging or uncertainty; it does not forbid the server's own internal retry for the SAME question when the prior model could not answer at all. Do not manually re-invoke `aside_codex` / `aside_copilot` yourself to simulate this — configure `model_fallback` (or the prefs default) once and let the server's retry handle it. A manual re-call for the same question after a failure IS the loop this rule forbids; configuring `model_fallback` up front is not.
 - Consolidate multiple questions into one prompt when they share context.
 - **A call fired by a `proactive` trigger in the user's prefs is NOT speculative — it's required (unless the user explicitly scoped the work to one surface — Decision rule 6).** Budget expectation: ~1–2 such calls per advisor-paired decision or other triggered scope. "No speculative calls" applies to routine work outside the trigger list, not to the trigger-fired calls themselves.
 - In `conservative` / `preference-only` modes: if the user didn't ask for a cross-family opinion, don't volunteer one for routine work.

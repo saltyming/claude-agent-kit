@@ -56,7 +56,10 @@ CREATE TABLE IF NOT EXISTS dispatch_tasks (
     rollout_path     TEXT,
     parent_id        TEXT,
     nonce            TEXT,
-    rollout_start_line INTEGER
+    rollout_start_line INTEGER,
+    model_fallback   TEXT,
+    final_model      TEXT,
+    fallback_history TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_dispatch_plan_status ON dispatch_tasks(plan_id, status);
 CREATE INDEX IF NOT EXISTS idx_dispatch_dir_status  ON dispatch_tasks(working_dir, status);
@@ -69,7 +72,7 @@ CREATE TABLE IF NOT EXISTS dispatch_counters (
 const COLS: &str = "id, plan_id, backend, working_dir, title, spec_json, prompt, status, \
 model, reasoning_effort, sandbox, backend_version, argv, owner_pid, owner_instance, child_pid, \
 exit_code, result, error, created_at, started_at, finished_at, session_id, rollout_path, parent_id, \
-nonce, rollout_start_line";
+nonce, rollout_start_line, model_fallback, final_model, fallback_history";
 
 pub fn init(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(SCHEMA_SQL)?;
@@ -82,6 +85,9 @@ pub fn init(conn: &Connection) -> rusqlite::Result<()> {
         ("parent_id", "TEXT"),
         ("nonce", "TEXT"),
         ("rollout_start_line", "INTEGER"),
+        ("model_fallback", "TEXT"),
+        ("final_model", "TEXT"),
+        ("fallback_history", "TEXT"),
     ] {
         let _ = conn.execute(
             &format!("ALTER TABLE dispatch_tasks ADD COLUMN {col} {decl}"),
@@ -113,6 +119,10 @@ pub struct NewTask {
     /// For a steer/resume task: the rollout line count at resume time, so dispatch_logs
     /// can show only the new turn rather than the whole inherited parent session.
     pub rollout_start_line: Option<i64>,
+    /// Ordered fallback chain (JSON array of model strings), tried in order on a
+    /// transient backend error. None/empty for dispatch_steer follow-ups — a
+    /// resumed session stays on one model.
+    pub model_fallback: Option<String>,
 }
 
 /// A full row read back from the DB.
@@ -145,6 +155,15 @@ pub struct TaskRow {
     pub parent_id: Option<String>,
     pub nonce: Option<String>,
     pub rollout_start_line: Option<i64>,
+    /// Audit copy of the configured fallback chain (JSON array), set at submit time.
+    pub model_fallback: Option<String>,
+    /// The model that actually produced the terminal outcome — equal to `model`
+    /// unless a fallback retry occurred, in which case it's whichever chain entry
+    /// finally succeeded (or the last one tried, if the whole chain failed).
+    pub final_model: Option<String>,
+    /// JSON array of `{model, error_kind, detail}` for every fallback attempt that
+    /// was tried and discarded before `final_model`. Absent/null if no retry happened.
+    pub fallback_history: Option<String>,
 }
 
 fn row_from(r: &Row) -> rusqlite::Result<TaskRow> {
@@ -176,6 +195,9 @@ fn row_from(r: &Row) -> rusqlite::Result<TaskRow> {
         parent_id: r.get(24)?,
         nonce: r.get(25)?,
         rollout_start_line: r.get(26)?,
+        model_fallback: r.get(27)?,
+        final_model: r.get(28)?,
+        fallback_history: r.get(29)?,
     })
 }
 
@@ -201,6 +223,7 @@ impl TaskRow {
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "parent_id": self.parent_id,
+            "final_model": self.final_model,
         });
         if include_result {
             v["result"] = json!(self.result);
@@ -214,6 +237,42 @@ impl TaskRow {
             v["session_id"] = json!(self.session_id);
             v["rollout_path"] = json!(self.rollout_path);
             v["rollout_start_line"] = json!(self.rollout_start_line);
+            v["model_fallback"] = self
+                .model_fallback
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                .unwrap_or(Value::Null);
+            v["fallback_history"] = self
+                .fallback_history
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                .unwrap_or(Value::Null);
+            if let Some(hist_json) = &self.fallback_history
+                && let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(hist_json)
+                && !arr.is_empty()
+            {
+                let failed: Vec<String> = arr
+                    .iter()
+                    .map(|a| {
+                        format!(
+                            "{} ({})",
+                            a.get("model").and_then(Value::as_str).unwrap_or("?"),
+                            a.get("error_kind").and_then(Value::as_str).unwrap_or("?")
+                        )
+                    })
+                    .collect();
+                v["fallback_summary"] = json!(format!(
+                    "{} on attempt {} with model {} after {} failed",
+                    if self.status == STATUS_SUCCEEDED {
+                        "succeeded"
+                    } else {
+                        "finished"
+                    },
+                    arr.len() + 1,
+                    self.final_model.as_deref().unwrap_or("(unknown)"),
+                    failed.join(", "),
+                ));
+            }
         }
         v
     }
@@ -267,8 +326,8 @@ pub fn insert_queued(
         "INSERT INTO dispatch_tasks \
          (id, plan_id, backend, working_dir, title, spec_json, prompt, status, \
           model, reasoning_effort, sandbox, owner_pid, owner_instance, parent_id, \
-          nonce, rollout_start_line) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+          nonce, rollout_start_line, model_fallback) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         params![
             id,
             t.plan_id,
@@ -286,6 +345,7 @@ pub fn insert_queued(
             t.parent_id,
             t.nonce,
             t.rollout_start_line,
+            t.model_fallback,
         ],
     )?;
     tx.execute(
@@ -340,6 +400,25 @@ pub fn finish(
         "UPDATE dispatch_tasks SET status = ?1, exit_code = ?2, result = ?3, error = ?4, \
          finished_at = datetime('now') WHERE id = ?5",
         params![status, exit_code, result, error, id],
+    )?;
+    Ok(())
+}
+
+/// Record which model actually produced the terminal outcome plus the JSON
+/// history of any fallback attempts that were tried and discarded first.
+/// Called only when at least one retry happened — a narrow addition alongside
+/// `finish()` rather than a change to its signature, so existing call sites
+/// (the cancelled-before-start path, the single-attempt success/failure path)
+/// are untouched.
+pub fn set_fallback_result(
+    conn: &Connection,
+    id: &str,
+    final_model: Option<&str>,
+    fallback_history_json: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE dispatch_tasks SET final_model = ?1, fallback_history = ?2 WHERE id = ?3",
+        params![final_model, fallback_history_json, id],
     )?;
     Ok(())
 }
@@ -434,6 +513,7 @@ mod tests {
             parent_id: None,
             nonce: None,
             rollout_start_line: None,
+            model_fallback: None,
         }
     }
 

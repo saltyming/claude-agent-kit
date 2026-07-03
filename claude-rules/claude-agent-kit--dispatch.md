@@ -45,6 +45,8 @@ Read `claude-agent-kit--dispatch-prefs.md` before choosing dispatch. If the file
 
 Proactive dispatch is for execution, not judgment. Suitable triggers include isolated mechanical edits, long-running verification/fix loops, large but well-scoped repetitive sweeps, or independent plan steps with clear target files and acceptance criteria. Do not proactive-dispatch when the product scope is ambiguous, the expected edits overlap active local/user edits, the task needs tight interactive judgment, or the task cannot be written as one self-contained structured spec.
 
+**Optional addition, separate from the core fallback feature — evaluate independently:** when a `model_fallback` chain is configured, the risk that a proactive dispatch step is silently stranded by a transient backend hiccup (rate limit, quota, momentary model unavailability) is reduced — that class of failure now retries automatically instead of just landing as `failed`. This is a reliability improvement, not a judgment/quality one, so it justifies being somewhat less conservative about step size/duration for triggers already on the suitable list above (e.g. "large but well-scoped repetitive sweeps" can run longer before transient-failure risk alone would have argued for chunking it). It does NOT loosen any of the judgment-based exclusions above (ambiguous product scope, edits overlapping active local/user edits, tasks needing tight interactive judgment, work that isn't one self-contained structured spec) — a model-fallback chain does nothing to make a wrong-but-successful-looking answer less likely; it only makes a backend-availability hiccup less likely to waste the step.
+
 An explicit current-turn user instruction always wins: "use dispatch", "do not dispatch", "only do it yourself", or equivalent overrides the preference file for that turn.
 
 ## Approval gate (HARD RULE)
@@ -60,6 +62,8 @@ Read `claude-agent-kit--dispatch-prefs.md`:
 
 After the first-dispatch confirmation, follow the agreed granularity for the rest of the session. A genuinely new working_dir or a materially wider scope than agreed is a fresh confirmation.
 
+**Fallback retry is not a fresh-confirmation trigger.** When `model_fallback` is set — either passed to `dispatch_submit` directly, or applied from the default in `claude-agent-kit--dispatch-prefs.md` — an automatic retry of the SAME task against the next model in that chain, triggered by the dispatch server's own detection of a transient backend error (rate limit, quota exceeded, model unavailable, auth/permission), is not a new working_dir, not a materially wider scope, and not a new dispatch for purposes of this gate. It reuses the same task id and the same already-approved objective/working_dir/step scope; only the model changes, and the server does it automatically inside the executor's retry loop once the task is submitted. Do not re-run the approval-gate confirmation for it, and do not ask the user's permission before each fallback attempt.
+
 **[OVERRIDE] precedence.** CLAUDE.md `[OVERRIDE]` directives outrank this approval gate. For example, completing the full approved scope of a delegated task is governed by the scope-integrity overrides; do not treat confirmation friction as a reason to deliver less. The gate is about *getting initial authorization to delegate*, not about second-guessing work the user already approved. A delegated dispatch step inherits the same scope-integrity rules as any delegated child — finish the approved scope, no silent reduction, and stop-and-ask on a forced deviation (`claude-agent-kit--task-execution.md`; the delegated-children rule in `claude-agent-kit--parallel-work.md` > *Delegation*).
 
 ## Writing the task
@@ -73,10 +77,15 @@ After the first-dispatch confirmation, follow the agreed granularity for the res
 - `context` / `details` — free-form background and extra instructions.
 - `plan_id` — group a plan's steps so they list / cancel as a unit.
 - `backend` / `model` / `reasoning_effort` / `sandbox` — execution knobs (defaults from prefs). OpenCode models are `provider/model`; `reasoning_effort` maps to OpenCode `variant`.
+- `model_fallback` — optional ordered list of fallback models, tried in order only on a transient backend error (rate limit, quota, model unavailable, auth/permission); a non-transient failure is never retried. If omitted and `claude-agent-kit--dispatch-prefs.md` sets a default (a comma-separated list), split it on commas, trim whitespace, and pass it as this array. `dispatch_status` reports which model actually produced the result (`final_model`) and which earlier models were tried and discarded (`fallback_history`) when a retry occurred. Not honored by `dispatch_steer` — a steered/resumed session stays on one model.
 
 Frame one self-contained step per dispatch. A step that depends on another's output should wait for that one to reach `succeeded` (poll, then submit the next) — dispatch does not sequence steps for you.
 
 **palette note.** If the step implements a palette story, its `objective` / `acceptance` come from that story's *approved* acceptance criteria (post-approval), not from the raw `story-*.rst` file. The backlog proposes, approval authorizes, and the dispatch spec carries the authorized scope. See `claude-agent-kit--palette.md`.
+
+## Model fallback and partial state
+
+A `model_fallback` retry re-sends the SAME prompt to a fresh backend invocation in the SAME `working_dir` — it does not reset or stash any files the failed attempt already wrote. This matters only for write-capable runs (dispatch, not aside): a model-unavailable / quota / auth failure typically fires before the backend makes any edits (it fails at the first model call), so the common case starts the next attempt on a clean tree; a rate limit is the one failure class that can plausibly fire mid-run, after some edits already landed. dispatch does not attempt any git-stash/reset cleanup between attempts — it would be destructive and dispatch explicitly supports non-git working directories. Favor convergent, self-contained objectives (the existing "Frame one self-contained step per dispatch" guidance) when configuring a fallback chain, since those are the objectives a re-run backend agent can safely continue or redo from partial state.
 
 ## Server-enforced guards (what will be rejected)
 

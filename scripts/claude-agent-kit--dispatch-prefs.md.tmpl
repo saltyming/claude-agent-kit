@@ -41,6 +41,25 @@ Passed to `dispatch_submit` when you have not named them for the turn. Blank = t
 - default model: **{{MODEL}}**
 - default reasoning effort: **{{EFFORT}}**   (low / medium / high / xhigh, or blank; OpenCode maps this to variant)
 
+## Default model fallback chain
+
+Passed to `dispatch_submit` as `model_fallback` when you have not named a chain for
+the turn. A transient backend failure (rate limit, quota exceeded, model
+unavailable) automatically retries the SAME task against the next model in this
+list, in order; a non-transient failure (bad prompt, sandbox violation,
+auth/permission) is never retried, since it would fail identically on any model.
+Total attempts = 1 (the default model above) + this list's length — no separate
+retry-count knob. Keep this short (2-4 entries) since each retried attempt has no
+wall-clock timeout of its own.
+
+- default model fallback: **{{MODEL_FALLBACK}}**   (comma-separated model ids, e.g. `gpt-5.4-mini, gpt-5.3`; blank = no fallback, today's behavior)
+
+Caveat for write-capable dispatch runs: a retry re-sends the SAME objective to a
+fresh backend invocation in the SAME `working_dir`, which may already contain
+partial edits from a failed attempt (most likely when a rate limit fires mid-run;
+model-unavailable / auth / quota failures typically fail before any edits land).
+Prefer convergent, self-contained objectives when configuring a fallback chain.
+
 ## Server-enforced boundaries (informational — NOT set here)
 
 These are real invariants the dispatch server enforces; editing this file does **not** change them:

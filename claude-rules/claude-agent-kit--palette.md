@@ -44,10 +44,10 @@ palette invents no new deviation vocabulary. Once a story has passed the hand-of
 When engaged (`_palette/` present):
 
 1. **Backlog** (`_palette/backlog.rst`) — a single durable file: the cross-session ledger of product intent (durable product principles + items, each with `:Type:` / `:Source:` / `:Status:`). Advisory (Tier A).
-2. **Slice → phase** — with the user, cut the next thin increment from the backlog into a phase (`_palette/phase-<N>/phase-brief.rst`, with entry/exit criteria). This is the user-owned scope decision the framework already mandates.
-3. **Stories** — decompose the phase into implementable stories with acceptance criteria (`_palette/phase-<N>/stories/story-<n>-<slug>.rst` + `index.rst`). Advisory.
+2. **Slice → phase** — with the user, cut the next thin increment from the backlog into a phase (`_palette/phase-<N>/phase-brief.rst`, with entry/exit criteria); rank candidates first with the next-slice rubric (Scoring rubrics, below). This is the user-owned scope decision the framework already mandates.
+3. **Stories** — decompose the phase into implementable stories with acceptance criteria (`_palette/phase-<N>/stories/story-<n>-<slug>.rst` + `index.rst`); use the story-boundary rubric (below) to recommend where one story ends and the next begins. Advisory.
 4. **Hand off** — at the existing "Get approval" gate. A pending story's acceptance criteria feed the normal inner loop (Understand → Plan → Execute + workslate/dispatch). **Nothing is edited before this gate** — it is the Tier A → Tier B transition.
-5. **Review + re-plan** — when a story/phase completes, step back: what shipped, what was learned, what surfaced. Record it (`_palette/reviews.rst` at phase close) and triage new/deferred items into the backlog **with explicit user consent**. Then slice the next increment.
+5. **Review + re-plan** — when a story/phase completes, step back: what shipped, what was learned, what surfaced. Record it (`_palette/reviews.rst` at phase close) and triage new/deferred items into the backlog **with explicit user consent**, scoring each with the review-triage rubric (below) first. Then slice the next increment.
 
 ### The combined loop — how it sits on the inner loop
 
@@ -93,6 +93,132 @@ palette artifacts are **structured text the agent reads back**, not documents re
 - Section titles underlined with `=` (H1), `-` (H2), `~` (H3); make the underline at least as long as the title.
 - **Do not** use `.. list-table::`, grid/simple tables, or any nested directive — these are the constructs models most often break.
 
+## Scoring rubrics — slice, story-boundary, triage
+
+Three loop decisions are currently free-form judgment calls: which backlog
+item(s) to slice next (step 2), whether a chunk of phase work deserves its own
+story (step 3), and what priority signal a newly-triaged item carries into the
+backlog (step 5). The rubrics below turn each into an explicit, reviewable
+heuristic the model applies by hand from what a backlog item, phase brief, or
+story draft already contains — no new tooling, no data that doesn't exist, and
+no claim of true determinism (the axes are estimated from prose, not measured;
+the value is a named, arguable basis for the ranking, not a repeatable
+computation). They **rank and surface; they never decide.** Every output is a
+recommendation the user can override, and none of them moves a `:Status:`
+field — that stays gated on user approval exactly as the loop already
+requires. Because the RST house style above forbids tables, every rubric's
+output collapses to a single value — a tier spoken in conversation, or (for
+(c) only) a `:Priority-signal:` field — never a matrix; the weights and
+formula live here, in prose, as instructions the model re-applies each time,
+not as a cached score.
+
+Score each axis `1` (low) / `2` (medium) / `3` (high) from the item's title,
+`:Type:`, `:Source:`, and body prose — the same read-and-estimate the model
+already does, made explicit and weighted.
+
+### (a) Next-slice ranking — which backlog item(s) to recommend for the next phase
+
+Apply only to items with `:Status: backlog` (skip `in-phase-<N>` and `resolved`).
+Before scoring, screen for two carve-outs a numeric score would misrank:
+
+- **Blocked** — the body names an external dependency the developer cannot
+  presently resolve (no test environment, "deferred to CI", waiting on a third
+  party). Do not score it — a high-impact blocked item would otherwise still
+  post a deceptively high composite. Surface it as *blocked — not a candidate
+  until unblocked*.
+- **Decision-gate** — the body is a yes/no or risk-acceptance question ("decide
+  whether…", "accept or mitigate…") rather than buildable work. Do not score it
+  — `:Type: tech-debt` alone is too broad to catch this. Surface it as *needs a
+  user decision before it can become a slice*.
+
+Score everything else on four axes:
+
+- **Impact** (×3) — how much shipping this improves the product, developer
+  trust, or reduces live risk. If the item carries a `:Priority-signal:` from a
+  prior review-triage, use it only as a starting anchor, then adjust from the
+  item's own prose — this axis never writes back to that field.
+- **Thin-slice fit** (×2) — how small and self-contained the work reads; `3` for
+  a single well-scoped change, `1` for open-ended or multi-area work. Inverted
+  on purpose — palette already favors thin slices.
+- **Readiness & leverage** (×2) — is it fully specified and ready to scope now,
+  and does shipping it unblock or de-risk other backlog items.
+- **Recurrence** (×1) — score `2`/`3` only when the body or title contains an
+  explicit resurfacing cue ("again", "still", "outstanding", a second item
+  referencing the same fix) — this axis has no date field to read and does not
+  estimate age from silence; default `1`.
+
+`Score = Impact×3 + Thin-slice fit×2 + Readiness & leverage×2 + Recurrence×1`
+(range 8–24).
+
+- `17–24` → **strong next-slice candidate**
+- `11–16` → **candidate**
+- `8–10` → **not yet**
+
+Recommend the highest-scoring item(s) to the user as the next slice; this
+ranking is conversational and ephemeral — it is never written back into
+`backlog.rst`.
+
+### (b) Story-boundary — own story or fold into a sibling
+
+Applies only while drafting stories in loop step 3, before the hand-off gate.
+Once a story is approved at hand-off, its `Done when` / `Not this story` are the
+approved spec under the Forced Spec/Plan Deviation rule — do not re-run this
+rubric to re-litigate an approved story's boundary.
+
+If a candidate chunk is itself an unresolved decision ("pick a library before
+this can be scoped") rather than buildable work, it isn't ready to become a
+story yet — route it back to the backlog or a spec pull-helper; do not score it.
+
+Score everything else on four axes:
+
+- **Independent verifiability** (×3) — can its `Done when` be checked by a
+  non-developer without any sibling chunk also being done.
+- **Distinct footprint** (×2) — does it touch files/components no sibling chunk
+  touches.
+- **AC substance** (×2) — does it carry at least two meaningful `Done when`
+  criteria of its own, not one trivial line.
+- **Sequencing constraint** (×1) — does it have a hard build-order relationship
+  to siblings that a merged story would obscure.
+
+`Score = Independent verifiability×3 + Distinct footprint×2 + AC substance×2 +
+Sequencing constraint×1` (range 8–24).
+
+- `17–24` → recommend its own `story-<n>-<slug>.rst`
+- `11–16` → borderline — recommend folding into the closest sibling story,
+  noting why in that story's body
+- `8–10` → recommend folding into a sibling story
+
+If a single chunk's own `Done when` list runs past ~5 distinct criteria, treat
+it as two candidate chunks and score each separately rather than recommending
+one oversized story.
+
+### (c) Review-triage priority — what signal a new/deferred item carries into the backlog
+
+Applies at loop step 5, when a review surfaces a new or deferred item, before it
+is written into `backlog.rst` with user consent. Reuses the blocked /
+decision-gate carve-outs from (a) — if either applies, write that label
+directly into `:Priority-signal:` instead of scoring.
+
+Score everything else on four axes:
+
+- **Impact if unresolved** (×3) — how much leaving this unaddressed hurts
+  correctness, trust, or safety versus being cosmetic.
+- **Blocks current commitments** (×2) — does it put at risk the exit criteria
+  of the phase that's closing, or a story/phase already in flight.
+- **Recurrence** (×2) — is this the first time this class of issue has
+  surfaced, or has something like it come up before. Weighted higher than in
+  (a) — noticing a repeating problem is what review triage is for.
+- **Cost-to-fix** (×1, inverted) — `3` if it reads as cheap to eventually
+  resolve, `1` if it reads as open-ended.
+
+`Score = Impact×3 + Blocks current commitments×2 + Recurrence×2 + Cost-to-fix×1`
+(range 8–24), same bands as (a): `17–24 high`, `11–16 medium`, `8–10 low`.
+
+Write the resulting label into the new item's `:Priority-signal:` field as it
+enters the backlog — Tier-A bookkeeping, like recording a story `done` in
+`index.rst`, never a `:Status:` promotion. This rubric is the only one that
+writes `:Priority-signal:`; refresh it here at each later review, not from (a).
+
 ## Artifact schemas
 
 All schemas use the robust subset above. `<...>` / `[...]` are fill-ins; size each title underline to the real title.
@@ -113,14 +239,16 @@ Items
 
 Each item uses the shape below. Do not group items into phase sections and do not
 use checkboxes here. An item's :Status: moves to ``in-phase-<N>`` only after the
-user approves that phase's scope.
+user approves that phase's scope. ``:Priority-signal:`` is optional, set only by
+review-triage; it is Tier-A bookkeeping and never moves :Status: on its own.
 
 <Short title>
 ~~~~~~~~~~~~~
 
-:Type: bug | refinement | feature | tech-debt | test | spec-gap | rule-gap
+:Type: bug | refinement | feature | tech-debt | test | spec-gap | rule-gap | chore
 :Source: Phase <N> | User idea | Review triage
 :Status: backlog | in-phase-<N> | resolved
+:Priority-signal: high | medium | low | blocked | decision-gate
 
 <What it is; why it matters — one or two lines.>
 ```

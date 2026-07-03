@@ -67,6 +67,16 @@ pub struct SubmitParams {
     /// concurrent run against the same directory). Default false.
     #[serde(default, deserialize_with = "lenient_opt_bool")]
     pub allow_concurrent: Option<bool>,
+
+    /// Optional ordered fallback chain: if `model` (or the backend default) fails
+    /// with a transient backend error (rate limit, quota exceeded, model
+    /// unavailable), the server automatically retries the SAME task against the
+    /// next model here, in order, until one succeeds or the chain is exhausted. A
+    /// non-transient failure (bad prompt, sandbox violation, auth/permission) is
+    /// never retried. Total attempts = 1 + this list's length. Not honored by
+    /// dispatch_steer — a resumed session stays on one model.
+    #[serde(default, deserialize_with = "lenient_opt_vec_string")]
+    pub model_fallback: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Default)]

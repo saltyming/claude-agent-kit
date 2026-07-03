@@ -1,4 +1,5 @@
 mod backend;
+mod errkind;
 mod lenient;
 mod params;
 mod transcript;
@@ -78,7 +79,7 @@ impl Aside {
     }
 
     #[tool(
-        description = "Ask OpenAI's codex CLI for a second opinion. include_transcript defaults to true — the current Claude conversation is forwarded automatically, but in REDACTED form (text blocks pass through; tool_use / tool_result / thinking blocks become placeholders). codex runs in `-s read-only` sandbox: it CAN read files and grep the workspace itself, but cannot write or exec shells. **Prefer passing file paths in `question` / `context` and let codex read them** (this is cheaper and avoids the transcript's 100 KB cap); embed an excerpt only when you want to focus codex on a specific line range OR when the data is transient tool output (command stdout, API response) that isn't on disk. Pass include_transcript=false for decontextualised questions. See claude-agent-kit--aside.md 'Transcript redaction' section. Costs third-party API quota."
+        description = "Ask OpenAI's codex CLI for a second opinion. include_transcript defaults to true — the current Claude conversation is forwarded automatically, but in REDACTED form (text blocks pass through; tool_use / tool_result / thinking blocks become placeholders). codex runs in `-s read-only` sandbox: it CAN read files and grep the workspace itself, but cannot write or exec shells. **Prefer passing file paths in `question` / `context` and let codex read them** (this is cheaper and avoids the transcript's 100 KB cap); embed an excerpt only when you want to focus codex on a specific line range OR when the data is transient tool output (command stdout, API response) that isn't on disk. Pass include_transcript=false for decontextualised questions. model_fallback: an optional ordered list of models retried in turn on a transient backend error (rate limit, quota, model unavailable) — the response notes when a fallback model answered instead of the first one tried. See claude-agent-kit--aside.md 'Transcript redaction' section. Costs third-party API quota."
     )]
     async fn aside_codex(
         &self,
@@ -89,7 +90,7 @@ impl Aside {
     }
 
     #[tool(
-        description = "Ask GitHub's standalone copilot CLI for a second opinion. include_transcript defaults to true — current conversation is forwarded in REDACTED form (tool_use / tool_result / thinking blocks become placeholders; only text passes through). Runs with --allow-all-tools + --available-tools=view,rg,glob,web_fetch — a read-only whitelist that lets copilot inspect files (view), grep the workspace (rg), pattern-match file paths (glob), and fetch URL bodies (web_fetch). NO shell exec, NO file mutation (bash/write_bash/task/sql and other mutating tools are excluded). **Prefer passing file paths in `question` / `context`** and let copilot read them; embed an excerpt only for focused line-range questions or for off-disk tool output. reasoning_effort maps to copilot --effort (low/medium/high/xhigh). See claude-agent-kit--aside.md 'Transcript redaction' section. Costs third-party API quota."
+        description = "Ask GitHub's standalone copilot CLI for a second opinion. include_transcript defaults to true — current conversation is forwarded in REDACTED form (tool_use / tool_result / thinking blocks become placeholders; only text passes through). Runs with --allow-all-tools + --available-tools=view,rg,glob,web_fetch — a read-only whitelist that lets copilot inspect files (view), grep the workspace (rg), pattern-match file paths (glob), and fetch URL bodies (web_fetch). NO shell exec, NO file mutation (bash/write_bash/task/sql and other mutating tools are excluded). **Prefer passing file paths in `question` / `context`** and let copilot read them; embed an excerpt only for focused line-range questions or for off-disk tool output. reasoning_effort maps to copilot --effort (low/medium/high/xhigh). model_fallback: an optional ordered list of models retried in turn on a transient backend error — the response notes when a fallback model answered instead of the first one tried. See claude-agent-kit--aside.md 'Transcript redaction' section. Costs third-party API quota."
     )]
     async fn aside_copilot(
         &self,
@@ -135,16 +136,93 @@ impl Aside {
             &params.question,
         );
 
-        let outcome = invoke(
-            backend,
-            &prompt,
-            params.model.as_deref().filter(|s| !s.is_empty()),
-            params.reasoning_effort.as_deref().filter(|s| !s.is_empty()),
-            &ct,
-        )
-        .await;
+        let reasoning_effort = params
+            .reasoning_effort
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let primary_model = params
+            .model
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let fallback_chain = params.model_fallback.clone().unwrap_or_default();
+        let attempts: Vec<Option<String>> = std::iter::once(primary_model)
+            .chain(fallback_chain.into_iter().map(Some))
+            .collect();
+        let last_idx = attempts.len() - 1;
 
-        Ok(render_outcome(backend, outcome, transcript_warning))
+        let mut history: Vec<FallbackAttempt> = Vec::new();
+        let mut final_outcome = InvokeOutcome::Cancelled;
+        let mut final_model_used: Option<String> = None;
+
+        for (idx, model) in attempts.iter().enumerate() {
+            let outcome = invoke(
+                backend,
+                &prompt,
+                model.as_deref(),
+                reasoning_effort.as_deref(),
+                &ct,
+            )
+            .await;
+
+            if matches!(outcome, InvokeOutcome::Cancelled) {
+                final_outcome = outcome;
+                final_model_used = model.clone();
+                break;
+            }
+
+            if let Some(text) = dispatch_failure_text(&outcome) {
+                let kind = errkind::classify(&text);
+                tracing::info!(
+                    "aside: {} attempt {}/{} model={:?} failed kind={} detail={:.200}",
+                    backend.binary(),
+                    idx + 1,
+                    attempts.len(),
+                    model,
+                    kind.as_str(),
+                    text
+                );
+                if kind.is_retry_worthy() && idx != last_idx {
+                    history.push(FallbackAttempt {
+                        model: model.clone().unwrap_or_else(|| "(backend default)".into()),
+                        kind,
+                    });
+                    continue;
+                }
+            }
+            final_outcome = outcome;
+            final_model_used = model.clone();
+            break;
+        }
+
+        Ok(render_outcome(
+            backend,
+            final_outcome,
+            transcript_warning,
+            &history,
+            final_model_used.as_deref(),
+        ))
+    }
+}
+
+/// One fallback attempt's classified failure, kept for the response note.
+struct FallbackAttempt {
+    model: String,
+    kind: errkind::BackendErrorKind,
+}
+
+/// Extract the text `errkind::classify` should judge from a non-success
+/// outcome. `None` for a success or a cancellation.
+fn dispatch_failure_text(outcome: &InvokeOutcome) -> Option<String> {
+    match outcome {
+        InvokeOutcome::Failed { code, stderr } => {
+            Some(format!("exit_code={:?} stderr={}", code, stderr))
+        }
+        InvokeOutcome::Spawn(msg) => Some(msg.clone()),
+        InvokeOutcome::NotFound { .. } | InvokeOutcome::Ok { .. } | InvokeOutcome::Cancelled => {
+            None
+        }
     }
 }
 
@@ -186,11 +264,29 @@ fn compose_prompt(context: Option<&str>, transcript: Option<&str>, question: &st
     parts.join("\n\n---\n\n")
 }
 
+fn fallback_note(history: &[FallbackAttempt], final_model: Option<&str>) -> Option<String> {
+    if history.is_empty() {
+        return None;
+    }
+    let failed: Vec<String> = history
+        .iter()
+        .map(|a| format!("{} ({})", a.model, a.kind.as_str()))
+        .collect();
+    Some(format!(
+        "[answered by fallback model {} after {} failed]",
+        final_model.unwrap_or("(unknown)"),
+        failed.join(", ")
+    ))
+}
+
 fn render_outcome(
     backend: Backend,
     outcome: InvokeOutcome,
     transcript_warning: Option<String>,
+    fallback_history: &[FallbackAttempt],
+    final_model: Option<&str>,
 ) -> CallToolResult {
+    let note = fallback_note(fallback_history, final_model);
     match outcome {
         InvokeOutcome::Ok { stdout, truncated } => {
             let mut header = format!("[{}]", backend.binary());
@@ -198,6 +294,9 @@ fn render_outcome(
                 header.push_str(" (response truncated)");
             }
             let mut body = format!("{}\n\n{}", header, stdout);
+            if let Some(n) = &note {
+                body.push_str(&format!("\n\n{}", n));
+            }
             if let Some(w) = transcript_warning {
                 body.push_str(&format!("\n\n{}", w));
             }
@@ -207,12 +306,18 @@ fn render_outcome(
             format!("backend_not_found: `{}` is not on PATH — {}", binary, hint),
         )]),
         InvokeOutcome::Failed { code, stderr } => {
-            CallToolResult::error(vec![Content::text(format!(
+            let mut body = format!(
                 "backend_error: {} exited with status {:?}\n\nstderr:\n{}",
                 backend.binary(),
                 code,
                 stderr
-            ))])
+            );
+            if let Some(n) = &note {
+                body.push_str(&format!(
+                    "\n\n{n} — chain exhausted; this is the final attempt's error."
+                ));
+            }
+            CallToolResult::error(vec![Content::text(body)])
         }
         InvokeOutcome::Spawn(msg) => {
             CallToolResult::error(vec![Content::text(format!("spawn_error: {}", msg))])

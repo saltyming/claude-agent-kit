@@ -27,6 +27,16 @@ For CLIs that expose a reasoning-effort knob. Claude passes these as the tool's 
 - codex default reasoning effort: **{{CODEX_EFFORT}}**   (`low` / `medium` / `high` / `xhigh`, or blank)
 - copilot default reasoning effort: **{{COPILOT_EFFORT}}** (`low` / `medium` / `high` / `xhigh`, or blank — maps to `copilot --effort`)
 
+## Default model fallback chain (per backend)
+
+Passed as `model_fallback` when you have not named a chain for the turn. A
+transient backend failure (rate limit, quota, model unavailable) automatically
+retries the SAME question against the next model in this list, in order; a
+non-transient failure (e.g. auth/permission) is never retried.
+
+- codex default model fallback: **{{CODEX_MODEL_FALLBACK}}**   (comma-separated, e.g. `gpt-5.3`; blank = none)
+- copilot default model fallback: **{{COPILOT_MODEL_FALLBACK}}** (comma-separated; blank = none)
+
 ## Auto-call policy
 
 **{{POLICY}}**

@@ -25,6 +25,8 @@
 #   ASIDE_COPILOT_MODEL     freeform model string or empty
 #   ASIDE_CODEX_EFFORT      low|medium|high|xhigh or empty
 #   ASIDE_COPILOT_EFFORT    low|medium|high|xhigh or empty
+#   ASIDE_CODEX_MODEL_FALLBACK    comma-separated model list or empty
+#   ASIDE_COPILOT_MODEL_FALLBACK  comma-separated model list or empty
 #   ASIDE_RECONFIGURE       yes|no — override the "existing prefs found, reconfigure?"
 #                           prompt. yes = overwrite; no = keep existing and exit.
 #                           Unset + TTY = ask. Unset + non-TTY = keep (safe default).
@@ -121,6 +123,14 @@ if [ "$KEEP_PREFS" = "no" ]; then
         "" \
         'low|medium|high|xhigh|""'
 
+    prompt_with_default CODEX_MODEL_FALLBACK ASIDE_CODEX_MODEL_FALLBACK \
+        "Default model fallback chain for codex, comma-separated (blank for none):" \
+        ""
+
+    prompt_with_default COPILOT_MODEL_FALLBACK ASIDE_COPILOT_MODEL_FALLBACK \
+        "Default model fallback chain for copilot, comma-separated (blank for none):" \
+        ""
+
     prompt_with_default POLICY ASIDE_POLICY \
         "Auto-call policy [conservative/preference-only/proactive] (default: conservative):" \
         "conservative" \
@@ -155,6 +165,8 @@ if [ "$KEEP_PREFS" = "no" ]; then
         -e "s/{{COPILOT_MODEL}}/$(sed_escape "$COPILOT_MODEL")/g" \
         -e "s/{{CODEX_EFFORT}}/$(sed_escape "$CODEX_EFFORT")/g" \
         -e "s/{{COPILOT_EFFORT}}/$(sed_escape "$COPILOT_EFFORT")/g" \
+        -e "s/{{CODEX_MODEL_FALLBACK}}/$(sed_escape "$CODEX_MODEL_FALLBACK")/g" \
+        -e "s/{{COPILOT_MODEL_FALLBACK}}/$(sed_escape "$COPILOT_MODEL_FALLBACK")/g" \
         -e "s/{{POLICY}}/$(sed_escape "$POLICY")/g" \
         "$TEMPLATE_CONTENT_PATH" > "$PREFS_DEST"
 
@@ -184,6 +196,7 @@ Aside preferences configured:
   preferred backend:       $PREFERRED_BACKEND
   codex model / effort:    ${CODEX_MODEL:-<CLI default>} / ${CODEX_EFFORT:-<CLI default>}
   copilot model / effort:  ${COPILOT_MODEL:-<CLI default>} / ${COPILOT_EFFORT:-<CLI default>}
+  codex/copilot fallback:  ${CODEX_MODEL_FALLBACK:-<none>} / ${COPILOT_MODEL_FALLBACK:-<none>}
   auto-call policy:        $POLICY
 
 Edit anytime:   $PREFS_DEST

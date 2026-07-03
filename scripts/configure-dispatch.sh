@@ -20,6 +20,7 @@
 #   DISPATCH_BACKEND       codex|opencode
 #   DISPATCH_MODEL         freeform model string or empty
 #   DISPATCH_EFFORT        low|medium|high|xhigh or empty
+#   DISPATCH_MODEL_FALLBACK  comma-separated model list or empty
 #   DISPATCH_RECONFIGURE   yes|no — override the "existing prefs found, reconfigure?"
 #                          prompt. Unset + TTY = ask. Unset + non-TTY = keep.
 #
@@ -114,6 +115,10 @@ if [ "$KEEP_PREFS" = "no" ]; then
         "Default reasoning effort [low/medium/high/xhigh, blank]:" \
         "" \
         'low|medium|high|xhigh|""'
+
+    prompt_with_default MODEL_FALLBACK DISPATCH_MODEL_FALLBACK \
+        "Default model fallback chain, comma-separated (blank for none):" \
+        ""
 fi
 
 # ── render template (skip when keeping existing prefs) ───
@@ -145,6 +150,7 @@ if [ "$KEEP_PREFS" = "no" ]; then
         -e "s/{{BACKEND}}/$(sed_escape "$BACKEND")/g" \
         -e "s/{{MODEL}}/$(sed_escape "$MODEL")/g" \
         -e "s/{{EFFORT}}/$(sed_escape "$EFFORT")/g" \
+        -e "s/{{MODEL_FALLBACK}}/$(sed_escape "$MODEL_FALLBACK")/g" \
         "$TEMPLATE_CONTENT_PATH" > "$PREFS_DEST"
 
     # Record in manifest (avoid duplicate entries if re-running `make configure`).
@@ -175,6 +181,7 @@ Dispatch preferences configured:
   default granularity:     $GRANULARITY
   default backend:         $BACKEND
   default model / effort:  ${MODEL:-<CLI default>} / ${EFFORT:-<CLI default>}
+  default model fallback:  ${MODEL_FALLBACK:-<none>}
 
 Edit anytime:   $PREFS_DEST
 Reconfigure:    make configure

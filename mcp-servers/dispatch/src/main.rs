@@ -12,6 +12,7 @@
 //! per dir); the *when to ask the user* policy lives in claude-agent-kit--dispatch.md.
 
 mod backend;
+mod errkind;
 mod executor;
 mod lenient;
 mod opencode;
@@ -92,7 +93,7 @@ struct Dispatch {
 #[tool_router]
 impl Dispatch {
     #[tool(
-        description = "Delegate ONE execution step to a coding-agent backend (codex or opencode) running headless and WRITE-CAPABLE in `working_dir` — it may modify files there. Runs ASYNCHRONOUSLY: returns a task id immediately; poll dispatch_status(id) for progress and the result. Provide a structured spec — objective (required), working_dir (required, absolute), and optional target_files / constraints / acceptance — plus optional free-form context / details; the server renders them into the backend prompt. working_dir is rejected unless it canonicalizes within the project root (widen with the DISPATCH_EXTRA_ROOTS env var). sandbox defaults to workspace-write; danger-full-access is rejected unless the server enables it. One active run per working_dir unless allow_concurrent=true. POLICY: initiate dispatch according to claude-agent-kit--dispatch-prefs.md (`conservative` / `preference-only` / `proactive`) — under `proactive` + `auto`, submit directly for suitable steps; this policy governs dispatch specifically and is not subject to the general write-capable delegation propose-and-wait default used elsewhere. APPROVAL: before the FIRST dispatch in a session, confirm working_dir + the step scope + the approval granularity (per-step vs batch) with the user when approval mode is ask; skip that confirmation only when approval mode is auto."
+        description = "Delegate ONE execution step to a coding-agent backend (codex or opencode) running headless and WRITE-CAPABLE in `working_dir` — it may modify files there. Runs ASYNCHRONOUSLY: returns a task id immediately; poll dispatch_status(id) for progress and the result. Provide a structured spec — objective (required), working_dir (required, absolute), and optional target_files / constraints / acceptance — plus optional free-form context / details; the server renders them into the backend prompt. working_dir is rejected unless it canonicalizes within the project root (widen with the DISPATCH_EXTRA_ROOTS env var). sandbox defaults to workspace-write; danger-full-access is rejected unless the server enables it. One active run per working_dir unless allow_concurrent=true. model_fallback: an optional ordered list of models tried in turn on a transient backend error (rate limit, quota, model unavailable) — dispatch_status reports final_model/fallback_history when a retry occurred; not honored by dispatch_steer. POLICY: initiate dispatch according to claude-agent-kit--dispatch-prefs.md (`conservative` / `preference-only` / `proactive`) — under `proactive` + `auto`, submit directly for suitable steps; this policy governs dispatch specifically and is not subject to the general write-capable delegation propose-and-wait default used elsewhere. APPROVAL: before the FIRST dispatch in a session, confirm working_dir + the step scope + the approval granularity (per-step vs batch) with the user when approval mode is ask; skip that confirmation only when approval mode is auto."
     )]
     async fn dispatch_submit(
         &self,
@@ -136,6 +137,10 @@ impl Dispatch {
         let nonce = make_nonce(&self.owner_instance);
         let prompt = render::render_prompt(&p, &nonce);
         let spec_json = render::spec_json(&p);
+        let model_fallback = p.model_fallback.clone().filter(|v| !v.is_empty());
+        let model_fallback_json = model_fallback
+            .as_ref()
+            .map(|v| serde_json::to_string(v).unwrap_or_default());
 
         let id = {
             let mut conn = match self.lock_db() {
@@ -155,6 +160,7 @@ impl Dispatch {
                 parent_id: None,
                 nonce: Some(nonce.clone()),
                 rollout_start_line: None,
+                model_fallback: model_fallback_json,
             };
             let enforce_dir = if allow_concurrent {
                 None
@@ -196,6 +202,7 @@ impl Dispatch {
             resume_session: None,
             nonce: Some(nonce),
             rollout_path: None,
+            model_fallback,
         };
         executor::spawn(self.db.clone(), self.registry.clone(), job);
 
@@ -567,6 +574,10 @@ impl Dispatch {
                 parent_id: Some(id.to_string()),
                 nonce: None,
                 rollout_start_line,
+                // A steer/resume run stays on one model — switching models
+                // mid-resumed-session is a materially harder problem than a
+                // fresh-attempt fallback and is out of scope here.
+                model_fallback: None,
             };
             match store::insert_queued(
                 &mut conn,
@@ -613,6 +624,7 @@ impl Dispatch {
             resume_session: Some(session_id.clone()),
             nonce: None,
             rollout_path: parent_rollout.as_deref().map(PathBuf::from),
+            model_fallback: None,
         };
         executor::spawn(self.db.clone(), self.registry.clone(), job);
 

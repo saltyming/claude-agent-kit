@@ -50,6 +50,15 @@ pub struct AskParams {
     ///
     /// Valid values: `low` / `medium` / `high` / `xhigh` (or blank).
     pub reasoning_effort: Option<String>,
+
+    /// Optional ordered fallback chain: if `model` fails with a transient
+    /// backend error (rate limit, quota, model unavailable), aside
+    /// automatically retries the SAME question against the next model here,
+    /// in order. Total attempts = 1 + this list's length. A non-transient
+    /// failure (e.g. auth/permission) is never retried — it would fail
+    /// identically against every model on this backend.
+    #[serde(default, deserialize_with = "crate::lenient::lenient_opt_vec_string")]
+    pub model_fallback: Option<Vec<String>>,
 }
 
 /// Parameters for `aside_list`. No fields — returns what the server can detect.

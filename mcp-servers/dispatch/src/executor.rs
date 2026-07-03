@@ -21,7 +21,9 @@ use std::sync::{Arc, Mutex as StdMutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::backend::{self, Backend};
+use crate::errkind::{self, BackendErrorKind};
 use crate::opencode;
+use crate::render;
 use crate::store;
 
 pub type DbHandle = Arc<StdMutex<rusqlite::Connection>>;
@@ -54,6 +56,10 @@ pub struct Job {
     /// For backends with dispatch-owned logs (OpenCode), a resumed task appends to
     /// the parent log instead of discovering an external rollout.
     pub rollout_path: Option<PathBuf>,
+    /// Ordered fallback chain: on a transient backend error (per `errkind::classify`),
+    /// retry the SAME task against the next model here. None/empty for
+    /// `dispatch_steer` follow-ups — a resumed session stays on one model.
+    pub model_fallback: Option<Vec<String>>,
 }
 
 /// Register a cancellation token for `job.id` and fire the detached run task.
@@ -82,6 +88,19 @@ pub fn request_cancel(registry: &Registry, id: &str) -> bool {
     false
 }
 
+/// One fallback attempt's classified failure, kept for `fallback_history`.
+struct AttemptRecord {
+    model: String,
+    kind: BackendErrorKind,
+    detail: String,
+}
+
+/// Retry loop: try `job.model`, then each entry in `job.model_fallback` in
+/// order, on a transient backend error (`errkind::classify`). Reuses the same
+/// task row/id for every attempt — never re-enters `insert_queued` (the row
+/// is already `running`, and the one-run-per-`working_dir` guard lives only
+/// at insert time; a retry that resubmitted would trip its own prior
+/// attempt's `dir_busy`).
 async fn run(db: &DbHandle, job: &Job, ct: &CancellationToken) {
     if ct.is_cancelled() {
         db_finish(
@@ -95,43 +114,127 @@ async fn run(db: &DbHandle, job: &Job, ct: &CancellationToken) {
         return;
     }
 
+    let attempts: Vec<Option<String>> = std::iter::once(job.model.clone())
+        .chain(job.model_fallback.iter().flatten().cloned().map(Some))
+        .collect();
+    let last_idx = attempts.len() - 1;
+    let mut history: Vec<AttemptRecord> = Vec::new();
+
+    for (idx, model) in attempts.iter().enumerate() {
+        if ct.is_cancelled() {
+            db_finish(
+                db,
+                &job.id,
+                store::STATUS_CANCELLED,
+                None,
+                None,
+                Some("cancelled before the backend started"),
+            );
+            return;
+        }
+
+        let outcome = run_attempt(db, job, model.as_deref(), idx, ct).await;
+
+        if matches!(outcome, backend::RunOutcome::Cancelled) {
+            finish_with_history(db, &job.id, outcome, model.as_deref(), &history);
+            return;
+        }
+
+        if let Some(text) = failure_text(&outcome) {
+            let kind = errkind::classify(&text);
+            tracing::info!(
+                "dispatch: {} attempt {}/{} model={:?} failed kind={} detail={:.200}",
+                job.id,
+                idx + 1,
+                attempts.len(),
+                model,
+                kind.as_str(),
+                text
+            );
+            if kind.is_retry_worthy() && idx != last_idx {
+                history.push(AttemptRecord {
+                    model: model.clone().unwrap_or_else(|| "(backend default)".into()),
+                    kind,
+                    detail: text,
+                });
+                continue;
+            }
+        }
+        finish_with_history(db, &job.id, outcome, model.as_deref(), &history);
+        return;
+    }
+}
+
+/// One backend invocation for `model` (the `idx`-th attempt) — the
+/// pre-refactor body of `run`, extracted so the retry loop can call it once
+/// per fallback-chain entry. Each attempt mints its OWN nonce and takes its
+/// own pre-spawn rollout snapshot (see the doc comment on the nonce-swap
+/// below) rather than reusing attempt 0's — reusing one nonce across attempts
+/// was an earlier design that turned out to be an actual bug: `locate_by_nonce`
+/// has no snapshot/floor exclusion and returns on the first match, so a
+/// retry's `record_rollout` could transiently match a still-on-disk PRIOR
+/// attempt's (already-failed) rollout before its own newer one appears.
+async fn run_attempt(
+    db: &DbHandle,
+    job: &Job,
+    model: Option<&str>,
+    idx: usize,
+    ct: &CancellationToken,
+) -> backend::RunOutcome {
     let spec = backend::SpawnSpec {
         working_dir: &job.working_dir,
         sandbox: &job.sandbox,
-        model: job.model.as_deref(),
+        model,
         reasoning_effort: job.reasoning_effort.as_deref(),
         skip_git_repo_check: job.skip_git_repo_check,
         resume_session: job.resume_session.as_deref(),
     };
 
+    // Attempt 0 keeps the job's own nonce/prompt exactly as submitted (no
+    // swap needed); a fallback retry (idx > 0) mints a fresh nonce and swaps
+    // it into a copy of the prompt, so its own record_rollout call can never
+    // match an earlier attempt's still-on-disk rollout.
+    let (attempt_nonce, attempt_prompt): (Option<String>, std::borrow::Cow<'_, str>) =
+        if idx == 0 || job.nonce.is_none() {
+            (
+                job.nonce.clone(),
+                std::borrow::Cow::Borrowed(job.prompt.as_str()),
+            )
+        } else {
+            let base = job.nonce.as_deref().unwrap_or("");
+            let new_nonce = format!("{base}-retry{idx}");
+            let swapped = job.prompt.replace(
+                &render::nonce_marker(base),
+                &render::nonce_marker(&new_nonce),
+            );
+            (Some(new_nonce), std::borrow::Cow::Owned(swapped))
+        };
+
     if job.backend == Backend::Opencode {
-        let spec = opencode::RunSpec {
+        let ospec = opencode::RunSpec {
             id: &job.id,
             working_dir: &job.working_dir,
             sandbox: &job.sandbox,
-            model: job.model.as_deref(),
+            model,
             reasoning_effort: job.reasoning_effort.as_deref(),
-            prompt: &job.prompt,
+            prompt: &attempt_prompt,
             state_dir: &job.state_dir,
             backend_version: job.backend_version.as_deref(),
             resume_session: job.resume_session.as_deref(),
             rollout_path: job.rollout_path.as_deref(),
         };
-        finish_outcome(db, &job.id, opencode::run(db, spec, ct).await);
-        return;
+        return opencode::run(db, ospec, ct).await;
     }
 
-    // Snapshot the rollouts that already exist BEFORE spawning, so record_rollout can
-    // require a file that did not exist yet and never match a pre-existing same-cwd
-    // session (e.g. an earlier aside run).
+    // Snapshot the rollouts that already exist BEFORE spawning THIS attempt,
+    // so its own record_rollout call can require a file that did not exist
+    // yet — never a pre-existing same-cwd session, including a prior
+    // fallback attempt's own (already-failed) rollout.
     let snapshot = crate::rollout::session_snapshot();
 
-    let spawned = match backend::spawn_child(job.backend, &spec, &job.prompt) {
+    let spawned = match backend::spawn_child(job.backend, &spec, &attempt_prompt) {
         Ok(s) => s,
-        Err(e) => {
-            db_finish(db, &job.id, store::STATUS_FAILED, None, None, Some(&e));
-            return;
-        }
+        Err(e) => return backend::RunOutcome::WaitFailed(e),
     };
 
     let child_pid = spawned.child_pid.map(|p| p as i64);
@@ -150,13 +253,70 @@ async fn run(db: &DbHandle, job: &Job, ct: &CancellationToken) {
         db,
         &job.id,
         &job.working_dir,
-        job.nonce.as_deref(),
+        attempt_nonce.as_deref(),
         job.resume_session.as_deref(),
         &snapshot,
     )
     .await;
 
-    finish_outcome(db, &job.id, backend::capture(spawned, ct).await);
+    backend::capture(spawned, ct).await
+}
+
+/// Extract the text `errkind::classify` should judge from a non-success
+/// outcome. `None` for a success or a cancellation (neither is a failure to
+/// classify — cancellation is handled separately, before this is called).
+fn failure_text(outcome: &backend::RunOutcome) -> Option<String> {
+    match outcome {
+        backend::RunOutcome::Done {
+            success: false,
+            stderr,
+            exit_code,
+            ..
+        } => Some(format!("exit_code={:?} stderr={}", exit_code, stderr)),
+        backend::RunOutcome::WaitFailed(e) => Some(e.clone()),
+        backend::RunOutcome::Done { success: true, .. } | backend::RunOutcome::Cancelled => None,
+    }
+}
+
+/// Write the terminal outcome via the existing `finish_outcome` (unchanged),
+/// then — only when at least one fallback attempt was tried and discarded —
+/// record which model actually produced the result plus the discarded
+/// attempts' history via the narrow `store::set_fallback_result` addition.
+fn finish_with_history(
+    db: &DbHandle,
+    id: &str,
+    outcome: backend::RunOutcome,
+    final_model: Option<&str>,
+    history: &[AttemptRecord],
+) {
+    finish_outcome(db, id, outcome);
+    if !history.is_empty() {
+        let history_json = serde_json::to_string(
+            &history
+                .iter()
+                .map(|a| {
+                    serde_json::json!({
+                        "model": a.model,
+                        "error_kind": a.kind.as_str(),
+                        "detail": a.detail.chars().take(2000).collect::<String>(),
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or_else(|_| "[]".into());
+        db_set_fallback_result(db, id, final_model, &history_json);
+    }
+}
+
+fn db_set_fallback_result(db: &DbHandle, id: &str, final_model: Option<&str>, history_json: &str) {
+    match db.lock() {
+        Ok(conn) => {
+            if let Err(e) = store::set_fallback_result(&conn, id, final_model, history_json) {
+                tracing::warn!("dispatch: set_fallback_result({id}) failed: {e}");
+            }
+        }
+        Err(e) => tracing::warn!("dispatch: db lock poisoned in set_fallback_result: {e}"),
+    }
 }
 
 fn finish_outcome(db: &DbHandle, id: &str, outcome: backend::RunOutcome) {
