@@ -10,13 +10,20 @@ CUSTOM_SIGNATURE := claude-agent-kit-custom
 RULE_FILES := $(wildcard claude-rules/*.md)
 SKILL_DIRS := $(wildcard claude-skills/palette-*)
 
-PREFS_TEMPLATE     := scripts/claude-agent-kit--aside-prefs.md.tmpl
-DISPATCH_TEMPLATE  := scripts/claude-agent-kit--dispatch-prefs.md.tmpl
-CONFIGURE_ASIDE    := scripts/configure-aside.sh
-CONFIGURE_DISPATCH := scripts/configure-dispatch.sh
+CONFIGURE_PREFS    := scripts/configure-prefs.sh
 CAK_COMMON         := scripts/cak-common.sh
 
-.PHONY: install uninstall build configure install-mcp
+.DEFAULT_GOAL := help
+.PHONY: help install uninstall build configure install-mcp
+
+help:
+	@echo "claude-agent-kit — targets:"
+	@echo "  install      build + install rules/skills/workslate, register MCP, configure prefs"
+	@echo "  configure    re-run interactive aside/dispatch preference setup"
+	@echo "  uninstall    remove kit-signed files (user-owned '-custom:' prefs are kept)"
+	@echo "  build        compile the workslate binary only"
+	@echo "  install-mcp  build/register the shared aside/dispatch servers via slate"
+	@echo "Vars: SKIP_MCP=1  SLATE_AGENT_KIT_DIR=<path>  CLAUDE_DIR=<path>  BIN_DIR=<path>"
 
 build:
 	cargo build --release -p workslate
@@ -24,6 +31,12 @@ build:
 install: build
 	@mkdir -p $(RULES_DIR) $(BIN_DIR) $(SKILLS_DIR)
 	@: > $(MANIFEST)
+	@if [ -f "$(CLAUDE_DIR)/CLAUDE.md" ] && ! head -1 "$(CLAUDE_DIR)/CLAUDE.md" | grep -Eq "<!-- (slate-agent-kit:common|$(SIGNATURE)) -->"; then \
+		bak="$(CLAUDE_DIR)/CLAUDE.md.bak-$$(date -u +%Y%m%dT%H%M%SZ)"; \
+		cp -p "$(CLAUDE_DIR)/CLAUDE.md" "$$bak"; \
+		echo "  WARNING: existing $(CLAUDE_DIR)/CLAUDE.md is not managed by this kit; backed up to $$bak"; \
+		echo "## backup: $$bak" >> $(MANIFEST); \
+	fi
 	cp CLAUDE.md $(CLAUDE_DIR)/CLAUDE.md
 	@echo $(CLAUDE_DIR)/CLAUDE.md >> $(MANIFEST)
 	@for f in $(RULE_FILES); do \
@@ -44,7 +57,7 @@ install: build
 		cp target/release/$$bin $(BIN_DIR)/$$bin.tmp.$$$$ && mv -f $(BIN_DIR)/$$bin.tmp.$$$$ $(BIN_DIR)/$$bin || cp target/release/$$bin $(BIN_DIR)/$$bin; \
 		if [ "$$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then \
 			codesign --force --sign - $(BIN_DIR)/$$bin 2>/dev/null && \
-				echo "  Code signed (ad-hoc): $$bin." || true; \
+				echo "  Code signed (ad-hoc): $$bin." || echo "  WARNING: codesign failed for $$bin; macOS may SIGKILL the unsigned binary." >&2; \
 		fi; \
 		echo $(BIN_DIR)/$$bin >> $(MANIFEST); \
 	done
@@ -53,23 +66,18 @@ install: build
 	@# Register the workslate MCP server (Claude-only)
 	@if command -v claude >/dev/null 2>&1; then \
 		echo "Registering workslate MCP server..."; \
-		claude mcp add workslate -s user --transport stdio -- workslate 2>/dev/null && \
+		claude mcp add workslate -s user --transport stdio -- $(BIN_DIR)/workslate 2>/dev/null && \
 			echo "  workslate registered." || \
-			echo "  workslate registration failed. Run manually: claude mcp add workslate -s user --transport stdio -- workslate"; \
+			echo "  workslate registration failed. Run manually: claude mcp add workslate -s user --transport stdio -- $(BIN_DIR)/workslate"; \
 	else \
 		echo "Claude Code CLI not found. Register manually:"; \
-		echo "  claude mcp add workslate -s user --transport stdio -- workslate"; \
+		echo "  claude mcp add workslate -s user --transport stdio -- $(BIN_DIR)/workslate"; \
 	fi
 	@# Build + register the SHARED aside/dispatch servers from slate-agent-kit
 	@$(MAKE) --no-print-directory install-mcp
-	@# Interactive aside configuration
-	@CLAUDE_DIR=$(CLAUDE_DIR) RULES_DIR=$(RULES_DIR) MANIFEST=$(MANIFEST) \
-		TEMPLATE_SRC=$(PREFS_TEMPLATE) \
-		sh $(CONFIGURE_ASIDE)
-	@# Interactive dispatch configuration
-	@CLAUDE_DIR=$(CLAUDE_DIR) RULES_DIR=$(RULES_DIR) MANIFEST=$(MANIFEST) \
-		TEMPLATE_SRC=$(DISPATCH_TEMPLATE) \
-		sh $(CONFIGURE_DISPATCH)
+	@# Interactive aside + dispatch prefs (the shared configure-prefs.sh)
+	@RULES_DIR=$(RULES_DIR) PREFIX=claude-agent-kit MANIFEST=$(MANIFEST) \
+		sh $(CONFIGURE_PREFS)
 	@# Shared custom-rules ingestion (once, via the cak-common.sh function)
 	@RULES_DIR=$(RULES_DIR) MANIFEST=$(MANIFEST) \
 		sh -c '. $(CAK_COMMON); ingest_custom_rules'
@@ -97,14 +105,9 @@ install-mcp:
 configure:
 	@mkdir -p $(RULES_DIR)
 	@[ -f $(MANIFEST) ] || : > $(MANIFEST)
-	@CLAUDE_DIR=$(CLAUDE_DIR) RULES_DIR=$(RULES_DIR) MANIFEST=$(MANIFEST) \
-		TEMPLATE_SRC=$(PREFS_TEMPLATE) \
-		ASIDE_RECONFIGURE=yes \
-		sh $(CONFIGURE_ASIDE)
-	@CLAUDE_DIR=$(CLAUDE_DIR) RULES_DIR=$(RULES_DIR) MANIFEST=$(MANIFEST) \
-		TEMPLATE_SRC=$(DISPATCH_TEMPLATE) \
-		DISPATCH_RECONFIGURE=yes \
-		sh $(CONFIGURE_DISPATCH)
+	@RULES_DIR=$(RULES_DIR) PREFIX=claude-agent-kit MANIFEST=$(MANIFEST) \
+		PREFS_RECONFIGURE=yes \
+		sh $(CONFIGURE_PREFS)
 	@RULES_DIR=$(RULES_DIR) MANIFEST=$(MANIFEST) \
 		sh -c '. $(CAK_COMMON); ingest_custom_rules'
 

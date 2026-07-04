@@ -46,7 +46,7 @@ uninstall() {
                     first="$(head -1 "$f" 2>/dev/null || true)"
                     if printf '%s' "$first" | grep -Fq "<!-- ${CUSTOM_SIGNATURE}"; then
                         printf '%s\n' "$f" >> "$custom_list_file"
-                    elif printf '%s' "$first" | grep -Fq "<!-- ${SIGNATURE} -->"; then
+                    elif printf '%s' "$first" | grep -Eq "<!-- (slate-agent-kit:common|${SIGNATURE}) -->"; then
                         rm -f "$f"
                         echo "  removed $f"
                     else
@@ -91,7 +91,7 @@ uninstall() {
     rm -f "$custom_list_file"
     # Remove palette skill directories recorded in the manifest (core-signed only)
     grep -E '/skills/palette-' "$MANIFEST" 2>/dev/null | while IFS= read -r d; do
-        if [ -d "$d" ] && [ -f "$d/SKILL.md" ] && grep -Fq "<!-- ${SIGNATURE} -->" "$d/SKILL.md"; then
+        if [ -d "$d" ] && [ -f "$d/SKILL.md" ] && head -8 "$d/SKILL.md" 2>/dev/null | grep -Eq "<!-- (slate-agent-kit:common|${SIGNATURE}) -->"; then
             rm -rf "$d" && echo "  removed $d"
         elif [ -e "$d" ]; then
             echo "  skipped $d (signature mismatch)"
@@ -110,6 +110,14 @@ uninstall() {
 for arg in "$@"; do
     case "$arg" in
         --uninstall) uninstall ;;
+        --skip-mcp) SKIP_MCP=1 ;;
+        -h|--help)
+            echo "Usage: $0 [--uninstall] [--skip-mcp]"
+            echo "  --uninstall   remove kit-signed files (user-owned '-custom:' prefs are kept)"
+            echo "  --skip-mcp    install rules/skills/workslate only; skip shared aside/dispatch"
+            echo "Env: SKIP_MCP=1, SLATE_AGENT_KIT_DIR=<path>, CLAUDE_DIR=<path>, BIN_DIR=<path>,"
+            echo "     SLATE_REPO / SLATE_BRANCH, ASIDE_* / DISPATCH_* prefs, CUSTOM_RULES_DIR"
+            exit 0 ;;
     esac
 done
 
@@ -156,7 +164,8 @@ install_binary() {
     chmod +x "$BIN_DIR/$name"
     if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
         codesign --force --sign - "$BIN_DIR/$name" 2>/dev/null && \
-            echo "  Code signed (ad-hoc): $name." || true
+            echo "  Code signed (ad-hoc): $name." || \
+            echo "  WARNING: codesign failed for $name; macOS may SIGKILL the unsigned binary on launch." >&2
     fi
     echo "$BIN_DIR/$name" >> "$MANIFEST"
     rm -rf "$tmp"
@@ -175,7 +184,13 @@ install_binary workslate
 # Register PreToolUse doorbell hooks in settings.json
 "$BIN_DIR/workslate" --install-hooks || echo "  Hook registration failed. Run manually: $BIN_DIR/workslate --install-hooks"
 
-# CLAUDE.md
+# CLAUDE.md — back up an existing unmanaged file before overwriting it
+if [ -f "$CLAUDE_DIR/CLAUDE.md" ] && ! head -1 "$CLAUDE_DIR/CLAUDE.md" | grep -Eq "<!-- (slate-agent-kit:common|${SIGNATURE}) -->"; then
+    bak="$CLAUDE_DIR/CLAUDE.md.bak-$(date -u +%Y%m%dT%H%M%SZ)"
+    cp -p "$CLAUDE_DIR/CLAUDE.md" "$bak"
+    echo "  WARNING: existing $CLAUDE_DIR/CLAUDE.md is not managed by this kit; backed up to $bak"
+    echo "## backup: $bak" >> "$MANIFEST"
+fi
 echo "Downloading CLAUDE.md..."
 download "$RAW_BASE/CLAUDE.md" "$CLAUDE_DIR/CLAUDE.md"
 echo "$CLAUDE_DIR/CLAUDE.md" >> "$MANIFEST"
@@ -229,12 +244,12 @@ esac
 # Register the workslate MCP server (Claude-only)
 if command -v claude >/dev/null 2>&1; then
     echo "Registering workslate MCP server..."
-    claude mcp add workslate -s user --transport stdio -- workslate 2>/dev/null && \
+    claude mcp add workslate -s user --transport stdio -- "$BIN_DIR/workslate" 2>/dev/null && \
         echo "  workslate registered." || \
-        echo "  workslate registration failed. Add manually: claude mcp add workslate -s user --transport stdio -- workslate"
+        echo "  workslate registration failed. Add manually: claude mcp add workslate -s user --transport stdio -- $BIN_DIR/workslate"
 else
     echo "Claude Code CLI not found. Register manually:"
-    echo "  claude mcp add workslate -s user --transport stdio -- workslate"
+    echo "  claude mcp add workslate -s user --transport stdio -- $BIN_DIR/workslate"
 fi
 
 # Build + register the SHARED aside/dispatch servers from slate-agent-kit
@@ -273,21 +288,18 @@ install_shared_mcp() {
 
 install_shared_mcp
 
-# Interactive aside + dispatch configuration (shared helpers in cak-common.sh)
+# Interactive aside + dispatch preference configuration — the SAME
+# configure-prefs.sh codex/kimi use (single source). Templates must sit next to
+# it (it resolves "$HERE/<PREFIX>--{aside,dispatch}-prefs.md.tmpl").
 echo ""
 scripts_tmp=$(mktemp -d)
+download "$RAW_BASE/scripts/configure-prefs.sh" "$scripts_tmp/configure-prefs.sh"
 download "$RAW_BASE/scripts/cak-common.sh" "$scripts_tmp/cak-common.sh"
-download "$RAW_BASE/scripts/configure-aside.sh" "$scripts_tmp/configure-aside.sh"
-download "$RAW_BASE/scripts/configure-dispatch.sh" "$scripts_tmp/configure-dispatch.sh"
-download "$RAW_BASE/scripts/claude-agent-kit--aside-prefs.md.tmpl" "$scripts_tmp/aside-prefs.tmpl"
-download "$RAW_BASE/scripts/claude-agent-kit--dispatch-prefs.md.tmpl" "$scripts_tmp/dispatch-prefs.tmpl"
-CLAUDE_DIR="$CLAUDE_DIR" RULES_DIR="$RULES_DIR" MANIFEST="$MANIFEST" \
-    TEMPLATE_SRC="$scripts_tmp/aside-prefs.tmpl" \
-    sh "$scripts_tmp/configure-aside.sh"
-CLAUDE_DIR="$CLAUDE_DIR" RULES_DIR="$RULES_DIR" MANIFEST="$MANIFEST" \
-    TEMPLATE_SRC="$scripts_tmp/dispatch-prefs.tmpl" \
-    sh "$scripts_tmp/configure-dispatch.sh"
-# Shared custom-rules ingestion (once, via the cak-common.sh function)
+download "$RAW_BASE/scripts/claude-agent-kit--aside-prefs.md.tmpl" "$scripts_tmp/claude-agent-kit--aside-prefs.md.tmpl"
+download "$RAW_BASE/scripts/claude-agent-kit--dispatch-prefs.md.tmpl" "$scripts_tmp/claude-agent-kit--dispatch-prefs.md.tmpl"
+RULES_DIR="$RULES_DIR" PREFIX=claude-agent-kit MANIFEST="$MANIFEST" \
+    sh "$scripts_tmp/configure-prefs.sh"
+# Custom-rules ingestion (claude-specific; separate concern from prefs)
 RULES_DIR="$RULES_DIR" MANIFEST="$MANIFEST" \
     sh -c ". \"$scripts_tmp/cak-common.sh\"; ingest_custom_rules"
 rm -rf "$scripts_tmp"

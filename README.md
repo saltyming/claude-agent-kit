@@ -39,18 +39,18 @@ SQLite-backed task tracking and cross-agent messaging:
 
 ### aside MCP server
 
-Cross-family second opinions via locally-installed CLIs — it complements, never replaces, the built-in `advisor()` (a stronger Claude). Use it for a perspective from a *different* model family: OpenAI codex or GitHub copilot.
+Second opinions via locally-installed CLIs — it complements, never replaces, the built-in `advisor()` (a stronger Claude). Use it for a perspective from a different model family via OpenAI codex or GitHub copilot, or for a separate local Claude CLI pass via `aside_claude`.
 
 - **Transcript auto-forwarded, redacted** — `text` passes through verbatim, but `tool_use` / `tool_result` / `thinking` become placeholders (unlike `advisor()`, which gets the full transcript). 100 KB cap; pass `include_transcript=false` for decontextualised questions.
 - **Read-only, non-interactive** — each backend can read files and grep the workspace itself, but cannot edit files or run shells.
 - **Preference-driven policy** — `make configure` generates `aside-prefs.md` (preferred backend, default models, reasoning effort, and a `conservative` / `preference-only` / `proactive` auto-call policy). An explicit current-turn instruction to use only one surface ("only aside" / "only `advisor()`") overrides the policy in both directions.
 - **Cost-aware** — every call uses your third-party API quota, so the rules cap it to one focused question per call.
 
-Install the CLIs separately (`aside` only wraps them): [codex](https://github.com/openai/codex) (`npm i -g @openai/codex`) and [copilot](https://docs.github.com/copilot/how-tos/copilot-cli) (GitHub's standalone Copilot CLI, not `gh copilot`). `aside_list` reports which are present; missing ones are reported as unavailable, not errors.
+Install the CLIs separately (`aside` only wraps them): [codex](https://github.com/openai/codex) (`npm i -g @openai/codex`), [copilot](https://docs.github.com/copilot/how-tos/copilot-cli) (GitHub's standalone Copilot CLI, not `gh copilot`), and [Claude Code](https://claude.com/claude-code) (`npm i -g @anthropic-ai/claude-code`). `aside_list` reports which are present; missing ones are reported as unavailable, not errors.
 
 ### dispatch MCP server
 
-Asynchronous **hierarchical delegation** — hand an execution step to an external coding agent (codex or opencode) running headless and **write-capable**. Where `aside` seeks a read-only opinion, `dispatch` entrusts execution; the run continues in the background and you poll for the result.
+Asynchronous **hierarchical delegation** — hand an execution step to an external coding agent (codex, opencode, or claude) running headless and **write-capable**. Where `aside` seeks a read-only opinion, `dispatch` entrusts execution; the run continues in the background and you poll for the result.
 
 - **Async submit → poll / wait → cancel** — `dispatch_submit` returns a task id immediately and runs the backend detached (`codex exec` or a short-lived local `opencode serve`); `dispatch_status` / `dispatch_list` track it, or `dispatch_wait` blocks for you (a **bounded** long-poll — until the task is terminal or a timeout, never an unbounded hold) so you don't busy-poll; `dispatch_cancel` stops a run — or a whole `plan_id` — by killing its process group.
 - **Watch + steer** — `dispatch_logs` shows a curated, live timeline of what the backend is doing (codex rollout logs or dispatch-owned OpenCode event JSONL, noise filtered, line-range paged to dodge output limits; default kinds include plaintext OpenCode reasoning but exclude encrypted codex reasoning); `dispatch_steer` interrupts a run and resumes the *same* backend session with a new instruction — its context and the files it already wrote are preserved — as a linked follow-up task. A "watch → redirect" loop, not just fire-and-forget.
@@ -59,7 +59,7 @@ Asynchronous **hierarchical delegation** — hand an execution step to an extern
 - **Server-enforced guards** — working_dir must canonicalize within the project tree (widen with the `DISPATCH_EXTRA_ROOTS` env var); the sandbox ceiling blocks `danger-full-access` unless `DISPATCH_ALLOW_DANGER=1`; one active run per directory unless `allow_concurrent`. Codex uses its CLI sandbox; OpenCode uses OpenCode permission rules plus dispatch's directory guard, not an OS sandbox. Rejections come back as a structured `{error:{code,message}}` so a caller branches on the code rather than parsing prose.
 - **Execution policy + approval gate** — `make configure` generates `dispatch-prefs.md` with a `conservative` / `preference-only` / `proactive` execution policy plus a separate approval mode. Because dispatch runs write-capable, `approval mode: ask` still confirms working_dir + step scope + approval granularity before the first submit; `approval mode: auto` pre-authorizes that prompt within server guards. Policy in `claude-agent-kit--dispatch.md`.
 
-Requires a supported backend CLI: [codex](https://github.com/openai/codex) (`npm i -g @openai/codex`) and/or [OpenCode](https://opencode.ai/docs/cli/). `dispatch_backends` reports which are installed.
+Requires a supported backend CLI: [codex](https://github.com/openai/codex) (`npm i -g @openai/codex`), [OpenCode](https://opencode.ai/docs/cli/), and/or [Claude Code](https://claude.com/claude-code) (`npm i -g @anthropic-ai/claude-code`). `dispatch_backends` reports which are installed.
 
 ## Installation
 
@@ -90,7 +90,7 @@ make uninstall    # remove kit-owned files (prompts before removing user-owned o
 make configure    # re-run the aside + dispatch preference prompts
 ```
 
-Uninstall branches on a first-line signature: `<!-- claude-agent-kit -->` files are removed unconditionally, while `<!-- claude-agent-kit-custom... -->` files (your prefs files and any ingested custom rules) are preserved by default. It also surgically unregisters only workslate's own hooks, leaving any other `settings.json` hooks intact.
+Uninstall branches on a first-line signature: kit-managed files carry `<!-- slate-agent-kit:common -->` and are removed, while `<!-- claude-agent-kit-custom... -->` files (your prefs files and any ingested custom rules) are preserved by default. It also surgically unregisters only workslate's own hooks, leaving any other `settings.json` hooks intact.
 
 **Manual** (no script):
 
@@ -98,11 +98,10 @@ Uninstall branches on a first-line signature: `<!-- claude-agent-kit -->` files 
 cp CLAUDE.md ~/.claude/CLAUDE.md && mkdir -p ~/.claude/rules && cp claude-rules/*.md ~/.claude/rules/
 cargo build --release -p workslate && cp target/release/workslate ~/.local/bin/
 codesign --force --sign - ~/.local/bin/workslate   # macOS only
-# shared aside/dispatch come from a slate-agent-kit checkout:
+claude mcp add workslate -s user --transport stdio -- ~/.local/bin/workslate
+# aside + dispatch (with their required env — ASIDE_HARNESS=claude,
+# SLATE_AGENT_STATE_HOME) are registered from a slate-agent-kit checkout:
 #   <slate>/tooling/install-mcp.sh --configure-claude
-claude mcp add workslate -s user --transport stdio -- workslate
-claude mcp add aside     -s user --transport stdio -- aside
-claude mcp add dispatch  -s user --transport stdio -- dispatch
 ```
 
 The main `CLAUDE.md` is core principles + a quick reference (~125 lines); detailed rules live in `claude-rules/` (task-execution, parallel-work, git-workflow, framework-conventions, aside, dispatch, palette) and auto-load from `.claude/rules/`; the `palette-*` skills install to `.claude/skills/`.

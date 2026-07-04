@@ -7,7 +7,7 @@
 
 Default backend when Claude Code decides to ask a cross-family advisor: **@@ASIDE_PREFERRED@@**
 
-Valid values: `none` | `codex` | `copilot`
+Valid values: `none` | `codex` | `copilot` | `claude`
 
 ## Default models (per backend)
 
@@ -15,6 +15,7 @@ When Claude Code calls an aside tool and the user has not named a specific model
 
 - codex default model: **@@ASIDE_CODEX_MODEL@@**
 - copilot default model: **@@ASIDE_COPILOT_MODEL@@**
+- claude default model: **@@ASIDE_CLAUDE_MODEL@@**
 
 ## Default reasoning effort (per backend)
 
@@ -22,6 +23,7 @@ For CLIs that expose a reasoning-effort knob. Passed as the tool's `reasoning_ef
 
 - codex default reasoning effort: **@@ASIDE_CODEX_EFFORT@@**   (`low` / `medium` / `high` / `xhigh`, or blank)
 - copilot default reasoning effort: **@@ASIDE_COPILOT_EFFORT@@** (`low` / `medium` / `high` / `xhigh`, or blank — maps to `copilot --effort`)
+- claude default reasoning effort: **@@ASIDE_CLAUDE_EFFORT@@**  (`low` / `medium` / `high` / `xhigh` / `max`, or blank — maps to `claude --effort`)
 
 ## Default model fallback chain (per backend)
 
@@ -32,6 +34,7 @@ non-transient failure (e.g. auth/permission) is never retried.
 
 - codex default model fallback: **@@ASIDE_CODEX_FALLBACK@@**   (comma-separated; blank = none)
 - copilot default model fallback: **@@ASIDE_COPILOT_FALLBACK@@** (comma-separated; blank = none)
+- claude default model fallback: **@@ASIDE_CLAUDE_FALLBACK@@**  (comma-separated; blank = none)
 
 ## Auto-call policy
 

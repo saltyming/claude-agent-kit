@@ -1,7 +1,7 @@
 <!-- slate-agent-kit:common -->
 # Aside Guidance
 
-Policy for the `aside` MCP server (`mcp__aside__aside_codex` / `aside_copilot` / `aside_list`; Kimi plugin installs may expose the same tools under a plugin-prefixed MCP name). These tools wrap locally-installed third-party CLIs so the agent can ask OpenAI or GitHub model families for a second opinion. If the active harness has its own native advisor/reviewer surface, that surface is separate and stays governed by the harness-specific rule.
+Policy for the `aside` MCP server (`mcp__aside__aside_codex` / `aside_copilot` / `aside_claude` / `aside_list`; Kimi plugin installs may expose the same tools under a plugin-prefixed MCP name). These tools wrap locally-installed third-party CLIs so the agent can ask OpenAI, GitHub, or Anthropic CLI backends for a second opinion. If the active harness has its own native advisor/reviewer surface, that surface is separate and stays governed by the harness-specific rule.
 
 ## Relation to native advisor surfaces
 
@@ -18,7 +18,7 @@ Two surfaces that may coexist:
 | Surface | What | When |
 |---|---|---|
 | harness-native advisor/reviewer (if available) | Native second-review surface. Transcript behavior and parameters are harness-specific. | Lifecycle checkpoints as that harness describes. Unchanged. |
-| `mcp__aside__aside_{codex,copilot}` | Cross-family second opinion via local CLIs. `include_transcript` defaults to `true` — the current conversation is forwarded automatically, **but in redacted form** (text passes through verbatim; `tool_use` / `tool_result` / `thinking` blocks are replaced with placeholders — see **Transcript redaction** below). Both backends run read-only with file-read tools available, so they can inspect files the caller names by path — see **Backend capabilities** below. Hits paid third-party API quota. | Per the user's preference file (see below). Trigger list for `proactive` policy below. |
+| `mcp__aside__aside_{codex,copilot,claude}` | Second opinion via local CLIs. `include_transcript` defaults to `true` — the current conversation is forwarded automatically, **but in redacted form** (text passes through verbatim; `tool_use` / `tool_result` / `thinking` blocks are replaced with placeholders — see **Transcript redaction** below). All backends run read-only with file-read tools available, so they can inspect files the caller names by path — see **Backend capabilities** below. Hits paid third-party API quota. In Claude Code, `aside_claude` is a separate local Claude CLI advisor, not a cross-family opinion. | Per the user's preference file (see below). Trigger list for `proactive` policy below. |
 
 **Relation to `dispatch`.** `aside` *asks* (read-only); `dispatch` *does* (write-capable, async). The full aside↔dispatch↔native-delegate taxonomy is stated once in `claude-agent-kit--parallel-work.md` — don't conflate the surfaces.
 
@@ -67,10 +67,10 @@ If both surfaces exist, both run by default on these triggers, unless the user e
 
 ## Passing model and reasoning_effort
 
-- If the user named a specific model this turn ("ask codex with gpt-5.4"), pass that value as `model`.
+- If the user named a specific model this turn ("ask codex with gpt-5.4", "ask claude with sonnet"), pass that value as `model`.
 - Otherwise, read the default from `claude-agent-kit--aside-prefs.md` for that backend and pass it as `model`.
 - If neither is set, omit `model` so the CLI uses its own default.
-- Same flow for `reasoning_effort` (both codex and copilot accept it).
+- Same flow for `reasoning_effort` (codex, copilot, and claude accept it; claude also accepts `max`).
 - If the user named a fallback chain this turn, or `claude-agent-kit--aside-prefs.md` sets a default model fallback chain for the backend in play (a comma-separated list), split it on commas, trim whitespace, and pass it as `model_fallback`. A transient failure (rate limit, quota, model unavailable, auth/permission) automatically retries against the next entry; the response notes when a fallback model answered instead of the first one tried.
 
 ## Backend capabilities
@@ -81,6 +81,7 @@ The aside MCP server spawns each CLI in the active harness session's cwd with a 
 |---|---|---|---|---|---|---|
 | `aside_codex` | `-s read-only -a never` | ✅ | ✅ | (via sandbox-permitted tools) | ❌ | `-s read-only` blocks writes and shell side effects but permits reads. Reads are scoped by the codex sandbox. |
 | `aside_copilot` | `--allow-all-tools --available-tools=view,rg,glob,web_fetch` | ✅ (`view`) | ✅ (`rg`) | ✅ (`web_fetch`) | ❌ | Whitelist is narrow and intentional — `bash` / `write_bash` / `read_bash` / `task` / `skill` / `sql` / `store_memory` / `report_intent` are excluded so copilot cannot exec shells or mutate state. aside is a consultation surface, not a delegate. |
+| `aside_claude` | `-p --safe-mode --no-session-persistence --permission-mode plan --tools Read,Grep,Glob,WebFetch` | ✅ (`Read`) | ✅ (`Grep`, `Glob`) | ✅ (`WebFetch`) | ❌ | Safe mode disables project customizations/hooks/MCP servers, no session is persisted, and plan permission mode plus the tool list keeps the backend read-only. |
 
 ### Implication: prefer file paths over embedded excerpts
 
@@ -149,7 +150,7 @@ Example — **good** (off-disk data, exception 2):
 
 Every aside call consumes the user's third-party API quota. Rules:
 - Single question per call. No loops. No duplicate calls for the same question.
-- **A `model_fallback` retry is not the loop this rule forbids.** When `model_fallback` is set — via the tool param or a default configured in `claude-agent-kit--aside-prefs.md` — a same-question retry against the next model in that chain, fired automatically by the aside server itself because the prior model failed with a transient backend error (rate limit, quota, model unavailable, auth/permission), is one logical call that happens to make more than one subprocess attempt under the hood — not a second question, and not a speculative duplicate call. "No loops. No duplicate calls for the same question" targets *you* re-asking the same or a rephrased question out of hedging or uncertainty; it does not forbid the server's own internal retry for the SAME question when the prior model could not answer at all. Do not manually re-invoke `aside_codex` / `aside_copilot` yourself to simulate this — configure `model_fallback` (or the prefs default) once and let the server's retry handle it. A manual re-call for the same question after a failure IS the loop this rule forbids; configuring `model_fallback` up front is not.
+- **A `model_fallback` retry is not the loop this rule forbids.** When `model_fallback` is set — via the tool param or a default configured in `claude-agent-kit--aside-prefs.md` — a same-question retry against the next model in that chain, fired automatically by the aside server itself because the prior model failed with a transient backend error (rate limit, quota, model unavailable, auth/permission), is one logical call that happens to make more than one subprocess attempt under the hood — not a second question, and not a speculative duplicate call. "No loops. No duplicate calls for the same question" targets *you* re-asking the same or a rephrased question out of hedging or uncertainty; it does not forbid the server's own internal retry for the SAME question when the prior model could not answer at all. Do not manually re-invoke `aside_codex` / `aside_copilot` / `aside_claude` yourself to simulate this — configure `model_fallback` (or the prefs default) once and let the server's retry handle it. A manual re-call for the same question after a failure IS the loop this rule forbids; configuring `model_fallback` up front is not.
 - Consolidate multiple questions into one prompt when they share context.
 - **A call fired by a `proactive` trigger in the user's prefs is NOT speculative — it's required (unless the user explicitly scoped the work to one surface — Decision rule 6).** Budget expectation: ~1–2 such calls per advisor-paired decision or other triggered scope. "No speculative calls" applies to routine work outside the trigger list, not to the trigger-fired calls themselves.
 - In `conservative` / `preference-only` modes: if the user didn't ask for a cross-family opinion, don't volunteer one for routine work.

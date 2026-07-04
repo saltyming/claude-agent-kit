@@ -4,6 +4,15 @@ All notable changes to Claude Agent Kit are documented here. Format loosely base
 
 Version numbers track the `Version` field in `CLAUDE.md`. Most entries correspond to operating-manual revisions and accompanying MCP server changes; the two ship together.
 
+## [10.2.0] - 2026-07-05
+
+**aside claude backend + installer/prefs hardening.** Adds a local `claude` advisor backend to the shared `aside` server, fixes a Codex-side MCP tool-call timeout on long calls, and consolidates the installer/prefs machinery across all three kits.
+
+- **aside**: new `aside_claude` backend; `model_fallback` now classifies claude's unknown-model error (printed on stdout, not stderr) correctly; the server emits MCP `notifications/progress` during long calls so a progress-aware client resets its per-tool-call timeout instead of aborting. dispatch's errkind is kept in sync.
+- **Install (`install.sh` / `install.ps1` / `Makefile`)**: `--uninstall` now matches the actual `slate-agent-kit:common` signature — previously a no-op that left every rule/skill installed; an unmanaged `~/.claude/CLAUDE.md` is backed up before overwrite; `workslate` registers by absolute path; adds `--help` / `--skip-mcp`; bare `make` defaults to `help`.
+- **Prefs**: now uses the single shared `configure-prefs.sh` (interactive-first, injection-safe, all knobs) + a `configure-prefs.ps1` Windows twin, replacing the bespoke `configure-aside.sh` / `configure-dispatch.sh`.
+- **README**: documents the claude dispatch backend and corrects the uninstall signature + manual registration.
+
 ## [10.1.0] - 2026-07-03
 
 **INV-QUALITY-1 — durable implementation (rules-only release).** The corpus defended delivery *scope* (no shrinking, no placeholder stubs) but had no invariant against short-horizon *implementation* — patches that satisfy the triggering case on the authoring machine while breaking elsewhere in the code's already-declared support surface. Prompted by a real CI failure in the shared MCP crates: a unix-only path-separator test assertion and slash-only slug formulas that broke on Windows.
