@@ -4,6 +4,12 @@ All notable changes to Claude Agent Kit are documented here. Format loosely base
 
 Version numbers track the `Version` field in `CLAUDE.md`. Most entries correspond to operating-manual revisions and accompanying MCP server changes; the two ship together.
 
+## [10.2.3] - 2026-07-06
+
+**dispatch poll responses slimmed — no more re-echoing the whole spec on every poll.** Polling a long-running dispatch task re-sent the entire submitted spec on every call, burning the caller's context.
+
+- **dispatch**: `dispatch_status` is compact by default — the accepted `spec`, the rendered `prompt`, and `argv` move behind a new `include_spec` param (default false); the terminal `result`/`error` still return. `dispatch_logs` / `dispatch_wait` collapse the backend's initial prompt echo (and opencode's duplicate `[opencode]` re-echo) to a one-line placeholder for fresh submits, matched by canonical content vs the stored prompt so a steered task's new instruction stays visible; bare `</think>` markers are dropped. Verified for codex/opencode/claude via synthetic fixtures.
+
 ## [10.2.2] - 2026-07-06
 
 **`dispatch_steer` inherits / can override `allow_concurrent`.** Steer previously had no `allow_concurrent` and always enforced the one-run-per-working_dir guard on its resume, so a task in a directory with other concurrent runs (submitted `allow_concurrent=true`) could not be steered — it hit `dir_busy` with no bypass.
