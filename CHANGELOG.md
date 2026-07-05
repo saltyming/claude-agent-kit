@@ -4,6 +4,14 @@ All notable changes to Claude Agent Kit are documented here. Format loosely base
 
 Version numbers track the `Version` field in `CLAUDE.md`. Most entries correspond to operating-manual revisions and accompanying MCP server changes; the two ship together.
 
+## [10.2.1] - 2026-07-05
+
+**aside / dispatch recursion guard (security fix).** Closes a fork-bomb vector where a backend spawned by `aside`/`dispatch` — while still having them registered as MCP servers — could re-invoke them and spawn another backend without bound (reproduced live: `codex → aside → claude`).
+
+- **aside**: every backend is now spawned with no MCP servers at all — codex gains `exec --ignore-user-config` (auth still resolves from the codex home), joining claude's `--safe-mode` and copilot's read-only tool whitelist. An aside backend can therefore never call `aside` (or `dispatch`) again. A defense-in-depth `ASIDE_REENTRY_DEPTH` env marker + a `dispatch()`-entry guard back it up.
+- **dispatch**: blocks dispatch→dispatch. A `DISPATCH_REENTRY_DEPTH` env marker (stamped on every spawned backend, refused at `dispatch_submit` / `dispatch_steer`) guards the claude and opencode backends, which forward their process env to the MCP servers they boot; codex does **not** forward env, so it is guarded fail-closed by spawning it with `-c mcp_servers.dispatch.enabled=false`. `aside` is left enabled, so dispatch→aside stays allowed. New structured error code `reentrant`.
+- Depth parsing fails closed (`var_os`; a malformed marker refuses rather than reading as top-level).
+
 ## [10.2.0] - 2026-07-05
 
 **aside claude backend + installer/prefs hardening.** Adds a local `claude` advisor backend to the shared `aside` server, fixes a Codex-side MCP tool-call timeout on long calls, and consolidates the installer/prefs machinery across all three kits.

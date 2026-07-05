@@ -79,9 +79,11 @@ The aside MCP server spawns each CLI in the active harness session's cwd with a 
 
 | Backend | CLI flags | Read files | Grep | Web fetch | Write / exec | Notes |
 |---|---|---|---|---|---|---|
-| `aside_codex` | `-s read-only -a never` | ✅ | ✅ | (via sandbox-permitted tools) | ❌ | `-s read-only` blocks writes and shell side effects but permits reads. Reads are scoped by the codex sandbox. |
-| `aside_copilot` | `--allow-all-tools --available-tools=view,rg,glob,web_fetch` | ✅ (`view`) | ✅ (`rg`) | ✅ (`web_fetch`) | ❌ | Whitelist is narrow and intentional — `bash` / `write_bash` / `read_bash` / `task` / `skill` / `sql` / `store_memory` / `report_intent` are excluded so copilot cannot exec shells or mutate state. aside is a consultation surface, not a delegate. |
+| `aside_codex` | `-s read-only -a never exec --ignore-user-config` | ✅ | ✅ | (via sandbox-permitted tools) | ❌ | `-s read-only` blocks writes and shell side effects but permits reads. `--ignore-user-config` makes the spawned codex skip `~/.codex/config.toml`, so it loads **no MCP servers** (neither `aside` nor `dispatch`) and cannot recurse back into aside; auth is unaffected (the codex home's `auth.json` is a separate file). Reads are scoped by the codex sandbox. |
+| `aside_copilot` | `--allow-all-tools --available-tools=view,rg,glob,web_fetch` | ✅ (`view`) | ✅ (`rg`) | ✅ (`web_fetch`) | ❌ | Whitelist is narrow and intentional — `bash` / `write_bash` / `read_bash` / `task` / `skill` / `sql` / `store_memory` / `report_intent` are excluded so copilot cannot exec shells or mutate state, and MCP tools are outside the whitelist. aside is a consultation surface, not a delegate. |
 | `aside_claude` | `-p --safe-mode --no-session-persistence --permission-mode plan --tools Read,Grep,Glob,WebFetch` | ✅ (`Read`) | ✅ (`Grep`, `Glob`) | ✅ (`WebFetch`) | ❌ | Safe mode disables project customizations/hooks/MCP servers, no session is persisted, and plan permission mode plus the tool list keeps the backend read-only. |
+
+**Backends carry no MCP servers — recursion is structurally impossible.** Each backend is spawned so it exposes zero MCP tools: codex via `--ignore-user-config`, claude via `--safe-mode`, copilot via its `--available-tools` whitelist. This enforces the invariant that *an aside backend never uses an MCP server* — in particular it can never call `aside` (or `dispatch`) again, so `aside → backend → aside → …` fork-bomb recursion cannot happen. A defense-in-depth env marker (`ASIDE_REENTRY_DEPTH`) is additionally stamped on every spawned backend and inherited down its process tree; if a nested aside call ever reached the server despite the above, it is refused before any spawn.
 
 ### Implication: prefer file paths over embedded excerpts
 
