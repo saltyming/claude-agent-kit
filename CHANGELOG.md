@@ -4,6 +4,12 @@ All notable changes to Claude Agent Kit are documented here. Format loosely base
 
 Version numbers track the `Version` field in `CLAUDE.md`. Most entries correspond to operating-manual revisions and accompanying MCP server changes; the two ship together.
 
+## [10.2.2] - 2026-07-06
+
+**`dispatch_steer` inherits / can override `allow_concurrent`.** Steer previously had no `allow_concurrent` and always enforced the one-run-per-working_dir guard on its resume, so a task in a directory with other concurrent runs (submitted `allow_concurrent=true`) could not be steered — it hit `dir_busy` with no bypass.
+
+- **dispatch**: `allow_concurrent` is now persisted on the task row (additive, backward-compatible SQLite column — old `dispatch.db` files backfill to false). `dispatch_steer` inherits the parent task's `allow_concurrent` by default and accepts an explicit `allow_concurrent` override (`false` re-enforces the guard); the steer row persists the effective value so a chain of steers keeps inheriting. Tests cover round-trip, old-DB migration, and override precedence.
+
 ## [10.2.1] - 2026-07-05
 
 **aside / dispatch recursion guard (security fix).** Closes a fork-bomb vector where a backend spawned by `aside`/`dispatch` — while still having them registered as MCP servers — could re-invoke them and spawn another backend without bound (reproduced live: `codex → aside → claude`).
