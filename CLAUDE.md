@@ -1,8 +1,8 @@
 <!-- slate-agent-kit:common -->
 # Claude Agent Operating Manual
 
-**Version**: 10.2.3
-**Last Updated**: 2026-07-03
+**Version**: 10.2.4
+**Last Updated**: 2026-07-08
 
 > Operating rules for Claude Code agents. This kernel defines the
 > **invariants** (each stated exactly once, with a stable ID) and names the

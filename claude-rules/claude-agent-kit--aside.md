@@ -157,6 +157,20 @@ Every aside call consumes the user's third-party API quota. Rules:
 - **A call fired by a `proactive` trigger in the user's prefs is NOT speculative — it's required (unless the user explicitly scoped the work to one surface — Decision rule 6).** Budget expectation: ~1–2 such calls per advisor-paired decision or other triggered scope. "No speculative calls" applies to routine work outside the trigger list, not to the trigger-fired calls themselves.
 - In `conservative` / `preference-only` modes: if the user didn't ask for a cross-family opinion, don't volunteer one for routine work.
 
+## Question framing — ask for an assessment, not a confirmation
+
+The aside server's own prompt framing now makes every backend independently evaluate a question's premise rather than rubber-stamp it — but that is defense-in-depth, not a substitute for asking well. A backend given a leading or loaded question can still anchor on your framing instead of the evidence.
+
+Phrase `question` as a request to assess or verify, not to confirm a conclusion you already reached. If your own diagnosis or fix matters to the answer, state it explicitly as a hypothesis to check, not as settled fact.
+
+Avoid:
+> "I fixed the race condition by adding a mutex around X — confirm this is correct."
+
+Prefer:
+> "Read `src/sync/lock.rs` and its callers. Assess whether the locking change prevents the race described in the transcript without introducing a deadlock. My hypothesis is that a mutex around X is sufficient — tell me if that's wrong and why."
+
+This matters most exactly when you are most confident — a leader already anchored on its own conclusion is the case this guidance exists to catch, not the case where you're genuinely unsure.
+
 ## Reporting
 
 Summarize the aside tool's reply for the user in 2–4 sentences — the conclusion and any concrete disagreement with your own thinking. Do not paste the full output unless the user asks. The full reply informs *your* decision-making; the user gets the takeaway.

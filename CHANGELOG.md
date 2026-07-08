@@ -4,6 +4,13 @@ All notable changes to Claude Agent Kit are documented here. Format loosely base
 
 Version numbers track the `Version` field in `CLAUDE.md`. Most entries correspond to operating-manual revisions and accompanying MCP server changes; the two ship together.
 
+## [10.2.4] - 2026-07-08
+
+**aside prompt hardened against leading-question anchoring bias.** A leading/loaded question from the leader (e.g. "I fixed the race condition by adding a mutex — confirm this is correct") let the backend rubber-stamp the framing instead of independently checking the premise, defeating the point of a cross-family second opinion.
+
+- **aside**: `ROLE_FRAMING` now frames the backend's role as an independent second opinion rather than just "reviewing work". A new `INDEPENDENCE_REMINDER` is appended as the prompt's final section — after the question, not just folded into the top — so it isn't diluted by a large context/transcript block and lands with maximum salience right before the backend generates its answer. Guards against overcorrection: the backend still answers plainly when the premise holds, and answers simple factual questions directly. New `compose_prompt` unit tests cover section ordering, the no-context/no-transcript case, and continuation-join substring checks on the new multi-line literals (none existed before).
+- **rules**: `claude-agent-kit--aside.md` gets a new "Question framing" section instructing the leader to phrase `question`/`context` as an assessment to verify, not a conclusion to confirm.
+
 ## [10.2.3] - 2026-07-06
 
 **dispatch poll responses slimmed — no more re-echoing the whole spec on every poll.** Polling a long-running dispatch task re-sent the entire submitted spec on every call, burning the caller's context.
