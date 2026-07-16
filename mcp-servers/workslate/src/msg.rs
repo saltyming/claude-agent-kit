@@ -1,296 +1,27 @@
-use std::collections::HashSet;
-use std::fmt;
+//! Messaging domain: param structs, schema, migrations, sender attribution.
+//!
+//! workslate's charter after v11 is mid-turn team messaging ONLY — the task
+//! tracker (ws:/team: namespaces, footer doorbell) was retired in favor of the
+//! harness-native task tools. What remains is the thing the harness does not
+//! do: native SendMessage delivers at turn boundaries, so a busy teammate
+//! cannot be steered mid-task; workslate's inbox + PreToolUse doorbell close
+//! that gap. Message scope is the Claude session id itself (leader and
+//! teammates share one), so there is no named-session bootstrap to remember.
 
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-// ── Namespace + TaskId ───────────────────────────────────
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Namespace {
-    Ws,
-    Team,
-}
-
-impl Namespace {
-    pub fn as_str(&self) -> &str {
-        match self {
-            Namespace::Ws => "ws",
-            Namespace::Team => "team",
-        }
-    }
-
-    pub fn parse(s: &str) -> Result<Self, String> {
-        match s {
-            "ws" => Ok(Namespace::Ws),
-            "team" => Ok(Namespace::Team),
-            other => Err(format!(
-                "Unknown namespace '{}'. Must be 'ws' or 'team'",
-                other
-            )),
-        }
-    }
-}
-
-impl fmt::Display for Namespace {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TaskId {
-    pub namespace: Namespace,
-    pub id: u32,
-}
-
-impl TaskId {
-    pub fn parse(s: &str) -> Result<Self, String> {
-        if let Some((ns, id_str)) = s.split_once(':') {
-            let namespace = Namespace::parse(ns)?;
-            let id = id_str
-                .parse::<u32>()
-                .map_err(|_| format!("Invalid task ID number: '{}'", id_str))?;
-            Ok(TaskId { namespace, id })
-        } else {
-            let id = s
-                .parse::<u32>()
-                .map_err(|_| format!("Invalid task ID: '{}'. Use N, ws:N, or team:N", s))?;
-            Ok(TaskId {
-                namespace: Namespace::Ws,
-                id,
-            })
-        }
-    }
-
-    pub fn display(&self) -> String {
-        format!("{}:{}", self.namespace.as_str(), self.id)
-    }
-}
-
-impl fmt::Display for TaskId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.namespace, self.id)
-    }
-}
-
-// ── Task status ──────────────────────────────────────────
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum TaskStatus {
-    Pending,
-    InProgress,
-    Done,
-    Blocked,
-}
-
-impl TaskStatus {
-    pub fn parse(s: &str) -> Result<Self, String> {
-        match s {
-            "pending" => Ok(TaskStatus::Pending),
-            "in_progress" => Ok(TaskStatus::InProgress),
-            "done" => Ok(TaskStatus::Done),
-            "blocked" => Ok(TaskStatus::Blocked),
-            other => Err(format!(
-                "Invalid status '{}'. Must be: pending, in_progress, done, blocked",
-                other
-            )),
-        }
-    }
-}
-
-// ── Task (loaded from SQLite) ────────────────────────────
-
-#[derive(Debug, Clone)]
-pub struct Task {
-    pub namespace: Namespace,
-    pub id: u32,
-    pub name: String,
-    pub description: Option<String>,
-    pub status: TaskStatus,
-    pub owner: Option<String>,
-    pub depends_on: Vec<TaskId>,
-}
-
-impl Task {
-    pub fn display_id(&self) -> String {
-        format!("{}:{}", self.namespace, self.id)
-    }
-}
-
-// ── SQLite helpers ───────────────────────────────────────
-
-pub fn parse_depends_on(json_str: &str) -> Vec<TaskId> {
-    serde_json::from_str::<Vec<String>>(json_str)
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|s| TaskId::parse(s).ok())
-        .collect()
-}
-
-pub fn serialize_depends_on(deps: &[TaskId]) -> String {
-    let strings: Vec<String> = deps.iter().map(|d| d.display()).collect();
-    serde_json::to_string(&strings).unwrap_or_else(|_| "[]".to_string())
-}
-
-pub fn recompute_blocked_status(
-    conn: &rusqlite::Connection,
-    session: &str,
-) -> rusqlite::Result<()> {
-    let done_ids: HashSet<String> = {
-        let mut stmt =
-            conn.prepare("SELECT namespace, id FROM tasks WHERE session = ? AND status = 'done'")?;
-        let rows = stmt.query_map(rusqlite::params![session], |row| {
-            let ns: String = row.get(0)?;
-            let id: u32 = row.get(1)?;
-            Ok(format!("{}:{}", ns, id))
-        })?;
-        rows.filter_map(|r| r.ok()).collect()
-    };
-
-    let mut stmt = conn.prepare(
-        "SELECT namespace, id, depends_on FROM tasks WHERE session = ? AND status IN ('pending', 'blocked')",
-    )?;
-    let updatable: Vec<(String, u32, String)> = stmt
-        .query_map(rusqlite::params![session], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    let mut update_stmt = conn.prepare(
-        "UPDATE tasks SET status = ?, updated_at = datetime('now') WHERE session = ? AND namespace = ? AND id = ?",
-    )?;
-
-    for (ns, id, deps_json) in &updatable {
-        let deps = parse_depends_on(deps_json);
-        let new_status = if deps.is_empty() || deps.iter().all(|d| done_ids.contains(&d.display()))
-        {
-            "pending"
-        } else {
-            "blocked"
-        };
-        update_stmt.execute(rusqlite::params![new_status, session, ns, id])?;
-    }
-
-    Ok(())
-}
-
-pub fn load_tasks(
-    conn: &rusqlite::Connection,
-    session: &str,
-    namespace_filter: Option<&str>,
-) -> rusqlite::Result<Vec<Task>> {
-    let sql = if namespace_filter.is_some() {
-        "SELECT namespace, id, name, description, status, owner, depends_on \
-         FROM tasks WHERE session = ? AND namespace = ? ORDER BY namespace, id"
-    } else {
-        "SELECT namespace, id, name, description, status, owner, depends_on \
-         FROM tasks WHERE session = ? ORDER BY namespace, id"
-    };
-
-    let mut stmt = conn.prepare(sql)?;
-    let rows = if let Some(ns) = namespace_filter {
-        stmt.query_map(rusqlite::params![session, ns], row_to_task)?
-    } else {
-        stmt.query_map(rusqlite::params![session], row_to_task)?
-    };
-
-    Ok(rows.filter_map(|r| r.ok()).collect())
-}
-
-fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
-    let ns_str: String = row.get(0)?;
-    let id: u32 = row.get(1)?;
-    let name: String = row.get(2)?;
-    let description: Option<String> = row.get(3)?;
-    let status_str: String = row.get(4)?;
-    let owner: Option<String> = row.get(5)?;
-    let deps_json: String = row.get(6)?;
-
-    Ok(Task {
-        namespace: Namespace::parse(&ns_str).unwrap_or(Namespace::Ws),
-        id,
-        name,
-        description,
-        status: TaskStatus::parse(&status_str).unwrap_or(TaskStatus::Pending),
-        owner,
-        depends_on: parse_depends_on(&deps_json),
-    })
-}
-
-// ── Task param structs ───────────────────────────────────
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct TaskCreateParams {
-    /// Name/title of the task
-    pub name: String,
-    /// Optional description with more detail
-    pub description: Option<String>,
-    /// Task IDs this depends on (JSON array of strings, e.g. `["ws:1", "team:2"]`).
-    /// Must be a JSON array — do NOT pass a stringified array like `"[\"ws:1\"]"`.
-    /// Supports ID forms: "3", "ws:3", "team:2".
-    #[serde(default, deserialize_with = "crate::lenient::lenient_opt_vec_string")]
-    pub depends_on: Option<Vec<String>>,
-    /// Namespace: "ws" (default) or "team"
-    pub namespace: Option<String>,
-    /// Owner name (for team tasks — who owns/claims this task)
-    pub owner: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct TaskDoneParams {
-    /// Task ID: "3", "ws:3", or "team:3"
-    pub id: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct TaskUpdateParams {
-    /// Task ID: "3", "ws:3", or "team:3"
-    pub id: String,
-    /// New status: pending, in_progress, done, blocked
-    pub status: Option<String>,
-    /// New description
-    pub description: Option<String>,
-    /// New owner (for team tasks)
-    pub owner: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct TaskInitParams {
-    /// Name of the task session (e.g., "auth-refactor")
-    pub name: String,
-    /// This Claude session's id (from the workslate SessionStart hint). Pass it
-    /// so the task-status doorbell can resolve this session; falls back to the
-    /// server env id when omitted. See RegisterParams.session_id.
-    pub session_id: Option<String>,
-    /// This subagent's agent_id (from the workslate SubagentStart hint). Subagents
-    /// share the parent's CLAUDE_CODE_SESSION_ID, so agent_id is what distinguishes a
-    /// teammate from the main session in the composite (claude_session_id, agent_id)
-    /// identity. Empty/omitted for the main session (its hook stdin carries none).
-    pub agent_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct TaskListParams {
-    /// Filter by namespace: "ws", "team", or omit for all
-    pub namespace: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct TaskClearParams {
-    /// Clear only this namespace: "ws", "team", or omit to clear all
-    pub namespace: Option<String>,
-}
+// ── Param structs ────────────────────────────────────────
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RegisterParams {
-    /// Your role name (e.g. "backend-dev"). The durable identity that messages
-    /// are addressed to; maps this Claude session to the role for the doorbell hooks.
+    /// Your role name (e.g. "backend-dev" — for a spawned teammate, use your
+    /// agent name so native SendMessage traffic addressed to that name reaches
+    /// your inbox too). The durable identity messages are addressed to.
     pub role: String,
     /// This Claude session's id — the value the workslate SessionStart hint gave
     /// you (`[workslate] session_id=...`). Pass it so the doorbell hooks (which see
-    /// the conversation session id on their stdin) can resolve this session. The
+    /// the conversation session id on their stdin) can resolve this agent. The
     /// MCP server's own env id does NOT match the hook's, so this must come from
     /// the hint. Falls back to the server env id only when omitted.
     pub session_id: Option<String>,
@@ -305,7 +36,8 @@ pub struct RegisterParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct MsgSendParams {
-    /// Recipient role name (the owner/role the message is addressed to)
+    /// Recipient role name (the registered role — for spawned teammates,
+    /// their agent name).
     pub recipient: String,
     /// One-line subject shown in the recipient's inbox doorbell
     pub subject: String,
@@ -321,18 +53,17 @@ pub struct MsgSendParams {
     /// in a shared-process team.
     pub sender: Option<String>,
     /// This Claude session's id (from the workslate SessionStart/SubagentStart
-    /// hint). With agent_id, identifies THIS caller so its registered role can be
-    /// used as the sender. Needed for correct attribution in a shared-process team
-    /// (leader + teammates share one MCP server, so the in-process role cache alone
-    /// is last-writer-wins). Falls back to the server env id when omitted.
+    /// hint). Scopes the message AND, with agent_id, identifies THIS caller so its
+    /// registered role can be used as the sender. Falls back to the server env id
+    /// when omitted.
     pub session_id: Option<String>,
     /// This subagent's agent_id (from the workslate SubagentStart hint). The second
     /// half of the composite identity that tells a teammate apart from the parent
     /// session (they share CLAUDE_CODE_SESSION_ID). REQUIRED whenever a session_id is
     /// in effect: the leader passes an explicit empty string (its `(session_id, "")`
     /// identity), teammates pass their SubagentStart agent_id. Omitting it while a
-    /// session is resolvable is rejected by `workslate_msg_send` — an omitted agent_id
-    /// would collapse to the leader's row and mis-attribute the message as `team-lead`.
+    /// session is resolvable is rejected — an omitted agent_id would collapse to the
+    /// leader's row and mis-attribute the message as the leader's.
     pub agent_id: Option<String>,
 }
 
@@ -340,138 +71,21 @@ pub struct MsgSendParams {
 pub struct InboxReadParams {
     /// Your role name. Returns unread messages addressed to this role and marks them read.
     pub role: String,
+    /// This Claude session's id (from the workslate hint) — the message scope.
+    /// Falls back to the server env id when omitted.
+    pub session_id: Option<String>,
 }
 
-// ── Task footer rendering ────────────────────────────────
+// ── Schema ───────────────────────────────────────────────
 
-pub fn render_task_footer(tasks: &[Task], session: &str) -> String {
-    if tasks.is_empty() {
-        return String::new();
-    }
-
-    let ws_total = tasks
-        .iter()
-        .filter(|t| t.namespace == Namespace::Ws)
-        .count();
-    let ws_done = tasks
-        .iter()
-        .filter(|t| t.namespace == Namespace::Ws && t.status == TaskStatus::Done)
-        .count();
-    let team_total = tasks
-        .iter()
-        .filter(|t| t.namespace == Namespace::Team)
-        .count();
-    let team_done = tasks
-        .iter()
-        .filter(|t| t.namespace == Namespace::Team && t.status == TaskStatus::Done)
-        .count();
-
-    let mut counters = Vec::new();
-    if ws_total > 0 {
-        counters.push(format!("ws:[{}/{}]", ws_done, ws_total));
-    }
-    if team_total > 0 {
-        counters.push(format!("team:[{}/{}]", team_done, team_total));
-    }
-    let counter_str = counters.join(" ");
-
-    let mut lines = Vec::new();
-    lines.push(format!(
-        "── Tasks ({}) {} ──────────────────────────",
-        session, counter_str
-    ));
-
-    let total_done = ws_done + team_done;
-    if total_done >= 3 {
-        let mut parts = Vec::new();
-        if ws_done > 0 {
-            parts.push(format!("{} ws", ws_done));
-        }
-        if team_done > 0 {
-            parts.push(format!("{} team", team_done));
-        }
-        lines.push(format!("  ✓ {} done", parts.join(", ")));
-    } else {
-        for task in tasks.iter().filter(|t| t.status == TaskStatus::Done) {
-            lines.push(format!("  ✓ {}. {}", task.display_id(), task.name));
-        }
-    }
-
-    let mut remaining_slots: usize = 3;
-    for task in tasks.iter().filter(|t| t.status == TaskStatus::InProgress) {
-        if remaining_slots == 0 {
-            break;
-        }
-        let owner_str = task
-            .owner
-            .as_ref()
-            .map(|o| format!(" (owner: {})", o))
-            .unwrap_or_default();
-        lines.push(format!(
-            "  → {}.{}  {} ← in_progress",
-            task.display_id(),
-            task.name,
-            owner_str
-        ));
-        remaining_slots -= 1;
-    }
-
-    let pending_blocked: Vec<&Task> = tasks
-        .iter()
-        .filter(|t| t.status == TaskStatus::Pending || t.status == TaskStatus::Blocked)
-        .collect();
-
-    let show_count = remaining_slots.min(pending_blocked.len());
-    for task in pending_blocked.iter().take(show_count) {
-        let owner_str = task
-            .owner
-            .as_ref()
-            .map(|o| format!(" (owner: {})", o))
-            .unwrap_or_default();
-        let mut line = format!("    {}.{}{}", task.display_id(), task.name, owner_str);
-        if task.status == TaskStatus::Blocked && !task.depends_on.is_empty() {
-            let dep_ids: Vec<String> = task.depends_on.iter().map(|d| d.display()).collect();
-            line.push_str(&format!("  (blocked by: {})", dep_ids.join(", ")));
-        }
-        lines.push(line);
-    }
-
-    let hidden = pending_blocked.len().saturating_sub(show_count);
-    if hidden > 0 {
-        lines.push(format!("    ... and {} more", hidden));
-    }
-
-    lines.push("──────────────────────────────────────────".to_string());
-    lines.join("\n")
-}
-
-// ── Schema initialization ────────────────────────────────
-
+/// Messaging schema. The retired task tables (`tasks`, `task_counters`) are
+/// deliberately NOT dropped from existing databases — old data stays readable
+/// with external tools — they are simply no longer created or touched.
+///
+/// `messages.task_session` (historical column name, kept for data
+/// compatibility) now stores the Claude session id — the scope a leader and
+/// its teammates share automatically.
 pub const SCHEMA_SQL: &str = "\
-CREATE TABLE IF NOT EXISTS tasks (
-    session    TEXT    NOT NULL,
-    namespace  TEXT    NOT NULL DEFAULT 'ws',
-    id         INTEGER NOT NULL,
-    name       TEXT    NOT NULL,
-    description TEXT,
-    status     TEXT    NOT NULL DEFAULT 'pending',
-    owner      TEXT,
-    depends_on TEXT    NOT NULL DEFAULT '[]',
-    created_at TEXT    NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT    NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (session, namespace, id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_tasks_session_ns_status
-    ON tasks(session, namespace, status);
-
-CREATE TABLE IF NOT EXISTS task_counters (
-    session   TEXT NOT NULL,
-    namespace TEXT NOT NULL,
-    next_id   INTEGER NOT NULL DEFAULT 1,
-    PRIMARY KEY (session, namespace)
-);
-
 CREATE TABLE IF NOT EXISTS messages (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     task_session   TEXT    NOT NULL,
@@ -492,7 +106,9 @@ CREATE INDEX IF NOT EXISTS idx_messages_inbox
 /// primary key from `claude_session_id` alone to the composite
 /// `(claude_session_id, agent_id)`. `migrate_db` rebuilds the old shape and
 /// (re)creates the table, so the single source of truth lives here.
-const SESSION_CONTEXT_DDL: &str = "\
+/// `task_session` (historical name) holds the message scope — since v11 the
+/// Claude session id itself.
+pub const SESSION_CONTEXT_DDL: &str = "\
 CREATE TABLE IF NOT EXISTS session_context (
     claude_session_id TEXT NOT NULL,
     agent_id          TEXT NOT NULL DEFAULT '',
@@ -539,6 +155,41 @@ pub fn migrate_db(conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Upsert an agent's `(claude_session_id, agent_id) → (scope, role)` row.
+///
+/// `keep_existing_role=false` (workslate_register): the caller states its role —
+/// overwrite. `keep_existing_role=true` (SubagentStart auto-registration): a
+/// best-effort default that must never clobber a role an agent set itself.
+pub fn upsert_session_context(
+    conn: &rusqlite::Connection,
+    claude_session_id: &str,
+    agent_id: &str,
+    scope: &str,
+    role: Option<&str>,
+    keep_existing_role: bool,
+) -> rusqlite::Result<()> {
+    let sql = if keep_existing_role {
+        "INSERT INTO session_context (claude_session_id, agent_id, task_session, role, updated_at) \
+         VALUES (?, ?, ?, ?, datetime('now')) \
+         ON CONFLICT(claude_session_id, agent_id) DO UPDATE SET \
+             task_session = excluded.task_session, \
+             role = COALESCE(role, excluded.role), \
+             updated_at = datetime('now')"
+    } else {
+        "INSERT INTO session_context (claude_session_id, agent_id, task_session, role, updated_at) \
+         VALUES (?, ?, ?, ?, datetime('now')) \
+         ON CONFLICT(claude_session_id, agent_id) DO UPDATE SET \
+             task_session = excluded.task_session, \
+             role = excluded.role, \
+             updated_at = datetime('now')"
+    };
+    conn.execute(
+        sql,
+        rusqlite::params![claude_session_id, agent_id, scope, role],
+    )?;
+    Ok(())
+}
+
 /// Resolve the `sender` attribution for an outgoing message.
 ///
 /// Priority:
@@ -554,7 +205,7 @@ pub fn migrate_db(conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
 /// is last-writer-wins and cannot attribute the true caller. The composite key —
 /// the same identity the doorbell hooks resolve — distinguishes them, so callers
 /// pass their session_id/agent_id (from the SessionStart/SubagentStart hint) just
-/// as they do for register/task_init.
+/// as they do for register.
 pub fn resolve_sender(
     conn: &rusqlite::Connection,
     explicit: Option<String>,
@@ -574,7 +225,7 @@ pub fn resolve_sender(
         // agent_id MUST be explicit to attribute a sender under a (shared) session id.
         // The leader and all teammates share one session_id; an OMITTED agent_id would
         // collapse to the leader's `(session_id, "")` row and mis-attribute the message
-        // as sent by `team-lead`. Refuse to guess (None → NULL sender). An explicit
+        // as sent by the leader. Refuse to guess (None → NULL sender). An explicit
         // empty string IS the leader's own identity and is honoured. The msg_send tool
         // rejects the omitted-agent_id case up front; this is defense in depth.
         let agent_id = agent_id?;
@@ -637,9 +288,34 @@ mod tests {
     }
 
     #[test]
+    fn migrate_leaves_retired_task_tables_untouched() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_SQL).unwrap();
+        // A pre-v11 DB still carries the task tables with data. Retiring the
+        // feature must not destroy that data — the tables are simply orphaned.
+        conn.execute_batch(
+            "CREATE TABLE tasks (session TEXT, namespace TEXT, id INTEGER, name TEXT);
+             CREATE TABLE task_counters (session TEXT, namespace TEXT, next_id INTEGER);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks VALUES ('old-session', 'ws', 1, 'legacy task')",
+            [],
+        )
+        .unwrap();
+
+        migrate_db(&mut conn).unwrap();
+
+        let count: u32 = conn
+            .query_row("SELECT COUNT(*) FROM tasks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1, "retired task data must survive migration");
+    }
+
+    #[test]
     fn migrate_rebuilds_session_context_to_composite_pk() {
         let mut conn = rusqlite::Connection::open_in_memory().unwrap();
-        // Base schema (no session_context — it now lives in SESSION_CONTEXT_DDL), then
+        // Base schema (no session_context — it lives in SESSION_CONTEXT_DDL), then
         // the OLD pre-8.9 single-PK session_context shape to exercise the rebuild path.
         conn.execute_batch(SCHEMA_SQL).unwrap();
         conn.execute_batch(
@@ -720,6 +396,45 @@ mod tests {
     }
 
     #[test]
+    fn upsert_session_context_respects_keep_existing_role() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(SESSION_CONTEXT_DDL).unwrap();
+
+        // Auto-registration (keep_existing_role=true) fills an absent row …
+        upsert_session_context(&conn, "sid", "aX", "sid", Some("researcher"), true).unwrap();
+        let role: Option<String> = conn
+            .query_row(
+                "SELECT role FROM session_context WHERE claude_session_id='sid' AND agent_id='aX'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(role.as_deref(), Some("researcher"));
+
+        // … but never clobbers a role the agent set itself.
+        upsert_session_context(&conn, "sid", "aX", "sid", Some("auto-name"), true).unwrap();
+        let role: Option<String> = conn
+            .query_row(
+                "SELECT role FROM session_context WHERE claude_session_id='sid' AND agent_id='aX'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(role.as_deref(), Some("researcher"), "auto must not clobber");
+
+        // An explicit register (keep_existing_role=false) DOES overwrite.
+        upsert_session_context(&conn, "sid", "aX", "sid", Some("renamed"), false).unwrap();
+        let role: Option<String> = conn
+            .query_row(
+                "SELECT role FROM session_context WHERE claude_session_id='sid' AND agent_id='aX'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(role.as_deref(), Some("renamed"));
+    }
+
+    #[test]
     fn resolve_sender_uses_composite_identity_then_fallback() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(SESSION_CONTEXT_DDL).unwrap();
@@ -766,7 +481,7 @@ mod tests {
             None
         );
         // session_id supplied but agent_id OMITTED -> None. An omitted agent_id must not
-        // collapse to the leader's (session_id, "") row and mis-attribute as team-lead.
+        // collapse to the leader's (session_id, "") row and mis-attribute the sender.
         assert_eq!(
             resolve_sender(&conn, None, Some("sid"), None, Some("fb".into())),
             None

@@ -1,19 +1,22 @@
-//! Hook subcommands for the doorbell + session-start bridge.
+//! Hook subcommands for the messaging doorbell, the SendMessage bridge, and
+//! the session-start bridges.
 //!
 //! Invoked from settings.json hooks:
-//! - `workslate --hook=task` (PostToolUse): render the task-status footer AFTER a
-//!   tool runs, so it reflects that tool's own effect (e.g. task_done shows done on
-//!   the same call). Session-scoped, so it resolves from session_id alone.
-//! - `workslate --hook=inbox` (PreToolUse): nudge BEFORE every tool call (and on
-//!   calls that error or are denied, which PostToolUse skips) that unread messages
-//!   await. Both resolve this Claude session via `session_context`, keyed by the
-//!   composite (session_id, agent_id) identity, and print a
-//!   `hookSpecificOutput.additionalContext` the agent sees on its next inference.
+//! - `workslate --hook=inbox` (PreToolUse, matcher `*`): nudge BEFORE every tool
+//!   call (and on calls that error or are denied, which PostToolUse skips) that
+//!   unread messages await — this is what makes steering land MID-TURN.
+//! - `workslate --hook=send-bridge` (PostToolUse, matcher `SendMessage`): mirror a
+//!   successful native SendMessage call into the workslate inbox, so the RECIPIENT's
+//!   inbox doorbell can announce it before native turn-boundary delivery arrives.
+//!   Senders keep using the native tool they are trained on; no workslate call needed.
 //! - `workslate --hook=session-start` (SessionStart): hand the agent its
-//!   conversation session id so it can pass it to workslate_register/task_init
-//!   — the MCP server's own env id does NOT match the hook's stdin session id.
+//!   conversation session id so it can pass it to workslate_register — the MCP
+//!   server's own env id does NOT match the hook's stdin session id.
+//! - `workslate --hook=subagent-start` (SubagentStart): hand a subagent its
+//!   agent_id + session_id, and best-effort auto-register it under its agent
+//!   name when the hook payload carries one.
 //!
-//! A doorbell must never break a tool call: every error path logs to stderr and
+//! A hook must never break a tool call: every error path logs to stderr and
 //! produces empty stdout (exit 0 = no injection).
 
 use std::io::Read;
@@ -21,30 +24,35 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags};
 
+use crate::msg::upsert_session_context;
 use crate::resolve_tasks_dir;
-use crate::task::{load_tasks, render_task_footer};
 
 #[derive(Clone, Copy)]
 pub enum HookMode {
-    Task,
     Inbox,
+    SendBridge,
     SessionStart,
     SubagentStart,
+    /// `--hook=task` from a pre-v11 settings.json that has not been re-installed.
+    /// Recognized so the invocation exits quietly instead of falling through to
+    /// an MCP-server start on a hook stdin; emits nothing.
+    LegacyTask,
 }
 
-/// Detect the `--hook=task` / `--hook=inbox` flag in argv.
+/// Detect the `--hook=…` flag in argv.
 pub fn parse_hook_mode(args: &[String]) -> Option<HookMode> {
     args.iter().find_map(|a| match a.as_str() {
-        "--hook=task" => Some(HookMode::Task),
         "--hook=inbox" => Some(HookMode::Inbox),
+        "--hook=send-bridge" => Some(HookMode::SendBridge),
         "--hook=session-start" => Some(HookMode::SessionStart),
         "--hook=subagent-start" => Some(HookMode::SubagentStart),
+        "--hook=task" => Some(HookMode::LegacyTask),
         _ => None,
     })
 }
 
-/// Run a doorbell hook. Prints at most one JSON object to stdout and never
-/// surfaces an error to the caller — a failed doorbell must not block a tool.
+/// Run a hook. Prints at most one JSON object to stdout and never surfaces an
+/// error to the caller — a failed hook must not block a tool.
 pub fn run(mode: HookMode) {
     match try_run(mode) {
         Ok(Some(ctx)) => print_additional_context(event_name(mode), &ctx),
@@ -57,11 +65,11 @@ fn event_name(mode: HookMode) -> &'static str {
     match mode {
         HookMode::SessionStart => "SessionStart",
         HookMode::SubagentStart => "SubagentStart",
-        // Task footer fires on PostToolUse so it reflects the just-run tool's own
-        // effect; the inbox nudge stays on PreToolUse (must fire on every call,
-        // including errors/denials, which PostToolUse skips).
-        HookMode::Task => "PostToolUse",
+        // The inbox nudge stays on PreToolUse (must fire on every call, including
+        // errors/denials, which PostToolUse skips); the bridge mirrors AFTER a
+        // successful native send.
         HookMode::Inbox => "PreToolUse",
+        HookMode::SendBridge | HookMode::LegacyTask => "PostToolUse",
     }
 }
 
@@ -81,21 +89,10 @@ fn try_run(mode: HookMode) -> Result<Option<String>, Box<dyn std::error::Error>>
 
     if let HookMode::SessionStart = mode {
         // Hand the agent its conversation session id so it can pass it to
-        // workslate_task_init / workslate_register. No DB lookup needed.
+        // workslate_register. No DB lookup needed.
         return Ok(Some(format!(
-            "[workslate] session_id=`{session_id}` — to enable team task/inbox doorbells, \
-             pass session_id=\"{session_id}\" to workslate_task_init and workslate_register."
-        )));
-    }
-
-    if let HookMode::SubagentStart = mode {
-        // Subagents do NOT fire SessionStart and share the parent's session_id, so
-        // agent_id (subagent-only) is their identity discriminator. Hand them both ids
-        // so they can pass them to workslate_task_init / workslate_register.
-        return Ok(Some(format!(
-            "[workslate] agent_id=`{agent_id}` session_id=`{session_id}` — you are a \
-             subagent; pass BOTH agent_id=\"{agent_id}\" and session_id=\"{session_id}\" to \
-             workslate_task_init and workslate_register to enable team task/inbox doorbells."
+            "[workslate] session_id=`{session_id}` — to enable the mid-turn message doorbell, \
+             pass session_id=\"{session_id}\" (and agent_id=\"\") to workslate_register."
         )));
     }
 
@@ -104,86 +101,185 @@ fn try_run(mode: HookMode) -> Result<Option<String>, Box<dyn std::error::Error>>
     // Anchor on the same path logic the server uses so both resolve to the same
     // database (CLAUDE_PROJECT_DIR, with the hook-input cwd as fallback).
     let db_path = resolve_tasks_dir(std::path::Path::new(cwd)).join("workslate.db");
+
+    if let HookMode::SubagentStart = mode {
+        // Subagents do NOT fire SessionStart and share the parent's session_id, so
+        // agent_id (subagent-only) is their identity discriminator. Best-effort
+        // auto-registration: when the payload names the agent, register it under
+        // that name so bridged native SendMessage traffic reaches its inbox with
+        // zero startup calls (never clobbering a role it set itself).
+        let agent_name = subagent_name(&v);
+        let auto = match (&agent_name, db_path.exists()) {
+            (Some(name), true) => {
+                Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+                    .ok()
+                    .and_then(|conn| {
+                        conn.busy_timeout(std::time::Duration::from_millis(2000))
+                            .ok()?;
+                        upsert_session_context(
+                            &conn,
+                            session_id,
+                            agent_id,
+                            session_id,
+                            Some(name),
+                            true,
+                        )
+                        .ok()
+                    })
+                    .map(|_| name.clone())
+            }
+            _ => None,
+        };
+        return Ok(Some(match auto {
+            Some(name) => format!(
+                "[workslate] agent_id=`{agent_id}` session_id=`{session_id}` — you are a \
+                 subagent, auto-registered for team messaging as role \"{name}\". Unread \
+                 messages will be announced by the inbox doorbell; drain them with \
+                 workslate_inbox_read(role=\"{name}\", session_id=\"{session_id}\"). To use a \
+                 different role, call workslate_register with BOTH ids."
+            ),
+            None => format!(
+                "[workslate] agent_id=`{agent_id}` session_id=`{session_id}` — you are a \
+                 subagent; to enable the mid-turn message doorbell, pass BOTH \
+                 agent_id=\"{agent_id}\" and session_id=\"{session_id}\" to workslate_register."
+            ),
+        }));
+    }
+
     if !db_path.exists() {
         return Ok(None);
     }
     let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
     conn.busy_timeout(std::time::Duration::from_millis(2000))?;
 
-    let exact: Option<(String, Option<String>)> = conn
-        .query_row(
-            "SELECT task_session, role FROM session_context \
-             WHERE claude_session_id = ? AND agent_id = ?",
-            rusqlite::params![session_id, agent_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .ok();
-
     match mode {
         // Inbox is role-specific: it needs the exact (session_id, agent_id) row to
         // know whose unread to show. It runs on PreToolUse, whose stdin carries
         // agent_id, so the exact lookup resolves.
         HookMode::Inbox => {
-            let (task_session, role) = match exact {
+            let exact: Option<(String, Option<String>)> = conn
+                .query_row(
+                    "SELECT task_session, role FROM session_context \
+                     WHERE claude_session_id = ? AND agent_id = ?",
+                    rusqlite::params![session_id, agent_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .ok();
+            let (scope, role) = match exact {
                 Some(t) => t,
                 None => return Ok(None),
             };
-            Ok(inbox_doorbell(&conn, &task_session, role.as_deref()))
+            Ok(inbox_doorbell(&conn, &scope, role.as_deref()))
         }
-        // Task is session-scoped: the footer shows the session's tasks regardless of
-        // role. It runs on PostToolUse, whose stdin may omit agent_id, so fall back
-        // from the exact row to the unique task_session for this claude_session_id
-        // (render nothing if there are none or they disagree — never guess).
-        HookMode::Task => {
-            let task_session = match exact {
-                Some((ts, _)) => ts,
-                None => match session_scoped_task_session(&conn, session_id) {
-                    Some(ts) => ts,
-                    None => return Ok(None),
-                },
-            };
-            Ok(task_doorbell(&conn, &task_session))
+        // Mirror a successful native SendMessage into the inbox. Emits nothing
+        // into the SENDER's context — the injection surface is the recipient's
+        // inbox doorbell.
+        HookMode::SendBridge => {
+            bridge_native_send(&conn, session_id, agent_id, &v);
+            Ok(None)
         }
-        // SessionStart / SubagentStart return early above (before the DB lookup).
+        HookMode::LegacyTask => Ok(None),
+        // SessionStart / SubagentStart returned early above.
         HookMode::SessionStart | HookMode::SubagentStart => Ok(None),
     }
 }
 
-/// Resolve the task_session for a Claude session id when the exact
-/// `(session_id, agent_id)` row is absent — e.g. a `PostToolUse` stdin that omits
-/// `agent_id`. Returns the single task_session shared by that session id's rows,
-/// or `None` if there are none, or more than one distinct task_session (ambiguous;
-/// the task footer renders nothing rather than guess the wrong session).
-fn session_scoped_task_session(conn: &Connection, session_id: &str) -> Option<String> {
-    let mut stmt = conn
-        .prepare("SELECT DISTINCT task_session FROM session_context WHERE claude_session_id = ?")
-        .ok()?;
-    let mut rows: Vec<String> = stmt
-        .query_map(rusqlite::params![session_id], |r| r.get(0))
-        .ok()?
-        .filter_map(|r| r.ok())
-        .collect();
-    if rows.len() == 1 { rows.pop() } else { None }
+/// The spawned agent's name from a SubagentStart payload, if the harness
+/// provides one. Only name-like fields count — `agent_type` (e.g.
+/// "general-purpose") is a capability class, not an identity, and
+/// auto-registering under it would collide every teammate onto one role.
+fn subagent_name(v: &serde_json::Value) -> Option<String> {
+    for key in ["agent_name", "name"] {
+        if let Some(s) = v.get(key).and_then(|x| x.as_str())
+            && !s.trim().is_empty()
+        {
+            return Some(s.trim().to_string());
+        }
+    }
+    None
 }
 
-/// Task-status doorbell: the same footer the MCP server used to append, now
-/// surfaced on every tool call rather than only on workslate's own tools.
-fn task_doorbell(conn: &Connection, task_session: &str) -> Option<String> {
-    let tasks = load_tasks(conn, task_session, None).ok()?;
-    if tasks.is_empty() {
-        return None;
+/// Mirror one successful native SendMessage call into the workslate inbox so
+/// the recipient's PreToolUse doorbell can announce it mid-turn (native
+/// delivery only lands at the recipient's next turn boundary).
+///
+/// Best-effort by design: any missing/odd field means "mirror nothing" — the
+/// native delivery path is unaffected either way. Protocol messages (JSON
+/// objects like shutdown_request) are not mirrored; only plain-text sends.
+fn bridge_native_send(
+    conn: &Connection,
+    session_id: &str,
+    sender_agent_id: &str,
+    v: &serde_json::Value,
+) {
+    let Some(tool_input) = v.get("tool_input") else {
+        return;
+    };
+    let Some(to) = tool_input.get("to").and_then(|x| x.as_str()).map(str::trim) else {
+        return;
+    };
+    if to.is_empty() {
+        return;
     }
-    let footer = render_task_footer(&tasks, task_session);
-    if footer.is_empty() {
-        None
+    // Only plain-text messages are worth a doorbell; protocol objects
+    // (shutdown/plan-approval traffic) stay on the native channel alone.
+    let Some(body) = tool_input.get("message").and_then(|x| x.as_str()) else {
+        return;
+    };
+    let subject = tool_input
+        .get("summary")
+        .and_then(|x| x.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| truncate_chars(body, 80));
+
+    // "main" addresses the main conversation — deliver to the leader's
+    // registered role (its row is (session_id, "")). Skip when the leader
+    // never registered: there is no doorbell identity to announce to.
+    let recipient = if to == "main" {
+        match lookup_role(conn, session_id, "") {
+            Some(r) => r,
+            None => return,
+        }
     } else {
-        Some(footer)
+        to.to_string()
+    };
+
+    // Sender attribution from the SENDER's composite identity (the hook runs in
+    // the sender's context). NULL when unregistered — honest, not guessed.
+    let sender = lookup_role(conn, session_id, sender_agent_id);
+
+    let _ = conn.execute(
+        "INSERT INTO messages (task_session, recipient_role, sender, subject, body, urgent) \
+         VALUES (?, ?, ?, ?, ?, 0)",
+        rusqlite::params![session_id, recipient, sender, subject, body],
+    );
+}
+
+fn lookup_role(conn: &Connection, session_id: &str, agent_id: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT role FROM session_context WHERE claude_session_id = ? AND agent_id = ?",
+        rusqlite::params![session_id, agent_id],
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .ok()
+    .flatten()
+}
+
+fn truncate_chars(s: &str, cap: usize) -> String {
+    let one: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one.chars().count() > cap {
+        let cut: String = one.chars().take(cap).collect();
+        format!("{cut}…")
+    } else {
+        one
     }
 }
 
 /// Inbox doorbell: one line nudging the agent to read unread messages. Repeats
 /// every tool call until workslate_inbox_read clears them.
-fn inbox_doorbell(conn: &Connection, task_session: &str, role: Option<&str>) -> Option<String> {
+fn inbox_doorbell(conn: &Connection, scope: &str, role: Option<&str>) -> Option<String> {
     let role = role?;
     let mut stmt = conn
         .prepare(
@@ -193,7 +289,7 @@ fn inbox_doorbell(conn: &Connection, task_session: &str, role: Option<&str>) -> 
         )
         .ok()?;
     let rows: Vec<(String, i64)> = stmt
-        .query_map(rusqlite::params![task_session, role], |r| {
+        .query_map(rusqlite::params![scope, role], |r| {
             Ok((r.get(0)?, r.get(1)?))
         })
         .ok()?
@@ -264,7 +360,7 @@ fn write_settings(path: &Path, root: &serde_json::Value) -> Result<(), Box<dyn s
 /// spawns the verifier subagent directly from `prompt`).
 const STOP_VERIFY_MARKER: &str = "[workslate-task-verify]";
 
-/// True if a single hook handler is one of ours: either a workslate doorbell
+/// True if a single hook handler is one of ours: either a workslate hook
 /// `command` (matched by content, not exact path, so re-install after a path
 /// change still replaces the old entry rather than duplicating it), or the
 /// Stop verify hook's `type:"agent"` `prompt` entry (matched by the embedded
@@ -283,9 +379,9 @@ fn hook_is_ours(handler: &serde_json::Value) -> bool {
     command_ours || prompt_ours
 }
 
-/// Remove only our doorbell handlers from each PreToolUse matcher-group,
-/// dropping a group only once it has no handlers left. This preserves unrelated
-/// user hooks that happen to share a matcher-group with ours.
+/// Remove only our handlers from each matcher-group, dropping a group only
+/// once it has no handlers left. This preserves unrelated user hooks that
+/// happen to share a matcher-group with ours.
 fn strip_our_hooks(pre: &mut Vec<serde_json::Value>) {
     pre.retain_mut(
         |group| match group.get_mut("hooks").and_then(|h| h.as_array_mut()) {
@@ -364,9 +460,10 @@ fn event_array<'a>(
 }
 
 /// Install workslate's hooks into settings.json (idempotent): the PreToolUse inbox
-/// doorbell, the PostToolUse task-status doorbell, the SessionStart/SubagentStart
+/// doorbell, the PostToolUse SendMessage bridge, the SessionStart/SubagentStart
 /// bridges, and the anti-self-grading Stop verify hook. Existing user hooks are
-/// preserved — only workslate's own handlers are replaced.
+/// preserved — only workslate's own handlers are replaced (including the retired
+/// pre-v11 PostToolUse task footer, which the content-based strip removes).
 ///
 /// The Stop hook is a `type:"agent"` entry (not `type:"command"` like the rest) —
 /// Claude Code has no mechanism for one hook entry to gate whether a sibling entry
@@ -393,16 +490,15 @@ pub fn install_hooks() -> Result<(), Box<dyn std::error::Error>> {
         }));
     }
     {
-        // Task-status footer on PostToolUse so it reflects the just-completed tool's
-        // own effect (e.g. workslate_task_done shows done on the same call, not one
-        // call later). Session-scoped, so it resolves from session_id even if
-        // PostToolUse stdin omits agent_id.
+        // SendMessage bridge on PostToolUse: mirrors each successful native send
+        // into the inbox so the recipient's doorbell can announce it mid-turn.
+        // Fires only on the SendMessage tool — matcher-scoped, not "*".
         let post = event_array(&mut root, "PostToolUse")?;
         strip_our_hooks(post);
         post.push(serde_json::json!({
-            "matcher": "*",
+            "matcher": "SendMessage",
             "hooks": [
-                { "type": "command", "command": format!("\"{bin}\" --hook=task") }
+                { "type": "command", "command": format!("\"{bin}\" --hook=send-bridge") }
             ]
         }));
     }
@@ -417,8 +513,8 @@ pub fn install_hooks() -> Result<(), Box<dyn std::error::Error>> {
     }
     {
         // SubagentStart hands each subagent its agent_id (subagents do not fire
-        // SessionStart and share the parent's session id). matcher "*" matches all
-        // agent_types.
+        // SessionStart and share the parent's session id) and best-effort
+        // auto-registers named teammates. matcher "*" matches all agent_types.
         let sa = event_array(&mut root, "SubagentStart")?;
         strip_our_hooks(sa);
         sa.push(serde_json::json!({
@@ -442,8 +538,9 @@ pub fn install_hooks() -> Result<(), Box<dyn std::error::Error>> {
     }
     write_settings(&path, &root)?;
     println!(
-        "Installed workslate hooks (PreToolUse inbox + PostToolUse task doorbells + \
-         SessionStart/SubagentStart bridges + Stop anti-self-grading verify hook) into {}",
+        "Installed workslate hooks (PreToolUse inbox doorbell + PostToolUse SendMessage \
+         bridge + SessionStart/SubagentStart bridges + Stop anti-self-grading verify hook) \
+         into {}",
         path.display()
     );
     Ok(())
@@ -473,16 +570,24 @@ pub fn uninstall_hooks() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::msg::{SCHEMA_SQL, SESSION_CONTEXT_DDL};
+
+    fn mem_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_SQL).unwrap();
+        conn.execute_batch(SESSION_CONTEXT_DDL).unwrap();
+        conn
+    }
 
     #[test]
     fn parse_hook_mode_detects_flags() {
         assert!(matches!(
-            parse_hook_mode(&["prog".into(), "--hook=task".into()]),
-            Some(HookMode::Task)
+            parse_hook_mode(&["prog".into(), "--hook=inbox".into()]),
+            Some(HookMode::Inbox)
         ));
         assert!(matches!(
-            parse_hook_mode(&["--hook=inbox".into()]),
-            Some(HookMode::Inbox)
+            parse_hook_mode(&["--hook=send-bridge".into()]),
+            Some(HookMode::SendBridge)
         ));
         assert!(matches!(
             parse_hook_mode(&["--hook=session-start".into()]),
@@ -492,17 +597,160 @@ mod tests {
             parse_hook_mode(&["--hook=subagent-start".into()]),
             Some(HookMode::SubagentStart)
         ));
+        // A stale pre-v11 settings.json still invokes --hook=task; it must be
+        // recognized (and quietly no-op) rather than fall through to an MCP
+        // server start on hook stdin.
+        assert!(matches!(
+            parse_hook_mode(&["--hook=task".into()]),
+            Some(HookMode::LegacyTask)
+        ));
         assert!(parse_hook_mode(&["--something-else".into()]).is_none());
         assert!(parse_hook_mode(&[]).is_none());
     }
 
     #[test]
-    fn hook_is_ours_matches_only_doorbell_commands() {
-        let ours =
+    fn event_names_route_hooks_to_the_right_events() {
+        assert_eq!(event_name(HookMode::Inbox), "PreToolUse");
+        assert_eq!(event_name(HookMode::SendBridge), "PostToolUse");
+        assert_eq!(event_name(HookMode::LegacyTask), "PostToolUse");
+        assert_eq!(event_name(HookMode::SessionStart), "SessionStart");
+        assert_eq!(event_name(HookMode::SubagentStart), "SubagentStart");
+    }
+
+    #[test]
+    fn subagent_name_reads_name_fields_only() {
+        assert_eq!(
+            subagent_name(&serde_json::json!({"agent_name": "researcher"})),
+            Some("researcher".to_string())
+        );
+        assert_eq!(
+            subagent_name(&serde_json::json!({"name": " backend-dev "})),
+            Some("backend-dev".to_string())
+        );
+        // agent_type is a capability class, not an identity — never a role.
+        assert_eq!(
+            subagent_name(&serde_json::json!({"agent_type": "general-purpose"})),
+            None
+        );
+        assert_eq!(subagent_name(&serde_json::json!({"agent_name": ""})), None);
+        assert_eq!(subagent_name(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn bridge_mirrors_plain_sends_and_skips_protocol_objects() {
+        let conn = mem_db();
+        // Sender registered as team-lead (leader row), recipient is a teammate name.
+        conn.execute(
+            "INSERT INTO session_context (claude_session_id, agent_id, task_session, role) \
+             VALUES ('sid', '', 'sid', 'team-lead')",
+            [],
+        )
+        .unwrap();
+
+        bridge_native_send(
+            &conn,
+            "sid",
+            "",
+            &serde_json::json!({
+                "tool_input": {"to": "researcher", "summary": "assign task 1", "message": "start on task #1"}
+            }),
+        );
+        let (recipient, sender, subject, body, urgent): (
+            String,
+            Option<String>,
+            String,
+            String,
+            i64,
+        ) = conn
+            .query_row(
+                "SELECT recipient_role, sender, subject, body, urgent FROM messages",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(recipient, "researcher");
+        assert_eq!(sender.as_deref(), Some("team-lead"));
+        assert_eq!(subject, "assign task 1");
+        assert_eq!(body, "start on task #1");
+        assert_eq!(urgent, 0, "bridged messages are never urgent");
+
+        // Protocol objects (shutdown/plan traffic) are NOT mirrored.
+        bridge_native_send(
+            &conn,
+            "sid",
+            "",
+            &serde_json::json!({
+                "tool_input": {"to": "researcher", "message": {"type": "shutdown_request"}}
+            }),
+        );
+        let count: u32 = conn
+            .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1, "protocol objects must not be mirrored");
+    }
+
+    #[test]
+    fn bridge_routes_main_to_leader_role_and_falls_back_to_body_subject() {
+        let conn = mem_db();
+        conn.execute(
+            "INSERT INTO session_context (claude_session_id, agent_id, task_session, role) \
+             VALUES ('sid', '', 'sid', 'team-lead')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO session_context (claude_session_id, agent_id, task_session, role) \
+             VALUES ('sid', 'aX', 'sid', 'researcher')",
+            [],
+        )
+        .unwrap();
+
+        // A teammate (agent aX) sends to "main" with no summary.
+        bridge_native_send(
+            &conn,
+            "sid",
+            "aX",
+            &serde_json::json!({
+                "tool_input": {"to": "main", "message": "task 1 complete, moving to task 2"}
+            }),
+        );
+        let (recipient, sender, subject): (String, Option<String>, String) = conn
+            .query_row(
+                "SELECT recipient_role, sender, subject FROM messages",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(recipient, "team-lead", "'main' routes to the leader's role");
+        assert_eq!(sender.as_deref(), Some("researcher"));
+        assert_eq!(subject, "task 1 complete, moving to task 2");
+
+        // With NO leader row, a send to "main" mirrors nothing (no doorbell identity).
+        let conn2 = mem_db();
+        bridge_native_send(
+            &conn2,
+            "sid",
+            "aX",
+            &serde_json::json!({"tool_input": {"to": "main", "message": "x"}}),
+        );
+        let count: u32 = conn2
+            .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn hook_is_ours_matches_only_workslate_commands() {
+        let ours = serde_json::json!({ "type": "command", "command": "/abs/path/workslate --hook=send-bridge" });
+        let legacy =
             serde_json::json!({ "type": "command", "command": "/abs/path/workslate --hook=task" });
         let theirs =
             serde_json::json!({ "type": "command", "command": "/usr/bin/prettier --write" });
         assert!(hook_is_ours(&ours));
+        assert!(
+            hook_is_ours(&legacy),
+            "pre-v11 task footer entries must still be recognized so reinstall removes them"
+        );
         assert!(!hook_is_ours(&theirs));
     }
 
@@ -511,7 +759,7 @@ mod tests {
         let mut pre = vec![serde_json::json!({
             "matcher": "*",
             "hooks": [
-                { "type": "command", "command": "/abs/workslate --hook=task" },
+                { "type": "command", "command": "/abs/workslate --hook=inbox" },
                 { "type": "command", "command": "/usr/bin/prettier" }
             ]
         })];
@@ -530,14 +778,6 @@ mod tests {
         })];
         strip_our_hooks(&mut pre);
         assert!(pre.is_empty());
-    }
-
-    #[test]
-    fn hook_is_ours_matches_subagent_start() {
-        let ours = serde_json::json!({
-            "type": "command", "command": "/abs/path/workslate --hook=subagent-start"
-        });
-        assert!(hook_is_ours(&ours));
     }
 
     #[test]
@@ -622,50 +862,5 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn event_name_task_is_posttooluse_inbox_is_pretooluse() {
-        assert_eq!(event_name(HookMode::Task), "PostToolUse");
-        assert_eq!(event_name(HookMode::Inbox), "PreToolUse");
-        assert_eq!(event_name(HookMode::SessionStart), "SessionStart");
-        assert_eq!(event_name(HookMode::SubagentStart), "SubagentStart");
-    }
-
-    #[test]
-    fn session_scoped_task_session_resolves_unique_or_none() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE session_context (\
-                 claude_session_id TEXT NOT NULL, agent_id TEXT NOT NULL DEFAULT '', \
-                 task_session TEXT NOT NULL, role TEXT, \
-                 PRIMARY KEY (claude_session_id, agent_id));",
-        )
-        .unwrap();
-        // Two agents share one session id AND one task_session -> unique resolution
-        // (this is the team invariant; a PostToolUse without agent_id still resolves).
-        conn.execute(
-            "INSERT INTO session_context VALUES ('s', '', 'sess', 'leader')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO session_context VALUES ('s', 'aX', 'sess', 'teammate')",
-            [],
-        )
-        .unwrap();
-        assert_eq!(
-            session_scoped_task_session(&conn, "s"),
-            Some("sess".to_string())
-        );
-        // Unknown session id -> None.
-        assert_eq!(session_scoped_task_session(&conn, "other"), None);
-        // Ambiguous: two distinct task_sessions under one session id -> None (don't guess).
-        conn.execute(
-            "INSERT INTO session_context VALUES ('s', 'aY', 'sess2', 'tm2')",
-            [],
-        )
-        .unwrap();
-        assert_eq!(session_scoped_task_session(&conn, "s"), None);
     }
 }

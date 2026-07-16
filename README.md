@@ -1,6 +1,6 @@
 # Claude Agent Kit
 
-A battle-tested `CLAUDE.md` for Claude Code, plus the `workslate` MCP server (SQLite-backed task tracking + cross-agent messaging, Claude-only) and the two **shared** Slate MCP servers — `aside` (cross-family second opinions) and `dispatch` (asynchronous hierarchical delegation to codex / opencode / claude backends) — whose source lives in [`slate-agent-kit`](https://github.com/saltyming/slate-agent-kit)`/shared/mcp-servers` and is built + registered from there. It also ships **palette** — a rules-plus-skills *product-intent outer loop* that wraps the per-task workflow with a durable, cross-session backlog and a slice → build → review cadence (opt in per project via the `palette-init` skill).
+A battle-tested `CLAUDE.md` for Claude Code, plus the `workslate` MCP server (mid-turn team messaging: SendMessage bridge + inbox doorbell, Claude-only) and the two **shared** Slate MCP servers — `aside` (cross-family second opinions) and `dispatch` (asynchronous hierarchical delegation to codex / opencode / claude backends) — whose source lives in [`slate-agent-kit`](https://github.com/saltyming/slate-agent-kit)`/shared/mcp-servers` and is built + registered from there. It also ships **palette** — a rules-plus-skills *product-intent outer loop* that wraps the per-task workflow with a durable, cross-session backlog and a slice → build → review cadence (opt in per project via the `palette-init` skill).
 
 > **Honest caveat.** These rules reduce common failure modes but don't eliminate them — treat the kit as a strong prior, not a guarantee. Two patterns still recur and need manual correction: **silent scope reduction** (splitting or deferring requested work despite the `[OVERRIDE]`s) and **skipping the aside pairing** (calling `advisor()` without the paired aside call under `policy: proactive`). Review completion reports critically and name the miss when you see it.
 
@@ -17,14 +17,14 @@ Claude Code's stock system prompt is tuned for casual Q&A, not deep engineering.
 | "Do not create files unless absolutely necessary." | Create every file the spec calls for. |
 | (no verification required) | Verify before claiming completion; never fake a green result. |
 
-It also covers **delegation** (subagents / teammates / the separate `Workflow` tool, with a surface-propose-agree gate and dependency-structure selection), **Agent Teams coordination** (self-claim policy, leader intervention, a token-capped completion-report format), a **unified `workslate_task_*` task system** (`ws:` / `team:` namespaces), and **quality guardrails** (comment discipline, verification-before-done).
+It also covers **delegation** (subagents / teammates / the separate `Workflow` tool, with a surface-propose-agree gate and dependency-structure selection), **Agent Teams coordination** (the built-in task list as the coordination system, self-claim policy, leader intervention, a token-capped completion-report format), and **quality guardrails** (comment discipline, verification-before-done).
 
 ### palette — product-intent outer loop (rules + skills, no server)
 
 A durable, cross-session planning layer that wraps the per-task workflow. Where the rest of the kit is *within-task* (understand → plan → execute, then it evaporates), palette adds the *outer* loop: a backlog of product intent → slice a thin phase with you → hand a story's acceptance criteria to the normal build workflow → review and re-plan on completion.
 
 - **Opt-in per project, then always-on.** Run the `palette-init` skill to scaffold a `_palette/` directory (a light intake seeds the backlog). Its mere presence turns palette on — the agent consults the backlog automatically. No `_palette/`, no palette: a project that never opted in is untouched (at most a one-line offer on roadmap-shaped work).
-- **Advisory, never authoritative.** The backlog / phase / story artifacts *propose* scope; they never authorize an edit. Your existing approval gate authorizes, workslate / dispatch track. A two-way scope firewall keeps palette from shrinking requested work or quietly deferring unmet acceptance criteria at completion time.
+- **Advisory, never authoritative.** The backlog / phase / story artifacts *propose* scope; they never authorize an edit. Your existing approval gate authorizes, the built-in task list tracks. A two-way scope firewall keeps palette from shrinking requested work or quietly deferring unmet acceptance criteria at completion time.
 - **RST artifacts, robust subset.** Plans live as reStructuredText the agent reads back (backlog, phase briefs, stories) — a deliberately small, grep-friendly subset, not Sphinx-rendered docs. Four **pull-only** skills (`palette-spec` / `palette-ux` / `palette-ui` / `palette-rules`) add tech-spec / UX / design / project-rules depth on demand, never as part of the default loop.
 - `_palette/` is a personal planning record — **not committed** by default (`palette-init` offers a `.gitignore`).
 
@@ -32,10 +32,11 @@ Lives in the always-loaded rule `claude-agent-kit--palette.md` plus the `palette
 
 ### workslate MCP server
 
-SQLite-backed task tracking and cross-agent messaging:
+Mid-turn team messaging for Agent Teams — the one thing the harness doesn't do (native `SendMessage` delivers only at turn boundaries):
 
-- **Task tracking** — `ws:` / `team:` namespaces with cross-namespace dependencies, named resumable sessions, WAL concurrency for multiple agents.
-- **Doorbell hooks** — a `PostToolUse` footer shows the active session and task progress; a `PreToolUse` inbox nudge delivers role-addressed team messages mid-turn (`workslate_msg_send` → `workslate_inbox_read`), so an Agent Teams leader can steer a teammate before its turn ends. Identity is the composite `(session_id, agent_id)` from the `SessionStart` / `SubagentStart` hooks.
+- **SendMessage bridge** — a `PostToolUse` hook (matcher `SendMessage`) mirrors every successful native send into a shared SQLite inbox; senders keep using the native tool.
+- **Inbox doorbell** — a `PreToolUse` nudge announces unread messages to the recipient before its next tool call, so an Agent Teams leader can steer a teammate before its turn ends; `workslate_inbox_read` drains them, `workslate_msg_send` sends directly when `urgent=true` matters. Message scope is the Claude session id itself — no session names to pass around.
+- **Near-zero-touch identity** — the `SubagentStart` hook auto-registers named teammates; the leader runs `workslate_register` once. Identity is the composite `(session_id, agent_id)` from the `SessionStart` / `SubagentStart` hooks.
 
 ### aside MCP server
 
