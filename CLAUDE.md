@@ -1,7 +1,7 @@
 <!-- slate-agent-kit:common -->
 # Claude Agent Operating Manual
 
-**Version**: 11.0.0
+**Version**: 11.1.0
 **Last Updated**: 2026-07-17
 
 > Operating rules for Claude Code agents. This kernel defines the

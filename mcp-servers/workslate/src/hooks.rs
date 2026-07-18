@@ -352,30 +352,34 @@ fn write_settings(path: &Path, root: &serde_json::Value) -> Result<(), Box<dyn s
     Ok(())
 }
 
-/// Marker embedded at the start of the Stop verify hook's `prompt` text.
-/// `hook_is_ours` uses it to recognize a `type:"agent"` entry (which has a
-/// `prompt` field, not `command`) as ours on reinstall/uninstall — the
-/// content-based `command` check below can't see it, since this hook type
-/// never invokes the workslate binary at all (Claude Code's own runtime
-/// spawns the verifier subagent directly from `prompt`).
-const STOP_VERIFY_MARKER: &str = "[workslate-task-verify]";
+/// Marker embedded at the start of the retired Stop verify hook's `prompt`
+/// text (v9.4.0–v11.0.0; removed in v11.1.0 — see CHANGELOG.md). No longer
+/// installed by anything, but `hook_is_ours` still needs it to recognize a
+/// `type:"agent"` entry (which has a `prompt` field, not `command`) left over
+/// from a pre-11.1.0 install, so `install_hooks()`/`uninstall_hooks()` can
+/// migrate it away — the content-based `command` check below can't see it,
+/// since this hook type never invoked the workslate binary at all (Claude
+/// Code's own runtime spawned the verifier subagent directly from `prompt`).
+const LEGACY_STOP_VERIFY_MARKER: &str = "[workslate-task-verify]";
 
 /// True if a single hook handler is one of ours: either a workslate hook
 /// `command` (matched by content, not exact path, so re-install after a path
-/// change still replaces the old entry rather than duplicating it), or the
-/// Stop verify hook's `type:"agent"` `prompt` entry (matched by the embedded
-/// marker, since that entry has no `command` field at all).
+/// change still replaces the old entry rather than duplicating it), or a
+/// leftover retired Stop verify hook's `type:"agent"` `prompt` entry (matched
+/// by the embedded marker at the start of the prompt, since that entry has no
+/// `command` field at all).
 fn hook_is_ours(handler: &serde_json::Value) -> bool {
     let command_ours = handler
         .get("command")
         .and_then(|c| c.as_str())
         .map(|c| c.contains("workslate") && c.contains("--hook="))
         .unwrap_or(false);
-    let prompt_ours = handler
-        .get("prompt")
-        .and_then(|c| c.as_str())
-        .map(|c| c.contains(STOP_VERIFY_MARKER))
-        .unwrap_or(false);
+    let prompt_ours = handler.get("type").and_then(|t| t.as_str()) == Some("agent")
+        && handler
+            .get("prompt")
+            .and_then(|c| c.as_str())
+            .map(|c| c.starts_with(LEGACY_STOP_VERIFY_MARKER))
+            .unwrap_or(false);
     command_ours || prompt_ours
 }
 
@@ -394,9 +398,27 @@ fn strip_our_hooks(pre: &mut Vec<serde_json::Value>) {
     );
 }
 
-/// All hook event arrays workslate manages in settings.json, including the
-/// Stop verify hook installed by `install_hooks()`; `uninstall_hooks()` cleans
-/// up every event listed here.
+/// Remove a leftover retired Stop verify hook entry from `root.hooks.Stop` if
+/// present, WITHOUT creating a `"Stop"` key when it's absent (unlike
+/// `event_array`, which always creates the array it returns). Shared by
+/// `install_hooks()` — so upgrading a live pre-11.1.0 install self-cleans the
+/// retired hook without gaining an empty `"Stop": []` on a fresh install —
+/// and covered by `uninstall_hooks()`'s own generic per-event loop below.
+fn strip_stop_if_present(root: &mut serde_json::Value) {
+    if let Some(stop) = root
+        .get_mut("hooks")
+        .and_then(|h| h.get_mut("Stop"))
+        .and_then(|a| a.as_array_mut())
+    {
+        strip_our_hooks(stop);
+    }
+}
+
+/// All hook event arrays workslate manages in settings.json; `uninstall_hooks()`
+/// cleans up every event listed here. `"Stop"` is retained solely so that loop
+/// (and `install_hooks()`'s own `strip_stop_if_present` call) keep covering a
+/// leftover retired Stop verify hook entry from a pre-11.1.0 install —
+/// `install_hooks()` no longer installs a new one.
 const WS_HOOK_EVENTS: &[&str] = &[
     "PreToolUse",
     "PostToolUse",
@@ -404,41 +426,6 @@ const WS_HOOK_EVENTS: &[&str] = &[
     "SubagentStart",
     "Stop",
 ];
-
-/// The Stop verify hook's prompt: spawns an independent verifier subagent
-/// (via Claude Code's native `type:"agent"` hook mechanism, response schema
-/// `{"ok": bool, "reason"}` per the hooks doc) that spot-checks the turn's
-/// completion claims against real repository state before Claude is allowed
-/// to end its turn — never trusting the conversation's own self-report.
-/// Deliberately standalone: it reads the transcript and the repo directly,
-/// with no MCP-tool dependency. `$ARGUMENTS` is substituted by Claude Code
-/// with the hook input JSON — it is the only channel through which the
-/// verifier learns session_id/transcript_path/stop_hook_active/cwd.
-const STOP_VERIFY_PROMPT: &str = "\
-[workslate-task-verify] You are an independent verification subagent spawned by a
-Stop hook. Decide whether the assistant may end its turn, by checking REAL
-repository/system state — never by trusting the conversation's own claims of
-success.
-
-Hook input JSON (session_id, cwd, transcript_path, stop_hook_active):
-$ARGUMENTS
-
-Rules:
-1. If `stop_hook_active` is true in the input above, respond {\"ok\": true}
-   immediately — a prior Stop hook already blocked this turn once; do not loop.
-2. Read the tail of the transcript at `transcript_path` to find what the assistant
-   claimed to have completed THIS turn (tasks finished, tests passing, builds green,
-   files changed). If the turn made no completion claims — conversational,
-   investigative, or explicitly-unfinished work — respond {\"ok\": true}.
-3. Verify the load-bearing claims against real state: read the files named, run the
-   tests/commands cited, check actual output. Spot-check; do not re-derive
-   everything.
-4. If the claims hold, respond {\"ok\": true}. If a claim is false or unverifiable —
-   e.g. work reported complete while its build or test still fails — respond
-   {\"ok\": false, \"reason\": \"<specifically what is wrong or unproven>\"}.
-
-Your final message must be ONLY {\"ok\": true} or {\"ok\": false, \"reason\": \"...\"}
-— no other fields, no surrounding prose.";
 
 /// Ensure `root.hooks.<event>` is an array and return a mutable handle to it.
 fn event_array<'a>(
@@ -460,18 +447,16 @@ fn event_array<'a>(
 }
 
 /// Install workslate's hooks into settings.json (idempotent): the PreToolUse inbox
-/// doorbell, the PostToolUse SendMessage bridge, the SessionStart/SubagentStart
-/// bridges, and the anti-self-grading Stop verify hook. Existing user hooks are
-/// preserved — only workslate's own handlers are replaced (including the retired
-/// pre-v11 PostToolUse task footer, which the content-based strip removes).
+/// doorbell, the PostToolUse SendMessage bridge, and the SessionStart/SubagentStart
+/// bridges. Existing user hooks are preserved — only workslate's own handlers are
+/// replaced (including the retired pre-v11 PostToolUse task footer, which the
+/// content-based strip removes).
 ///
-/// The Stop hook is a `type:"agent"` entry (not `type:"command"` like the rest) —
-/// Claude Code has no mechanism for one hook entry to gate whether a sibling entry
-/// even fires, so it spawns a verifier subagent on every Stop event, in every
-/// session, project-wide. That cost is accepted here by design (this is a
-/// single-user personal toolchain, not a distribution with many installs to
-/// weigh) — see claude-agent-kit--task-execution.md for the tradeoff and the
-/// `/goal` relationship.
+/// Also migrates away the retired Stop anti-self-grading verify hook (v9.4.0–v11.0.0):
+/// a `type:"agent"` entry that spawned a verifier subagent on every Stop event, in
+/// every session, project-wide — judged in v11.1.0 not worth that cost in daily use
+/// (see CHANGELOG.md). `strip_stop_if_present` removes any entry a prior install left
+/// behind; a fresh install never gains a `"Stop"` key.
 pub fn install_hooks() -> Result<(), Box<dyn std::error::Error>> {
     let path = settings_path().ok_or("could not resolve HOME for settings.json")?;
     let bin = workslate_bin();
@@ -524,23 +509,14 @@ pub fn install_hooks() -> Result<(), Box<dyn std::error::Error>> {
             ]
         }));
     }
-    {
-        // Anti-self-grading verify hook on Stop: spawns an independent verifier
-        // subagent before Claude is allowed to end a turn. See STOP_VERIFY_PROMPT's
-        // own doc comment for the full design rationale.
-        let stop = event_array(&mut root, "Stop")?;
-        strip_our_hooks(stop);
-        stop.push(serde_json::json!({
-            "hooks": [
-                { "type": "agent", "prompt": STOP_VERIFY_PROMPT, "timeout": 120 }
-            ]
-        }));
-    }
+    // Retired: the Stop anti-self-grading verify hook is no longer installed (see
+    // this function's doc comment). Migrate away any entry a prior install left in
+    // settings.json, without creating a "Stop" key when there's nothing to clean up.
+    strip_stop_if_present(&mut root);
     write_settings(&path, &root)?;
     println!(
         "Installed workslate hooks (PreToolUse inbox doorbell + PostToolUse SendMessage \
-         bridge + SessionStart/SubagentStart bridges + Stop anti-self-grading verify hook) \
-         into {}",
+         bridge + SessionStart/SubagentStart bridges) into {}",
         path.display()
     );
     Ok(())
@@ -778,89 +754,5 @@ mod tests {
         })];
         strip_our_hooks(&mut pre);
         assert!(pre.is_empty());
-    }
-
-    #[test]
-    fn hook_is_ours_matches_stop_verify_agent_prompt_entry() {
-        // type:"agent" entries have a `prompt` field, not `command` — the
-        // command-based check alone would miss this and duplicate/orphan the
-        // entry on reinstall or fail to clean it up on uninstall.
-        let ours = serde_json::json!({
-            "type": "agent",
-            "prompt": STOP_VERIFY_PROMPT,
-            "timeout": 120
-        });
-        assert!(hook_is_ours(&ours));
-
-        let theirs = serde_json::json!({
-            "type": "agent",
-            "prompt": "Some unrelated user-authored Stop hook prompt.",
-            "timeout": 60
-        });
-        assert!(!hook_is_ours(&theirs));
-    }
-
-    #[test]
-    fn stop_verify_hook_block_is_idempotent_and_uninstallable() {
-        let dir =
-            std::env::temp_dir().join(format!("workslate-stop-hook-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("settings.json");
-        std::fs::write(&path, "{}").unwrap();
-
-        // Exercise the same Stop-block logic install_hooks() runs, against this
-        // scratch settings.json path via the internal event_array/strip_our_hooks
-        // helpers directly (install_hooks() itself resolves $HOME, which we don't
-        // want to touch in a unit test) — simulate that block inline.
-        let mut root = read_settings(&path).unwrap();
-        {
-            let stop = event_array(&mut root, "Stop").unwrap();
-            strip_our_hooks(stop);
-            stop.push(serde_json::json!({
-                "hooks": [
-                    { "type": "agent", "prompt": STOP_VERIFY_PROMPT, "timeout": 120 }
-                ]
-            }));
-        }
-        write_settings(&path, &root).unwrap();
-
-        // Re-run: idempotent, not duplicated.
-        let mut root2 = read_settings(&path).unwrap();
-        {
-            let stop = event_array(&mut root2, "Stop").unwrap();
-            strip_our_hooks(stop);
-            stop.push(serde_json::json!({
-                "hooks": [
-                    { "type": "agent", "prompt": STOP_VERIFY_PROMPT, "timeout": 120 }
-                ]
-            }));
-        }
-        write_settings(&path, &root2).unwrap();
-
-        let after_reinstall = read_settings(&path).unwrap();
-        let stop_arr = after_reinstall["hooks"]["Stop"].as_array().unwrap();
-        assert_eq!(stop_arr.len(), 1, "reinstall must replace, not duplicate");
-
-        // WS_HOOK_EVENTS includes "Stop", so the general uninstall path covers it.
-        assert!(WS_HOOK_EVENTS.contains(&"Stop"));
-        let mut root3 = read_settings(&path).unwrap();
-        for event in WS_HOOK_EVENTS {
-            if let Some(arr) = root3
-                .get_mut("hooks")
-                .and_then(|h| h.get_mut(*event))
-                .and_then(|a| a.as_array_mut())
-            {
-                strip_our_hooks(arr);
-            }
-        }
-        write_settings(&path, &root3).unwrap();
-        let after_uninstall = read_settings(&path).unwrap();
-        let stop_arr_after = after_uninstall["hooks"]["Stop"].as_array().unwrap();
-        assert!(
-            stop_arr_after.is_empty(),
-            "uninstall must remove the Stop verify hook"
-        );
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 }

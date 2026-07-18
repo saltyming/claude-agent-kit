@@ -77,9 +77,6 @@ Session edits live in files; undoing them is also an edit — write the inverse 
 
 If the named command would destroy more than the user seems to intend, or the surgical option they want does not exist, stop and describe exactly what else is affected; the user owns what to undo, which command runs, and when.
 
-## Anti-self-grading Stop verify hook
-
-`make install` registers a `type:"agent"` Stop hook that spawns an independent verifier subagent before Claude may end a turn: it reads the transcript tail for completion claims (tasks finished, tests passing, builds green) and spot-checks the load-bearing ones against **real repository state** — `{"ok": false, "reason": …}` blocks the stop and the reason becomes your next instruction (INV-VERIFY-1/2 enforced mechanically). A turn with no completion claims passes immediately; `stop_hook_active` bounds it to one retry per turn. It fires on every Stop in every session — an accepted cost; remove with `workslate --uninstall-hooks`. Claude Code's native `/goal` (session-scoped, user-typed) is complementary and may fire independently.
 
 ## After completion
 
