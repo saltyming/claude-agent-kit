@@ -4,6 +4,20 @@ All notable changes to Claude Agent Kit are documented here. Format loosely base
 
 Version numbers track the `Version` field in `CLAUDE.md`. Most entries correspond to operating-manual revisions and accompanying MCP server changes; the two ship together.
 
+## [11.2.0] - 2026-07-22
+
+**`dispatch_wait` removed.** The `dispatch` MCP server's bounded long-poll tool — it blocked server-side until a dispatched task reached a terminal status (or a 30s/120s timeout), returning compact status plus a small curated log tail — is retired. Supervising a run is now `dispatch_status` (a non-blocking snapshot + terminal result) and `dispatch_logs` (the curated timeline); `dispatch_steer` / `dispatch_cancel` are unaffected. The advertised dispatch tool surface drops 8 → 7 tools.
+
+- **server (`mcp-servers/dispatch`).** `main.rs` drops the `dispatch_wait` method, its private `wait_json` / `wait_log_tail` helpers, the five `WAIT_*` constants, and the now-orphaned `preview_oneline` helper (its only caller was `wait_json`; left in place it fails `clippy -D warnings`). `params.rs` drops `WaitParams`. `ServerHandler::get_info`'s SUPERVISION clause no longer names the tool. `rollout::window_with_limits` is kept — it still backs `dispatch_logs`' windowing and its own unit test — with only its stale doc comment fixed. `STEER_TERMINATE_WAIT_MS`, `lock_db`, and the retained observability helpers keep their other callers.
+- **rules.** `claude-agent-kit--dispatch.md`'s "Ending a turn while a dispatch task is still running" HARD RULE is rewritten to reflect the changed supervision model — `dispatch_status` is a non-blocking snapshot, so don't tight-poll it: do other useful work and re-check, arm the harness's own wait/scheduling (`ScheduleWakeup`), or tell the user the task is still running. Behavioral guidance lives only in the rule; `get_info`, the tool descriptions, and the README get a clean reference removal with no added guidance. The Decision Tree drops `dispatch_wait` from its dispatch poll list.
+- **Not changed.** CHANGELOG history (recording `dispatch_wait`'s earlier additions) is left intact. No tool-surface regression test was added (an explicit user scope call).
+
+**Verification.** `cargo fmt --all -- --check`, `cargo build --workspace`, `cargo test --workspace` (all pass, incl. `window_with_limits_uses_custom_tail_and_byte_cap`), `cargo clippy --workspace -- -D warnings` (clean), and `sh tooling/validate.sh` (`validate: OK`) ran in-session; a post-render `grep` confirms no `dispatch_wait` remains in any rendered rule.
+
+Reviewed before implementation by `aside_codex` (gpt-5.6-sol, high reasoning) and built-in `advisor()` — codex caught the `preview_oneline` orphan; advisor separated the necessary rule reword from additive tool-description guidance (the latter dropped per user).
+
+Version bumped 11.1.0 → 11.2.0 (minor — a public-MCP-tool-surface removal, shipped as minor per the user's call; matches the v11.0.0→11.1.0 precedent of shipping a tool-surface removal as minor).
+
 ## [11.1.0] - 2026-07-18
 
 **Stop verify hook removed.** The anti-self-grading Stop verify hook (added in v9.4.0) — a `type:"agent"` entry that spawned an independent verifier subagent on every Stop event, in every session, project-wide, to spot-check completion claims against real repository state — is retired. User judgment after months of daily use: the cost (a subagent spawn on every single turn-end, everywhere) wasn't earning its keep relative to the value it added. This is a removal, not a bug fix — the hook worked as designed (confirmed live in the v9.4.0 delivery); it just wasn't worth what it cost.

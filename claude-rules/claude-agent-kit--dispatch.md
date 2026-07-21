@@ -1,7 +1,7 @@
 <!-- slate-agent-kit:common -->
 # Dispatch Guidance
 
-Policy for the `dispatch` MCP server: it delegates an **execution** step to a coding-agent backend (codex, opencode, or claude) running headless and **write-capable**, asynchronously (submit → poll/wait → cancel/steer). Where dispatch sits relative to `aside` and the harness-native delegates is stated once in `claude-agent-kit--parallel-work.md`'s taxonomy. Operational mechanics — the tool-by-tool async model, spec fields, log paging, steering, server-enforced guards and their error codes — live in the dispatch server's instructions and tool descriptions; this file owns **GATE-DISPATCH** and the judgment rules around delegating.
+Policy for the `dispatch` MCP server: it delegates an **execution** step to a coding-agent backend (codex, opencode, or claude) running headless and **write-capable**, asynchronously (submit → poll → cancel/steer). Where dispatch sits relative to `aside` and the harness-native delegates is stated once in `claude-agent-kit--parallel-work.md`'s taxonomy. Operational mechanics — the tool-by-tool async model, spec fields, log paging, steering, server-enforced guards and their error codes — live in the dispatch server's instructions and tool descriptions; this file owns **GATE-DISPATCH** and the judgment rules around delegating.
 
 ## Execution policy (when to initiate dispatch)
 
@@ -31,13 +31,13 @@ Partial state: a fallback retry or auto-restart re-runs the same prompt in the s
 
 ## Supervising a run
 
-- Report a delegated step done only after `dispatch_status`/`dispatch_wait` shows `succeeded` — and review the captured result; exit 0 is not correctness (INV-VERIFY-1 applies to delegated work too).
+- Report a delegated step done only after `dispatch_status` shows `succeeded` — and review the captured result; exit 0 is not correctness (INV-VERIFY-1 applies to delegated work too).
 - **Silence is inconclusive, never a hang verdict.** A live backend inside a long tool/MCP call (e.g. a multi-minute aside consultation) emits no log events. Judge by `child_process_alive` + `log_last_write_age_seconds` from `dispatch_status`, not by a quiet `dispatch_logs`; do not cancel or steer on silence alone. A fresh codex run that never associates its log is auto-restarted once by the server (`restart_of`/`restarted_as` link the pair).
 - Steering (`dispatch_steer`) is turn-granularity: it interrupts and resumes the SAME backend session with your correction, context and files preserved.
 
 ### Ending a turn while a dispatch task is still running (HARD RULE)
 
-dispatch has **no push notification** — nothing wakes you when a run finishes. Either keep re-invoking `dispatch_wait` in this turn until it returns a terminal status, or — if ending the turn — arm a follow-up check via the harness's scheduling mechanism where one exists, and otherwise tell the user explicitly that the task is still running and they must ask you to check back. Never end a turn on a non-terminal task with nothing armed and no signal to the user.
+dispatch has **no push notification** — nothing wakes you when a run finishes — and no blocking wait: `dispatch_status` returns only a non-blocking snapshot, so do not sit in a tight loop re-polling it. If you have other useful work, do it and re-check `dispatch_status` later in the same turn; if you are ending the turn, arm a follow-up check via the harness's own wait/scheduling mechanism where one exists; otherwise tell the user explicitly that the task is still running and they must ask you to check back. Never end a turn on a non-terminal task with nothing armed and no signal to the user.
 
 **Claude Code binding:** this is unlike a backgrounded `Agent`/`Workflow` call (`run_in_background: true`), which auto-notifies the session on completion — dispatch does not. The scheduling mechanism to arm here is `ScheduleWakeup` (or a `/loop`), with the interval matched to the task's expected duration.
 

@@ -1,8 +1,8 @@
 <!-- slate-agent-kit:common -->
 # Claude Agent Operating Manual
 
-**Version**: 11.1.0
-**Last Updated**: 2026-07-17
+**Version**: 11.2.0
+**Last Updated**: 2026-07-22
 
 > Operating rules for Claude Code agents. This kernel defines the
 > **invariants** (each stated exactly once, with a stable ID) and names the
@@ -173,7 +173,7 @@ User Request
 │     │     task graph via TaskCreate; mid-turn steering via the workslate doorbell; leader verifies
 │     ├─ Large breadth-first mechanical sweep → Workflow (separate tool; current-turn opt-in only)
 │     └─ External execution step (codex/opencode/claude backend) → dispatch_submit
-│           → poll dispatch_status / dispatch_wait / dispatch_logs / dispatch_steer
+│           → poll dispatch_status / dispatch_logs / dispatch_steer
 │           (dispatch-prefs execution policy; proactive+auto → submit directly)
 │
 └─ Done? → verify for real (INV-VERIFY-1), report faithfully (INV-VERIFY-2)
