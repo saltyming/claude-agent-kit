@@ -4,6 +4,19 @@ All notable changes to Claude Agent Kit are documented here. Format loosely base
 
 Version numbers track the `Version` field in `CLAUDE.md`. Most entries correspond to operating-manual revisions and accompanying MCP server changes; the two ship together.
 
+## [11.2.1] - 2026-09-05
+
+**codex ≥ 0.153 rollout schema — `dispatch` and `aside` MCP servers (binary-only; rules unchanged).** codex-cli stopped writing `event_msg/user_message` / `agent_message` / `patch_apply_end` events (partially in 0.147.0, entirely from 0.153.4); prose and file changes now live only in `event_msg/item_completed` items (`UserMessage` / `AgentMessage` / `FileChange`). dispatch identified a fresh run's rollout by the nonce marker inside a `user_message` event, so every codex submit since then never associated: `dispatch_logs` reported `session_pending` forever (even after the run succeeded), `dispatch_steer` failed with `session_not_ready`, and the unassociated-run watchdog was armed against any run that wrote nothing within 30s.
+
+- **harness-log**: new `codex::message_text` reads a user/agent message in either schema (the item content block type is `text` on UserMessage, `Text` on AgentMessage). `response_item/message` is deliberately not a message source — its `role:"user"` entries include harness-injected context (plugin lists, environment notes).
+- **dispatch server**: `rollout::rollout_has_nonce` matches through `message_text` and now requires the FULL `[dispatch-task: <nonce>]` marker — a fallback-retry / watchdog-restart successor's nonce is `<base>-retryN` / `<base>-restart`, so the old bare-substring test could claim the successor's rollout for the original task. `rollout::curate` renders `item_completed` UserMessage / AgentMessage under `messages` and FileChange under `edits` (same `changes` map as `patch_apply_end`; a `failed` / `declined` status is surfaced verbatim, never shown as an applied edit); CommandExecution / McpToolCall items are skipped because their `custom_tool_call` / `function_call` records are unchanged. Prompt-echo elision covers the new schema. A `model_fallback` retry now persists its attempt nonce on the task row (`store::set_attempt_nonce`, clearing the prior association) so the retry's rollout validates instead of being rejected.
+- **aside server**: `transcript/codex.rs` renders both schemas through the same helper.
+- **Not changed**: `function_call` (MCP tool call) records are still not rendered under `tools` — a pre-existing gap.
+
+Verified in-session: `cargo fmt --check`, `cargo build/test/clippy --workspace -- -D warnings` (stable 1.98.1), `sh tooling/validate.sh` (`validate: OK`); the release `dispatch` binary, driven over stdio against a real codex 0.153.4 task row the shipped binary could not associate, resolves the rollout and renders the curated timeline. Reviewed by `aside_codex` (gpt-6-astra, high reasoning — it caught the fallback-retry nonce regression) and built-in `advisor()`. slate commits 827ee55 + 58a347f; slate release v0.5.1.
+
+Patch bump (server behavior fix; no rule or tool-surface change).
+
 ## [11.2.0] - 2026-07-22
 
 **`dispatch_wait` removed.** The `dispatch` MCP server's bounded long-poll tool — it blocked server-side until a dispatched task reached a terminal status (or a 30s/120s timeout), returning compact status plus a small curated log tail — is retired. Supervising a run is now `dispatch_status` (a non-blocking snapshot + terminal result) and `dispatch_logs` (the curated timeline); `dispatch_steer` / `dispatch_cancel` are unaffected. The advertised dispatch tool surface drops 8 → 7 tools.
