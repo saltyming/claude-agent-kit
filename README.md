@@ -58,7 +58,13 @@ Requires a supported backend CLI: [codex](https://github.com/openai/codex) (`npm
 
 ### Git preferences
 
-Commit signing, model attribution, commit message format, PR body format, and branch naming are yours, not the kit's. They live in the user-owned `~/.claude/rules/claude-agent-kit--git-prefs.md`, which installs with every value `unset`. Before the first commit or PR that needs a value, the agent asks you and writes the answer into that file; when a repository's own convention differs from your preference, it asks which to follow there and records that too. You can edit the file by hand at any time, and upgrades never overwrite it.
+Commit signing, model attribution, commit message format, PR body format, and branch naming are yours, not the kit's. They live in the user-owned `~/.claude/rules/claude-agent-kit--git-prefs.md`. The configure step asks for each value; any value you leave `unset` is asked for by the agent before the first commit or PR that needs it, and it writes the answer into that file. When a repository's own convention differs from your preference, the agent asks which to follow there and records that too.
+
+### Comment preferences
+
+Whether new files get a header, the header layout, the comment language, and how far public items are documented live in the user-owned `~/.claude/rules/claude-agent-kit--comment-prefs.md`. Every value defaults to `repository`: the repository's own convention decides, and the file only settles what a repository leaves open (a `structured` header layout is offered for repositories without one). A line under "Repository overrides" replaces a repository's convention for that repository.
+
+Both files are edited in place: `make configure` asks for each value with the current one as the default and leaves recorded overrides and notes alone. You can edit either file by hand at any time, and upgrades never overwrite them.
 
 ## Installation
 
@@ -78,7 +84,7 @@ irm https://raw.githubusercontent.com/saltyming/claude-agent-kit/main/install.ps
 irm https://raw.githubusercontent.com/saltyming/claude-agent-kit/main/install.ps1 -OutFile install.ps1; .\install.ps1 -Uninstall
 ```
 
-The installer builds and registers the shared `aside` / `dispatch` from a slate-agent-kit checkout (`SLATE_AGENT_KIT_DIR`, a sibling `../slate-agent-kit`, or a shallow clone; needs Rust; `SKIP_MCP=1` skips), installs `CLAUDE.md` and the rule files, then runs the interactive `aside` and `dispatch` configuration and installs the git preferences file if it is absent. All prompts accept ENTER for the default; `ASIDE_*` and `DISPATCH_*` env vars skip them for CI. Upgrading from 11.x also removes workslate (its `settings.json` hooks, binary, MCP registration, and per-project db); your other hooks are left untouched and `settings.json` is backed up before it is edited.
+The installer builds and registers the shared `aside` / `dispatch` from a slate-agent-kit checkout (`SLATE_AGENT_KIT_DIR`, a sibling `../slate-agent-kit`, or a shallow clone; needs Rust; `SKIP_MCP=1` skips), installs `CLAUDE.md` and the rule files, then runs the interactive `aside`, `dispatch`, git, and comment preference configuration. All prompts accept ENTER for the default; `ASIDE_*`, `DISPATCH_*`, `GIT_*`, and `COMMENT_*` env vars seed them for CI. Upgrading from 11.x also removes workslate (its `settings.json` hooks, binary, MCP registration, and per-project db); your other hooks are left untouched and `settings.json` is backed up before it is edited.
 
 **From source** (Rust is needed only for the shared MCP servers):
 
@@ -96,6 +102,7 @@ Uninstall branches on a first-line signature: kit-managed files carry `<!-- slat
 ```bash
 cp CLAUDE.md ~/.claude/CLAUDE.md && mkdir -p ~/.claude/rules && cp claude-rules/*.md ~/.claude/rules/
 cp scripts/claude-agent-kit--git-prefs.md.tmpl ~/.claude/rules/claude-agent-kit--git-prefs.md
+cp scripts/claude-agent-kit--comment-prefs.md.tmpl ~/.claude/rules/claude-agent-kit--comment-prefs.md
 # aside + dispatch (with their required env — ASIDE_HARNESS=claude,
 # SLATE_AGENT_STATE_HOME) are registered from a slate-agent-kit checkout:
 #   <slate>/tooling/install-mcp.sh --configure-claude

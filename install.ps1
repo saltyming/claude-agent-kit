@@ -247,14 +247,14 @@ if (Get-Command claude -ErrorAction SilentlyContinue) {
     Write-Host "  claude mcp add dispatch -s user --transport stdio -e SLATE_AGENT_STATE_HOME=$ClaudeDir -- $(Join-Path $BinDir 'dispatch.exe')"
 }
 
-# ── aside + dispatch preferences (the shared configure-prefs.ps1) ──
+# ── aside, dispatch, git, comment preferences (the shared configure-prefs.ps1) ──
 # The SAME generator every kit uses — interactive-first, asks before overwrite,
 # injection-safe. slate's POSIX configure-prefs.sh cannot run on Windows, so it
 # is fetched alongside the rules and invoked here.
 $prefsTmp = Join-Path $env:TEMP ("cak-prefs-" + [System.Guid]::NewGuid())
 New-Item -ItemType Directory -Force -Path $prefsTmp | Out-Null
 Invoke-WebRequest -Uri "$RawBase/scripts/configure-prefs.ps1" -OutFile (Join-Path $prefsTmp "configure-prefs.ps1")
-foreach ($t in @("aside", "dispatch", "git")) {
+foreach ($t in @("aside", "dispatch", "git", "comment")) {
     Invoke-WebRequest -Uri "$RawBase/scripts/claude-agent-kit--$t-prefs.md.tmpl" -OutFile (Join-Path $prefsTmp "claude-agent-kit--$t-prefs.md.tmpl")
 }
 & (Join-Path $prefsTmp "configure-prefs.ps1") -RulesDir $RulesDir -Prefix "claude-agent-kit" -Manifest $Manifest

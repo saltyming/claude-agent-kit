@@ -53,7 +53,7 @@ install:
 	done
 	@# Build + register the SHARED aside/dispatch servers from slate-agent-kit
 	@$(MAKE) --no-print-directory install-mcp
-	@# Interactive aside + dispatch prefs (the shared configure-prefs.sh)
+	@# Interactive aside, dispatch, git, and comment prefs (the shared configure-prefs.sh)
 	@RULES_DIR=$(RULES_DIR) PREFIX=claude-agent-kit MANIFEST=$(MANIFEST) \
 		sh $(CONFIGURE_PREFS)
 	@# Shared custom-rules ingestion (once, via the cak-common.sh function)

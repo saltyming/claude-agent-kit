@@ -2,11 +2,16 @@
 #
 # Single prefs generator for every kit's install.ps1 (slate's POSIX
 # configure-prefs.sh cannot run on Windows). Same behaviour as the shell
-# version: INTERACTIVE-FIRST (Read-Host), ASKS before overwriting existing
+# version: INTERACTIVE-FIRST (Read-Host), ASKS before changing existing
 # prefs, and injection-safe (literal String.Replace, never regex). Environment
 # variables are optional seeds for the prompt defaults / non-interactive runs;
 # nothing here requires one. Templates are resolved next to this script as
-# <Prefix>--{aside,dispatch,git}-prefs.md.tmpl.
+# <Prefix>--{aside,dispatch,git,comment}-prefs.md.tmpl.
+#
+# aside/dispatch are regenerated from their template. git/comment are edited in
+# place: the agent records answers and the user writes repository overrides and
+# notes into those files, so a reconfigure rewrites only the value lines and
+# offers each current value as the prompt default.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$RulesDir,
@@ -62,7 +67,7 @@ function Read-Var($key, $label) {
 
 # $true to (re)generate; $false to keep. New file → generate; existing file →
 # ASK (default keep). PREFS_RECONFIGURE overrides the prompt for CI.
-function Test-WantGenerate($dest) {
+function Test-WantGenerate($dest, $question = "Reconfigure (overwrite)? [y/N]") {
     if (-not (Test-Path $dest)) { return $true }
     $env = [Environment]::GetEnvironmentVariable("PREFS_RECONFIGURE")
     if ($env -match '^(y|Y|yes|YES|Yes)$') { return $true }
@@ -71,7 +76,7 @@ function Test-WantGenerate($dest) {
     Write-Host ""
     Write-Host "Existing preferences found at:"
     Write-Host "  $dest"
-    $ans = Read-Host "Reconfigure (overwrite)? [y/N]"
+    $ans = Read-Host $question
     return ($ans -match '^(y|Y|yes|YES|Yes)$')
 }
 
@@ -150,20 +155,74 @@ if (Test-WantGenerate $dispatchDest) {
     Add-Manifest $dispatchDest
 }
 
-# ── git ──
-# No prompts: every value ships as `unset`, and the agent asks the user and
-# records the answer the first time a commit or PR needs it. An existing file
-# holds those recorded answers, so it is never regenerated, not even under
-# PREFS_RECONFIGURE.
-$gitTmpl = Join-Path $here "$Prefix--git-prefs.md.tmpl"
-$gitDest = Join-Path $RulesDir "$Prefix--git-prefs.md"
-if (-not (Test-Path $gitTmpl)) { throw "template not found: $gitTmpl" }
-if (Test-Path $gitDest) {
-    Write-Host "  prefs exist, keeping: $gitDest"
-} else {
-    $dir = Split-Path -Parent $gitDest
-    if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-    Copy-Item -Path $gitTmpl -Destination $gitDest
-    Write-Host "  prefs: $gitDest"
+# ── git / comment (edited in place) ──
+# A value line is the first `**...**` line under its `## <heading>`.
+function Get-PrefsValue($lines, $heading) {
+    $on = $false
+    foreach ($l in $lines) {
+        if ($l -eq "## $heading") { $on = $true; continue }
+        if ($on -and $l.StartsWith("## ")) { return "" }
+        if ($on -and $l.Length -ge 4 -and $l.StartsWith("**") -and $l.EndsWith("**")) {
+            return $l.Substring(2, $l.Length - 4)
+        }
+    }
+    return ""
 }
-Add-Manifest $gitDest
+
+function Set-PrefsValue($lines, $heading, $value) {
+    $on = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $l = $lines[$i]
+        if ($l -eq "## $heading") { $on = $true; continue }
+        if ($on -and $l.StartsWith("## ")) { return }
+        if ($on -and $l.Length -ge 4 -and $l.StartsWith("**") -and $l.EndsWith("**")) {
+            $lines[$i] = "**" + $value + "**"
+            return
+        }
+    }
+}
+
+# $knobs: ordered list of @(envName, heading, promptLabel). A new file starts
+# as a copy of the template; an existing file changes only if the user agrees
+# to reconfigure it. Each prompt default is the env seed if set, otherwise the
+# value already in the file.
+function Update-PrefsInPlace($tmpl, $dest, $title, $knobs) {
+    if (-not (Test-Path $tmpl)) { throw "template not found: $tmpl" }
+    if (-not (Test-WantGenerate $dest "Reconfigure the values (other lines are kept)? [y/N]")) {
+        Write-Host "  prefs exist, keeping: $dest"
+        Add-Manifest $dest
+        return
+    }
+    $src = if (Test-Path $dest) { $dest } else { $tmpl }
+    $text = Get-Content $src -Raw
+    $nl = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $lines = [System.Collections.Generic.List[string]]::new([string[]]($text -split "`r?`n"))
+    if (Test-Interactive) { Write-Host "Configuring $title preferences (Enter keeps the shown value)." }
+    foreach ($k in $knobs) {
+        $val = Seed $k[0] (Get-PrefsValue $lines $k[1])
+        if (Test-Interactive) {
+            $ans = Read-Host "$($k[2]) [$val]"
+            if (-not [string]::IsNullOrEmpty($ans)) { $val = $ans }
+        }
+        Set-PrefsValue $lines $k[1] $val
+    }
+    $dir = Split-Path -Parent $dest
+    if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    Set-Content -Path $dest -Value ($lines -join $nl) -NoNewline
+    Write-Host "  prefs: $dest"
+    Add-Manifest $dest
+}
+
+Update-PrefsInPlace (Join-Path $here "$Prefix--git-prefs.md.tmpl") (Join-Path $RulesDir "$Prefix--git-prefs.md") "git" @(
+    @("GIT_SIGNING", "Commit signing", "git commit signing (default/no-gpg-sign, unset = ask later)"),
+    @("GIT_ATTRIBUTION", "Model attribution", "git model attribution (on/off, unset = ask later)"),
+    @("GIT_COMMIT_FORMAT", "Commit message format", "git commit message format (conventional/repository/your own, unset = ask later)"),
+    @("GIT_PR_BODY", "PR body format", "git PR body format (summary-test-plan/repository/your own, unset = ask later)"),
+    @("GIT_BRANCH_NAMING", "Branch naming", "git branch naming (descriptive/repository/your own, unset = ask later)")
+)
+
+Update-PrefsInPlace (Join-Path $here "$Prefix--comment-prefs.md.tmpl") (Join-Path $RulesDir "$Prefix--comment-prefs.md") "comment" @(
+    @("COMMENT_HEADERS", "File headers", "file headers (repository/structured/your own)"),
+    @("COMMENT_LANGUAGE", "Comment language", "comment language (repository/english/korean/your own)"),
+    @("COMMENT_DOC", "Doc comments", "doc comments (repository/public-api/your own)")
+)

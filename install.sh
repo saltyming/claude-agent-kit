@@ -245,9 +245,9 @@ install_shared_mcp() {
 
 install_shared_mcp
 
-# Interactive aside + dispatch preference configuration — the SAME
+# Interactive aside, dispatch, git, and comment preference configuration — the SAME
 # configure-prefs.sh codex/kimi use (single source). Templates must sit next to
-# it (it resolves "$HERE/<PREFIX>--{aside,dispatch,git}-prefs.md.tmpl").
+# it (it resolves "$HERE/<PREFIX>--{aside,dispatch,git,comment}-prefs.md.tmpl").
 echo ""
 scripts_tmp=$(mktemp -d)
 download "$RAW_BASE/scripts/configure-prefs.sh" "$scripts_tmp/configure-prefs.sh"
@@ -255,6 +255,7 @@ download "$RAW_BASE/scripts/cak-common.sh" "$scripts_tmp/cak-common.sh"
 download "$RAW_BASE/scripts/claude-agent-kit--aside-prefs.md.tmpl" "$scripts_tmp/claude-agent-kit--aside-prefs.md.tmpl"
 download "$RAW_BASE/scripts/claude-agent-kit--dispatch-prefs.md.tmpl" "$scripts_tmp/claude-agent-kit--dispatch-prefs.md.tmpl"
 download "$RAW_BASE/scripts/claude-agent-kit--git-prefs.md.tmpl" "$scripts_tmp/claude-agent-kit--git-prefs.md.tmpl"
+download "$RAW_BASE/scripts/claude-agent-kit--comment-prefs.md.tmpl" "$scripts_tmp/claude-agent-kit--comment-prefs.md.tmpl"
 RULES_DIR="$RULES_DIR" PREFIX=claude-agent-kit MANIFEST="$MANIFEST" \
     sh "$scripts_tmp/configure-prefs.sh"
 # Custom-rules ingestion (claude-specific; separate concern from prefs)
