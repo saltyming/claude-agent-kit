@@ -8,6 +8,7 @@ param([switch]$Uninstall, [string]$DispatchRoots = $env:DISPATCH_ROOTS)
 $ErrorActionPreference = "Stop"
 
 $Repo      = "saltyming/claude-agent-kit"
+$SlateRepo = if ($env:SLATE_REPO) { $env:SLATE_REPO } else { "saltyming/slate-agent-kit" }
 $Branch    = "main"
 $RawBase   = "https://raw.githubusercontent.com/$Repo/$Branch"
 $ClaudeDir = Join-Path $env:USERPROFILE ".claude"
@@ -17,6 +18,9 @@ $BinDir    = Join-Path $env:USERPROFILE ".local\bin"
 $Manifest  = Join-Path $ClaudeDir ".claude-agent-kit-manifest"
 $Signature       = "claude-agent-kit"
 $CustomSignature = "claude-agent-kit-custom"
+# Rendered kit files carry the shared slate signature; files from before v10 carry
+# the kit's own. Both are kit-managed (install.sh and the Makefile match both too).
+$CoreSignaturePattern = "<!-- (slate-agent-kit:common|" + [regex]::Escape($Signature) + ") -->"
 
 $RuleFiles = @(
     "claude-agent-kit--task-execution.md"
@@ -28,19 +32,37 @@ $RuleFiles = @(
     "claude-agent-kit--palette.md"
 )
 
-$Binaries = @("workslate", "aside", "dispatch")
+$Binaries = @("aside", "dispatch")
 
 $SkillNames = @("palette-init", "palette-spec", "palette-ux", "palette-ui", "palette-rules")
 
+# workslate shipped through 11.x and was dropped in 12.0.0. Its settings.json
+# hooks, binary, MCP registration and per-project db have to go on upgrade and on
+# uninstall; scripts/remove-legacy-workslate.ps1 owns that (see its header).
+function Remove-LegacyWorkslate {
+    $tmp = Join-Path $env:TEMP ("cak-workslate-" + [System.Guid]::NewGuid())
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+    $script = Join-Path $tmp "remove-legacy-workslate.ps1"
+    try {
+        Invoke-WebRequest -Uri "$RawBase/scripts/remove-legacy-workslate.ps1" -OutFile $script
+        & $script -ClaudeDir $ClaudeDir -BinDir $BinDir
+    } catch {
+        $settingsPath = Join-Path $ClaudeDir "settings.json"
+        $leftover = (Test-Path (Join-Path $BinDir "workslate.exe")) -or
+            ((Test-Path $settingsPath) -and (Select-String -Path $settingsPath -Pattern "workslate" -Quiet))
+        if ($leftover) {
+            Write-Warning "could not run remove-legacy-workslate.ps1 ($_); workslate leftovers were not cleaned up. Re-run this installer when online."
+        }
+    } finally {
+        Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Do-Uninstall {
+    Remove-LegacyWorkslate
     if (-not (Test-Path $Manifest)) {
         Write-Host "No manifest found. Nothing to uninstall."
         return
-    }
-    # Remove PreToolUse doorbell hooks while the binary still exists
-    $workslateExe = Join-Path $BinDir "workslate.exe"
-    if (Test-Path $workslateExe) {
-        try { & $workslateExe --uninstall-hooks 2>$null } catch {}
     }
     $customList = @()
     foreach ($f in Get-Content $Manifest) {
@@ -49,7 +71,7 @@ function Do-Uninstall {
                 $first = Get-Content $f -TotalCount 1
                 if ($first -match [regex]::Escape("<!-- $CustomSignature")) {
                     $customList += $f
-                } elseif ($first -match [regex]::Escape("<!-- $Signature -->")) {
+                } elseif ($first -match $CoreSignaturePattern) {
                     Remove-Item $f -Force
                     Write-Host "  removed $f"
                 } else {
@@ -89,7 +111,7 @@ function Do-Uninstall {
     foreach ($d in Get-Content $Manifest) {
         if ($d -like "*\skills\palette-*" -and (Test-Path $d -PathType Container)) {
             $skillMd = Join-Path $d "SKILL.md"
-            if ((Test-Path $skillMd) -and (Select-String -Path $skillMd -Pattern ([regex]::Escape("<!-- $Signature -->")) -Quiet)) {
+            if ((Test-Path $skillMd) -and (Select-String -Path $skillMd -Pattern ($CoreSignaturePattern) -Quiet)) {
                 Remove-Item $d -Recurse -Force
                 Write-Host "  removed $d"
             } else {
@@ -126,31 +148,30 @@ $platform = "$arch-pc-windows-msvc"
 
 New-Item -ItemType Directory -Force -Path $RulesDir | Out-Null
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+Remove-LegacyWorkslate
 Set-Content $Manifest -Value ""
 
-# Binaries from latest GitHub Release
+# aside / dispatch come from slate-agent-kit's release (this kit ships no
+# binaries). A failed download skips that server; the rules still install.
+$Fetched = @()
 foreach ($bin in $Binaries) {
-    Write-Host "Downloading $bin binary ($platform)..."
-    $releaseUrl = "https://github.com/$Repo/releases/latest/download/$bin-$platform.zip"
-    $tmp = New-TemporaryFile | Rename-Item -NewName { $_.Name + ".zip" } -PassThru
-    Invoke-WebRequest -Uri $releaseUrl -OutFile $tmp.FullName
-    $extractDir = Join-Path $env:TEMP "claude-agent-kit-extract-$bin"
-    if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
-    Expand-Archive -Path $tmp.FullName -DestinationPath $extractDir -Force
-    $binDest = Join-Path $BinDir "$bin.exe"
-    Copy-Item (Join-Path $extractDir "$bin.exe") -Destination $binDest -Force
-    Add-Content $Manifest $binDest
-    Remove-Item $tmp.FullName -Force
-    Remove-Item $extractDir -Recurse -Force
-}
-
-# Register PreToolUse doorbell hooks in settings.json
-$workslateExe = Join-Path $BinDir "workslate.exe"
-try {
-    & $workslateExe --install-hooks
-    if ($LASTEXITCODE -ne 0) { throw }
-} catch {
-    Write-Host "  Hook registration failed. Run manually: $workslateExe --install-hooks"
+    Write-Host "Downloading $bin binary ($platform) from $SlateRepo..."
+    $releaseUrl = "https://github.com/$SlateRepo/releases/latest/download/$bin-$platform.zip"
+    $zip = Join-Path $env:TEMP ("$bin-$platform-" + [System.Guid]::NewGuid() + ".zip")
+    $extractDir = Join-Path $env:TEMP ("claude-agent-kit-extract-$bin-" + [System.Guid]::NewGuid())
+    try {
+        Invoke-WebRequest -Uri $releaseUrl -OutFile $zip
+        Expand-Archive -Path $zip -DestinationPath $extractDir -Force
+        $binDest = Join-Path $BinDir "$bin.exe"
+        Copy-Item (Join-Path $extractDir "$bin.exe") -Destination $binDest -Force
+        Add-Content $Manifest $binDest
+        $Fetched += $bin
+    } catch {
+        Write-Warning "could not fetch $bin from $SlateRepo releases ($_); $bin will not be registered."
+    } finally {
+        Remove-Item $zip -Force -ErrorAction SilentlyContinue
+        Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # CLAUDE.md
@@ -179,7 +200,7 @@ foreach ($s in $SkillNames) {
 
 Write-Host ""
 Write-Host "Installed:"
-Write-Host "  Binaries: $BinDir\workslate.exe, $BinDir\aside.exe, $BinDir\dispatch.exe"
+Write-Host "  Binaries: $(($Fetched | ForEach-Object { Join-Path $BinDir "$_.exe" }) -join ', ')"
 Write-Host "  Config:   $claudeDest"
 Write-Host "  Rules:    $RulesDir\claude-agent-kit--*.md"
 Write-Host "  Skills:   $SkillsDir\palette-*"
@@ -202,7 +223,7 @@ if ($userPath -notlike "*$BinDir*") {
 # ~/.local\bin is not on PATH; aside needs ASIDE_HARNESS, dispatch needs
 # SLATE_AGENT_STATE_HOME so per-project task history is not orphaned).
 if (Get-Command claude -ErrorAction SilentlyContinue) {
-    foreach ($srv in $Binaries) {
+    foreach ($srv in $Fetched) {
         $srvExe = Join-Path $BinDir "$srv.exe"
         $envArgs = @()
         if ($srv -eq "aside") {
@@ -233,7 +254,7 @@ if (Get-Command claude -ErrorAction SilentlyContinue) {
 $prefsTmp = Join-Path $env:TEMP ("cak-prefs-" + [System.Guid]::NewGuid())
 New-Item -ItemType Directory -Force -Path $prefsTmp | Out-Null
 Invoke-WebRequest -Uri "$RawBase/scripts/configure-prefs.ps1" -OutFile (Join-Path $prefsTmp "configure-prefs.ps1")
-foreach ($t in @("aside", "dispatch")) {
+foreach ($t in @("aside", "dispatch", "git")) {
     Invoke-WebRequest -Uri "$RawBase/scripts/claude-agent-kit--$t-prefs.md.tmpl" -OutFile (Join-Path $prefsTmp "claude-agent-kit--$t-prefs.md.tmpl")
 }
 & (Join-Path $prefsTmp "configure-prefs.ps1") -RulesDir $RulesDir -Prefix "claude-agent-kit" -Manifest $Manifest
@@ -263,7 +284,7 @@ function Install-CustomRules {
         $destName = if ($base.StartsWith("claude-agent-kit--")) { $base } else { "claude-agent-kit--$base" }
         $dest = Join-Path $RulesDir $destName
 
-        if ((Test-Path $dest) -and ((Get-Content $dest -TotalCount 1) -match [regex]::Escape("<!-- $Signature -->"))) {
+        if ((Test-Path $dest) -and ((Get-Content $dest -TotalCount 1) -match $CoreSignaturePattern)) {
             Write-Host "  refusing to overwrite core kit file: $dest"
             continue
         }

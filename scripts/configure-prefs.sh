@@ -1,11 +1,13 @@
 #!/bin/sh
-# Generate the aside/dispatch preference files for a rendered kit.
+# Generate the aside/dispatch preference files for a rendered kit, and install
+# the git preference file when it is absent.
 #
 # Harness-neutral: the kit's Makefile/install.sh invokes this with
 #   RULES_DIR=<harness rules dir> PREFIX=<kit prefix> [MANIFEST=<file>] \
 #     sh scripts/configure-prefs.sh
 # Templates are looked up next to this script as
-#   <PREFIX>--aside-prefs.md.tmpl / <PREFIX>--dispatch-prefs.md.tmpl
+#   <PREFIX>--aside-prefs.md.tmpl / <PREFIX>--dispatch-prefs.md.tmpl /
+#   <PREFIX>--git-prefs.md.tmpl
 # (rendered from shared/prefs/ by slate's render-kit.sh).
 #
 # INTERACTIVE-FIRST. On a terminal (read from /dev/tty, so `curl … | sh` still
@@ -181,3 +183,20 @@ else
   echo "  prefs exist, keeping: $dispatch_dest"
   record_manifest "$dispatch_dest"
 fi
+
+# ── git ───────────────────────────────────────────────────
+# No prompts here: every value ships as `unset`, and the agent asks the user
+# and records the answer the first time a commit or PR needs it. An existing
+# file holds those recorded answers, so it is never regenerated, not even under
+# PREFS_RECONFIGURE.
+git_tmpl="$HERE/${PREFIX}--git-prefs.md.tmpl"
+git_dest="$RULES_DIR/${PREFIX}--git-prefs.md"
+[ -f "$git_tmpl" ] || { echo "Error: template not found: $git_tmpl" >&2; exit 1; }
+if [ -f "$git_dest" ]; then
+  echo "  prefs exist, keeping: $git_dest"
+else
+  mkdir -p "$(dirname -- "$git_dest")"
+  cp "$git_tmpl" "$git_dest"
+  echo "  prefs: $git_dest"
+fi
+record_manifest "$git_dest"

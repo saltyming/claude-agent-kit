@@ -7,46 +7,28 @@ on:
     branches: [main]
 
 jobs:
-  build-and-test:
-    name: Build + test (workslate)
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: cargo build
-        run: cargo build --release -p workslate
-
-      - name: cargo test
-        run: cargo test --release -p workslate
-
-      - name: cargo clippy
-        run: cargo clippy --all-targets --all-features -p workslate -- -D warnings
-
-      # Formatting is OS-agnostic, so this only needs to run once.
-      - name: cargo fmt (check)
-        if: matrix.os == 'ubuntu-latest'
-        run: cargo fmt --all -- --check
-
-  shellcheck:
-    name: shellcheck (install.sh, configure-aside.sh, configure-dispatch.sh)
+  scripts:
+    name: installer scripts (syntax + shellcheck)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: POSIX sh syntax
+        run: |
+          for f in install.sh scripts/*.sh; do
+            sh -n "$f"
+          done
+      - name: PowerShell syntax
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($f in @("install.ps1") + (Get-ChildItem scripts/*.ps1 | ForEach-Object FullName)) {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$null, [ref]$errors)
+            if ($errors.Count -gt 0) { Write-Host "$f: $($errors.Count) parse error(s)"; $failed = $true }
+          }
+          if ($failed) { exit 1 }
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
-      - name: Check install.sh
-        run: shellcheck -s sh install.sh || true
-      - name: Check configure-aside.sh
-        run: shellcheck -s sh scripts/configure-aside.sh || true
-      - name: Check configure-dispatch.sh
-        run: shellcheck -s sh scripts/configure-dispatch.sh || true
+      # Advisory, as in slate-agent-kit's CI.
+      - name: shellcheck
+        run: shellcheck -s sh install.sh scripts/*.sh || true

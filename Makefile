@@ -12,24 +12,23 @@ SKILL_DIRS := $(wildcard claude-skills/palette-*)
 
 CONFIGURE_PREFS    := scripts/configure-prefs.sh
 CAK_COMMON         := scripts/cak-common.sh
+REMOVE_WORKSLATE   := scripts/remove-legacy-workslate.sh
 
 .DEFAULT_GOAL := help
-.PHONY: help install uninstall build configure install-mcp
+.PHONY: help install uninstall configure install-mcp
 
 help:
 	@echo "claude-agent-kit — targets:"
-	@echo "  install      build + install rules/skills/workslate, register MCP, configure prefs"
+	@echo "  install      install rules/skills, register the shared MCP servers, configure prefs"
 	@echo "  configure    re-run interactive aside/dispatch preference setup"
 	@echo "  uninstall    remove kit-signed files (user-owned '-custom:' prefs are kept)"
-	@echo "  build        compile the workslate binary only"
 	@echo "  install-mcp  build/register the shared aside/dispatch servers via slate"
 	@echo "Vars: SKIP_MCP=1  SLATE_AGENT_KIT_DIR=<path>  CLAUDE_DIR=<path>  BIN_DIR=<path>"
 
-build:
-	cargo build --release -p workslate
-
-install: build
+install:
 	@mkdir -p $(RULES_DIR) $(BIN_DIR) $(SKILLS_DIR)
+	@# workslate shipped through 11.x; remove its hooks, binary, MCP entry and db
+	@CLAUDE_DIR="$(CLAUDE_DIR)" BIN_DIR="$(BIN_DIR)" sh $(REMOVE_WORKSLATE)
 	@: > $(MANIFEST)
 	@if [ -f "$(CLAUDE_DIR)/CLAUDE.md" ] && ! head -1 "$(CLAUDE_DIR)/CLAUDE.md" | grep -Eq "<!-- (slate-agent-kit:common|$(SIGNATURE)) -->"; then \
 		bak="$(CLAUDE_DIR)/CLAUDE.md.bak-$$(date -u +%Y%m%dT%H%M%SZ)"; \
@@ -52,27 +51,6 @@ install: build
 		cp -R "$$d" "$$dest"; \
 		echo $$dest >> $(MANIFEST); \
 	done
-	@# Install the workslate binary (aside/dispatch are shared — see install-mcp)
-	@for bin in workslate; do \
-		cp target/release/$$bin $(BIN_DIR)/$$bin.tmp.$$$$ && mv -f $(BIN_DIR)/$$bin.tmp.$$$$ $(BIN_DIR)/$$bin || cp target/release/$$bin $(BIN_DIR)/$$bin; \
-		if [ "$$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then \
-			codesign --force --sign - $(BIN_DIR)/$$bin 2>/dev/null && \
-				echo "  Code signed (ad-hoc): $$bin." || echo "  WARNING: codesign failed for $$bin; macOS may SIGKILL the unsigned binary." >&2; \
-		fi; \
-		echo $(BIN_DIR)/$$bin >> $(MANIFEST); \
-	done
-	@# Register PreToolUse doorbell hooks in settings.json
-	@$(BIN_DIR)/workslate --install-hooks || echo "  Hook registration failed. Run manually: $(BIN_DIR)/workslate --install-hooks"
-	@# Register the workslate MCP server (Claude-only)
-	@if command -v claude >/dev/null 2>&1; then \
-		echo "Registering workslate MCP server..."; \
-		claude mcp add workslate -s user --transport stdio -- $(BIN_DIR)/workslate 2>/dev/null && \
-			echo "  workslate registered." || \
-			echo "  workslate registration failed. Run manually: claude mcp add workslate -s user --transport stdio -- $(BIN_DIR)/workslate"; \
-	else \
-		echo "Claude Code CLI not found. Register manually:"; \
-		echo "  claude mcp add workslate -s user --transport stdio -- $(BIN_DIR)/workslate"; \
-	fi
 	@# Build + register the SHARED aside/dispatch servers from slate-agent-kit
 	@$(MAKE) --no-print-directory install-mcp
 	@# Interactive aside + dispatch prefs (the shared configure-prefs.sh)
@@ -82,7 +60,7 @@ install: build
 	@RULES_DIR=$(RULES_DIR) MANIFEST=$(MANIFEST) \
 		sh -c '. $(CAK_COMMON); ingest_custom_rules'
 	@echo ""
-	@echo "Installed to $(CLAUDE_DIR) and $(BIN_DIR)/{workslate,aside,dispatch}"
+	@echo "Installed to $(CLAUDE_DIR) and $(BIN_DIR)/{aside,dispatch}"
 	@echo "Manifest: $(MANIFEST)"
 
 install-mcp:
@@ -112,12 +90,11 @@ configure:
 		sh -c '. $(CAK_COMMON); ingest_custom_rules'
 
 uninstall:
+	@CLAUDE_DIR="$(CLAUDE_DIR)" BIN_DIR="$(BIN_DIR)" sh $(REMOVE_WORKSLATE)
 	@if [ ! -f $(MANIFEST) ]; then \
 		echo "No manifest found at $(MANIFEST). Nothing to uninstall."; \
 		exit 0; \
 	fi
-	@# Remove PreToolUse doorbell hooks while the binary still exists
-	@[ -x $(BIN_DIR)/workslate ] && $(BIN_DIR)/workslate --uninstall-hooks 2>/dev/null || true
 	@# First pass: remove core-signed files; collect custom-signed ones.
 	@custom_list=""; \
 	while IFS= read -r f; do \
@@ -180,7 +157,7 @@ uninstall:
 	done
 	@rm -f $(MANIFEST)
 	@if command -v claude >/dev/null 2>&1; then \
-		for srv in workslate aside dispatch; do \
+		for srv in aside dispatch; do \
 			claude mcp remove $$srv -s user 2>/dev/null && echo "  $$srv unregistered." || true; \
 		done; \
 	fi

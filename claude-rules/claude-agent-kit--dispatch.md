@@ -1,46 +1,38 @@
 <!-- slate-agent-kit:common -->
 # Dispatch Guidance
 
-Policy for the `dispatch` MCP server: it delegates an **execution** step to a coding-agent backend (codex, opencode, or claude) running headless and **write-capable**, asynchronously (submit → poll → cancel/steer). Where dispatch sits relative to `aside` and the harness-native delegates is stated once in `claude-agent-kit--parallel-work.md`'s taxonomy. Operational mechanics — the tool-by-tool async model, spec fields, log paging, steering, server-enforced guards and their error codes — live in the dispatch server's instructions and tool descriptions; this file owns **GATE-DISPATCH** and the judgment rules around delegating.
+Policy for the `dispatch` MCP server, which hands an execution step to a coding-agent backend that runs headless, write-capable, and asynchronously. How to operate it (the submit, status, logs, steer, and cancel tools, the spec fields, reading a quiet log, the server-enforced guards) is in the server's own instructions and tool descriptions. This file holds GATE-DISPATCH and the judgment around delegating. For how dispatch relates to `aside` and the harness-native delegates, see `claude-agent-kit--parallel-work.md`.
 
-## Execution policy (when to initiate dispatch)
+## Execution policy
 
-Read `claude-agent-kit--dispatch-prefs.md` before choosing dispatch; absent or unclear → `conservative`.
+Read `claude-agent-kit--dispatch-prefs.md` before choosing dispatch. If it is absent or unclear, use `conservative`.
 
-- `conservative` — submit only on an explicit current-turn user request, or direct approval of a proposed dispatch.
-- `preference-only` — no auto-submit; when the user asks for execution delegation without naming a surface, prefer dispatch for execution-shaped work.
-- `proactive` — for suitable steps the agent **SHOULD** initiate dispatch. With `approval mode: ask`, run the gate below first; with `approval mode: auto`, submit directly within the server's hard guards.
+- `conservative`: submit only when the user asks for dispatch in the current turn, or approves a dispatch you proposed.
+- `preference-only`: do not auto-submit. When the user asks for execution delegation without naming a surface, prefer dispatch for execution-shaped work.
+- `proactive`: initiate dispatch for suitable steps. With `approval mode: ask`, run GATE-DISPATCH first. With `approval mode: auto`, submit directly, within the server's guards.
 
-**This overrides the general write-capable delegation gate for dispatch specifically.** `CLAUDE.md` and `claude-agent-kit--parallel-work.md` default write-capable delegation to surface-and-propose; `proactive` + `auto` is dispatch's own, narrower, user-configured gate and takes precedence — no proposal round beyond the one-time confirmation below.
+`proactive` with `auto` is the user-configured policy that INV-GATE-1 allows for a specific mechanism. For dispatch it replaces the propose-and-wait round of GATE-DELEGATE. A current-turn instruction from the user ("use dispatch", "do not dispatch") outranks prefs.
 
-Proactive dispatch is for **execution, not judgment**. Suitable: isolated mechanical edits, long verification/fix loops, large well-scoped repetitive sweeps, independent plan steps with clear target files and acceptance criteria. Not suitable: ambiguous product scope, edits overlapping active local/user changes, work needing tight interactive judgment, anything that cannot be one self-contained spec. A configured `model_fallback` chain reduces transient-failure stranding and justifies somewhat longer steps for already-suitable work — it never loosens the judgment exclusions. An explicit current-turn user instruction ("use dispatch" / "do not dispatch") always wins over prefs.
+Dispatch is for execution, not judgment. It fits isolated mechanical edits, long verify-and-fix loops, large well-scoped repetitive sweeps, and independent plan steps with clear target files and acceptance criteria. Do not dispatch work with ambiguous product scope, edits that overlap active local or user changes, work that needs close interactive judgment, or anything that cannot be written as one self-contained spec. A configured `model_fallback` chain makes a stranded run less likely and justifies somewhat longer steps for work that already fits. It does not relax these exclusions.
 
-## GATE-DISPATCH: Approval gate (HARD RULE)
+## GATE-DISPATCH: approval gate
 
-**GATE-DISPATCH — dispatch's own instance of INV-GATE-1.** Before the FIRST dispatch in a session, confirm with the user (unless prefs set `approval mode: auto`): (1) the exact **working_dir** the backend will edit, (2) the **step scope** being delegated, (3) the **granularity** — per-step vs whole-plan batch (one `plan_id`). After that, follow the agreed granularity; a genuinely new working_dir or materially wider scope is a fresh confirmation.
+**GATE-DISPATCH — dispatch's own instance of INV-GATE-1.** Before the first dispatch in a session, unless prefs set `approval mode: auto`, confirm with the user: the `working_dir` the backend will edit, the step scope being delegated, and the granularity (each step separately, or the whole plan as one batch under one `plan_id`). After that, follow the agreed granularity. A new `working_dir` or a materially wider scope needs a new confirmation.
 
-**A `model_fallback` retry is never a fresh-confirmation trigger** — the server's automatic same-task retry on a transient backend error reuses the approved objective/working_dir/scope; only the model changes. Do not re-ask permission per attempt. Likewise the server's automatic restart of an unassociated run (`restart_of`) re-runs the already-approved task — not a new dispatch.
+A `model_fallback` retry does not need a new confirmation: the server retries the same task with the approved objective, `working_dir`, and scope, and only the model changes. The same holds for the server's automatic restart of a run whose log never associated (`restart_of`). Do not ask permission again for either.
 
-**Invariant precedence.** The kernel invariants outrank this gate: a delegated step inherits every invariant (INV-GATE-3) — full approved scope (INV-SCOPE-1), stop-and-ask on forced deviation (GATE-DEVIATION). The gate authorizes delegation; it never licenses delivering less.
+A delegated step inherits every invariant (INV-GATE-3). The gate authorizes delegation; it does not authorize delivering less than the approved scope.
 
 ## Writing the spec
 
-`dispatch_submit` takes a structured spec (see its tool description for the field list). Frame ONE self-contained step per dispatch; a step depending on another's output waits for that one to reach `succeeded`. **Carry INV-QUALITY-1 into the spec explicitly**: the backend is an external agent optimizing to make the immediate step pass — put the operating envelope into `constraints` (platforms, harnesses, input classes, callers; "fix the cause, not the symptom") and write `acceptance` against the contract, not the triggering case. A `succeeded` on an envelope-free spec proves only that the backend satisfied itself. For a palette story, `objective`/`acceptance` come from the *approved* acceptance criteria, never the raw Tier-A artifact (`claude-agent-kit--palette.md` § Gate bindings).
+Write one self-contained step per dispatch. A step that depends on another's output waits until that one reaches `succeeded`. Put INV-QUALITY-1 into the spec: the backend is an external agent working to make the immediate step pass, so write the operating envelope into `constraints` (platforms, harnesses, input classes, callers, and "fix the cause, not the symptom") and write `acceptance` against the contract, not the triggering case. A `succeeded` on a spec with no envelope shows only that the backend satisfied itself. For a palette story, take `objective` and `acceptance` from the approved acceptance criteria, not from the raw Tier-A artifact.
 
-Partial state: a fallback retry or auto-restart re-runs the same prompt in the same working_dir without resetting files an earlier attempt wrote (dispatch never destructively cleans a tree) — favor convergent, self-contained objectives when configuring fallback chains.
+A fallback retry or automatic restart runs the same prompt in the same `working_dir` without resetting files an earlier attempt wrote. When you configure a fallback chain, prefer objectives that converge when re-run over a partly written tree.
 
-## Supervising a run
+## Finishing
 
-- Report a delegated step done only after `dispatch_status` shows `succeeded` — and review the captured result; exit 0 is not correctness (INV-VERIFY-1 applies to delegated work too).
-- **Silence is inconclusive, never a hang verdict.** A live backend inside a long tool/MCP call (e.g. a multi-minute aside consultation) emits no log events. Judge by `child_process_alive` + `log_last_write_age_seconds` from `dispatch_status`, not by a quiet `dispatch_logs`; do not cancel or steer on silence alone. A fresh codex run that never associates its log is auto-restarted once by the server (`restart_of`/`restarted_as` link the pair).
-- Steering (`dispatch_steer`) is turn-granularity: it interrupts and resumes the SAME backend session with your correction, context and files preserved.
+Report a delegated step as done only after `dispatch_status` shows `succeeded` and you have reviewed the captured result (INV-VERIFY-1). After a cancel, confirm through `dispatch_status` that the task reached `cancelled`. Each dispatch spends backend quota and runs on its own, so do not fan out speculatively.
 
-### Ending a turn while a dispatch task is still running (HARD RULE)
+dispatch sends no notification when a run finishes, and `dispatch_status` returns a snapshot without blocking, so do not poll it in a tight loop. If you have other useful work, do it and check again later in the same turn. If you are ending the turn, arm a follow-up check with the harness's own wait or scheduling mechanism where one exists. Where none exists, tell the user the task is still running and that they need to ask you to check back. Do not end a turn on an unfinished task with nothing armed and nothing said.
 
-dispatch has **no push notification** — nothing wakes you when a run finishes — and no blocking wait: `dispatch_status` returns only a non-blocking snapshot, so do not sit in a tight loop re-polling it. If you have other useful work, do it and re-check `dispatch_status` later in the same turn; if you are ending the turn, arm a follow-up check via the harness's own wait/scheduling mechanism where one exists; otherwise tell the user explicitly that the task is still running and they must ask you to check back. Never end a turn on a non-terminal task with nothing armed and no signal to the user.
-
-**Claude Code binding:** this is unlike a backgrounded `Agent`/`Workflow` call (`run_in_background: true`), which auto-notifies the session on completion — dispatch does not. The scheduling mechanism to arm here is `ScheduleWakeup` (or a `/loop`), with the interval matched to the task's expected duration.
-
-## Cost & cleanup
-
-Each dispatch burns backend quota and runs autonomously — no speculative fan-out; delegate only what the execution policy and gate allow. After a cancel, confirm the task reached `cancelled` via `dispatch_status`.
+In Claude Code, a backgrounded `Agent` or `Workflow` call notifies the session when it completes; dispatch does not. The mechanism to arm is `ScheduleWakeup` (or a `/loop`), with the interval matched to the task's expected duration.

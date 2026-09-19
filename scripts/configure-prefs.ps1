@@ -6,7 +6,7 @@
 # prefs, and injection-safe (literal String.Replace, never regex). Environment
 # variables are optional seeds for the prompt defaults / non-interactive runs;
 # nothing here requires one. Templates are resolved next to this script as
-# <Prefix>--{aside,dispatch}-prefs.md.tmpl.
+# <Prefix>--{aside,dispatch,git}-prefs.md.tmpl.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$RulesDir,
@@ -149,3 +149,21 @@ if (Test-WantGenerate $dispatchDest) {
     Write-Host "  prefs exist, keeping: $dispatchDest"
     Add-Manifest $dispatchDest
 }
+
+# ── git ──
+# No prompts: every value ships as `unset`, and the agent asks the user and
+# records the answer the first time a commit or PR needs it. An existing file
+# holds those recorded answers, so it is never regenerated, not even under
+# PREFS_RECONFIGURE.
+$gitTmpl = Join-Path $here "$Prefix--git-prefs.md.tmpl"
+$gitDest = Join-Path $RulesDir "$Prefix--git-prefs.md"
+if (-not (Test-Path $gitTmpl)) { throw "template not found: $gitTmpl" }
+if (Test-Path $gitDest) {
+    Write-Host "  prefs exist, keeping: $gitDest"
+} else {
+    $dir = Split-Path -Parent $gitDest
+    if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    Copy-Item -Path $gitTmpl -Destination $gitDest
+    Write-Host "  prefs: $gitDest"
+}
+Add-Manifest $gitDest
