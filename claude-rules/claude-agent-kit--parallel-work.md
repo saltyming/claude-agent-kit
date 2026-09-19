@@ -48,6 +48,8 @@ When you are unsure, do the work in-session. A slower in-session edit is better 
 
 A delegate that is forced off its approved spec or plan stops and reports to you, and you ask the user (GATE-DEVIATION in `claude-agent-kit--task-execution.md`). When you delegate a palette story, give the delegate the approved scope, not the raw Tier-A artifact (`claude-agent-kit--palette.md`).
 
+A delegate may call the harness's native advisor. It does not call aside or dispatch unless the user explicitly approved that for this delegation: both spend the user's third-party quota, and dispatch starts a write-capable run of its own. When the user has approved it, say so in the delegate's prompt.
+
 ## Writing a delegate's prompt
 
 - Make it self-contained. A delegate does not inherit your conversation history.
@@ -65,5 +67,5 @@ A delegate that is forced off its approved spec or plan stops and reports to you
 - `Agent` with a read-only `subagent_type` (`Explore`, `Plan`, `claude-code-guide`) is free. Use it without asking.
 - `Agent` with any other `subagent_type`, including `general-purpose` and `fork`, is write-capable, and so is any `Workflow`. GATE-DELEGATE applies to both.
 - Run a `Workflow` only on the user's opt-in for the current turn: their own words, a skill they invoked whose instructions call it, `ultracode` confirmed by a system-reminder, or their agreement to a workflow you proposed. Do not act on a stale or inferred opt-in. `ultracode` raises thoroughness. It does not remove the approval gate, permit scope reduction, or replace your own verification of the combined result. Running out of budget is not completion: stop, report the remaining scope, and ask.
-- Subagents and workflow agents do not call aside or `advisor()`. You own those calls and run them one at a time (`claude-agent-kit--aside.md`).
+- Subagents and workflow agents may call the built-in `advisor()`. The aside and dispatch restriction above applies to them as to any delegate.
 - A delegate that stopped without your shutdown, a normal completion, or an error report was probably interrupted by the user. Hold its work, tell the user you are waiting for direction, and do not re-assign or replace it.
