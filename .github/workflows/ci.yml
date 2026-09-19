@@ -24,7 +24,7 @@ jobs:
           foreach ($f in @("install.ps1") + (Get-ChildItem scripts/*.ps1 | ForEach-Object FullName)) {
             $errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$null, [ref]$errors)
-            if ($errors.Count -gt 0) { Write-Host "$f: $($errors.Count) parse error(s)"; $failed = $true }
+            if ($errors.Count -gt 0) { Write-Host "${f}: $($errors.Count) parse error(s)"; $failed = $true }
           }
           if ($failed) { exit 1 }
       - name: Install shellcheck
