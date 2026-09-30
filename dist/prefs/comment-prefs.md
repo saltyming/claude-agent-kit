@@ -1,33 +1,29 @@
 <!-- claude-agent-kit-custom:comment-prefs -->
 # Comment Preferences
 
-> Installed by claude-agent-kit. This file is user-owned (`claude-agent-kit-custom:comment-prefs`): uninstall and upgrade keep it. The configure step asks for each value, and you can edit any value by hand.
-
-These values settle what a repository leaves open. The order is: the user's current-turn instruction, then a line under "Repository overrides", then the repository's own convention (what its existing files do), then the value here.
+> User-owned (`claude-agent-kit-custom:comment-prefs`): uninstall and upgrade keep it. Order of precedence: the user's current-turn instruction, a "Repository overrides" line, the repository's own convention, then the value here.
 
 ## File headers
 
 **repository**
 
-Values: `repository` (give a file you create a header only when the repository's files carry one, in the layout those headers use) | `structured` (the same where the repository has a header convention; where it has none, give every file you create a header in the structured layout below) | your own rule, written here.
-
-Structured layout, in the language's own doc-comment form (`//!` in Rust, a module docstring in Python). First line: the file's responsibility in one sentence. Next: its boundary, meaning what it owns and does not own, its main entry points, and how work is split with neighboring files. Then, only if needed: invariants that span the whole file, such as locking, ownership, or re-entrancy. Leave out change history, authorship, and a list of the functions in the file.
+`repository` (a header only where the repository's files carry one, in their layout) | `structured` (where the repository has no convention, every new file gets a header: one sentence of responsibility; its boundary, entry points and split with neighbors; file-wide invariants only if needed; no history, authorship or function list) | your own rule
 
 ## Comment language
 
 **repository**
 
-Values: `repository` (the language the surrounding comments use) | `english` | `korean` | your own rule, written here.
+`repository` | `english` | `korean` | your own rule
 
 ## Doc comments
 
 **repository**
 
-Values: `repository` (document public items to the extent the neighboring code does) | `public-api` (give every public item you add or change a doc comment) | your own rule, written here.
+`repository` | `public-api` (every public item added or changed gets a doc comment) | your own rule
 
 ## Repository overrides
 
-A line here outranks the repository's own convention, one line per repository: `- <repository root or remote>: <what to follow>`.
+One line per repository: `- <repository root or remote>: <what to follow>`.
 
 ## Notes
 

@@ -6,7 +6,7 @@ description: Review the harness's native memory for a project and propose, memor
 <!-- slate-agent-kit:common -->
 # memory-triage
 
-Brings native memory back to what INV-MEM-1 allows: facts with no other home, one per memory, current. Every change is a proposal until the user chooses.
+Brings native memory back to what § 21 allows: facts with no other home, one per memory, current. Every change is a proposal until the user chooses.
 
 ## Where memory lives
 

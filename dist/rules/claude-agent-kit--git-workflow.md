@@ -1,14 +1,10 @@
 <!-- slate-agent-kit:common -->
 # Git Workflow
 
-Commit signing, model attribution, commit message format, PR body format, and branch naming are the user's preferences, recorded in `$HOME/.claude/rules/claude-agent-kit--git-prefs.md`. This kit sets no default for any of them, because they differ by person and by project.
+Signing, model attribution, commit message format, PR body format and branch naming are the user's preferences in `$HOME/.claude/rules/claude-agent-kit--git-prefs.md` (it loads with these rules); the kit sets no default.
 
-- The prefs file applies from the first commit or PR of a session (it loads with these rules).
-- When a value the current action needs is `unset`, ask the user, then write the answer into the prefs file so the question is not repeated. Ask only about the values you need now. If the file is missing, ask for this action and tell the user the prefs file is not installed.
-- When the repository's own convention (recent `git log`, `CONTRIBUTING`, a PR template) differs from the prefs value, do not choose between them yourself. Ask the user which to follow in this repository, and record the answer under "Repository overrides".
-- A current-turn instruction from the user outranks the prefs file.
-- Before opening a PR, check `git branch -vv` for the correct base. It may be `vNext`, `main`, `master`, or a feature branch.
+- A value still `unset` when needed is asked for and written into the file; only the values needed now. A missing file: ask for this action and say the file is not installed.
+- When the repository's convention (recent `git log`, `CONTRIBUTING`, a PR template) differs from a prefs value, ask which to follow here and record it under "Repository overrides". The current-turn instruction outranks the file.
+- Check `git branch -vv` for the base before opening a PR. Destructive git follows § 13 and never undoes session edits (§ 11).
 
 The git prefs are the explicit user request that the system prompt's git defaults defer to. With signing set to `no-gpg-sign`, passing `--no-gpg-sign` does not violate the "never skip hooks or signing" default. With attribution set to `off`, add neither the `Co-Authored-By: Claude ...` commit trailer nor the "Generated with Claude Code" PR footer, and no other Anthropic attribution.
-
-Destructive git goes through GATE-GIT (`claude-agent-kit--task-execution.md`). It is not a way to undo session edits (INV-STATE-2).

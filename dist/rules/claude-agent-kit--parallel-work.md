@@ -1,44 +1,11 @@
 <!-- slate-agent-kit:common -->
 # Work Leaving the Session
 
-How work leaves the session: subagents, consultation (`claude-agent-kit--aside.md`) and dispatch (`claude-agent-kit--dispatch.md`). Each is used at its level (INV-AUTO-2) after judging its value (INV-AUTO-1); both invariants are in `CLAUDE.md`.
+Subagents, consultation (`claude-agent-kit--aside.md`) and dispatch (`claude-agent-kit--dispatch.md`), each judged for value (§ 7) and used at its level (§ 8).
 
-## What each surface is for
-
-- **Subagents** are the harness's own delegates. A read-only one inspects, searches or summarizes; a write-capable one edits. Treat a subagent of unknown kind as write-capable.
-- **Consultation** asks another model for an opinion; you stay in charge and nothing is written.
-- **Dispatch** hands a self-contained, write-capable execution step to an external coding agent that runs asynchronously.
-- Skills, commands and workflows are helper surfaces; they do not bypass scope, approval or verification.
-
-If the harness lacks a mechanism that safe delegation needs, tell the user. Do not improvise a substitute.
-
-## Judging whether to delegate
-
-A delegate saves your context but costs the user models, quota and time, and you see its result, not its reasoning. Delegation helps when the work splits into independent parts with a stable shared contract, or when one bounded lookup would flood your context. Do the work in-session when it is sequential or tightly coupled, when it is a few files, when the user is discussing with you and waiting for your own answer, or when a document assigns the work to the leader. A slower in-session edit is better than a fast delegated one that is wrong without anyone noticing.
-
-At `auto`, state in one line before starting: how many delegates, which model, what each does, and which files each writes. At `suggest`, say the same and wait. The model is the one the prefs name unless the user names another for the turn; a read-only delegate does not need the session's top model.
-
-## Splitting the work
-
-- Find the shared contracts first (public types, schemas, migration order, shared tests, invariants) and write them yourself before delegating. Files that look independent often share a contract.
-- Give each file one writer; you are the merge owner of any file several delegates need (INV-DELEG-1).
-- One prompt over many inputs needs a tight prompt template; a coarse prompt over twelve items returns twelve low-value summaries.
-- A subtask that needs a different role (research, design) gets a read-only delegate for that one slot.
-
-## Delegates and the invariants
-
-A delegate that is forced off its approved spec stops and reports to you, and you ask the user (INV-DELEG-2, GATE-DEVIATION in `claude-agent-kit--task-execution.md`). When you delegate a palette deliverable, give the delegate the approved scope and its `Done when`, not the raw palette documents.
-
-A delegate may call the harness's native advisor. It does not consult aside or start dispatch unless the user approved that for this delegation, and then its prompt says so.
-
-## Writing a delegate's prompt
-
-- Make it self-contained: a delegate does not inherit your conversation.
-- Name the files it owns, the expected output, and what success looks like.
-- State what it must not do and which decisions are settled; pass a settled decision as a constraint, not as an open question, or sibling delegates diverge.
-- Name the operating envelope (INV-QUALITY-1): platforms, harnesses, input classes and callers, and that the cause is fixed, not the symptom.
-- A delegate cannot watch a long-running or streaming process; have it write a log, a results file or an exit-code file that decides success.
-- Do not give implementation work to a read-only delegate: it cannot edit, and the failure is quiet.
+- Subagents are the harness's delegates: read-only ones inspect, search or summarize; write-capable ones edit; an unknown kind is write-capable. Consultation asks for an opinion and writes nothing. Dispatch hands a self-contained, write-capable step to an external agent that runs asynchronously. Skills, commands and workflows bypass no article. When the harness lacks a mechanism safe delegation needs, say so; do not improvise one.
+- A delegate saves the leader's context and costs the user models, quota and time, returning a result without its reasoning. It helps when work splits into independent parts with a stable shared contract, or when one bounded lookup would flood the context. Work stays in-session when sequential, tightly coupled, small, assigned to the leader by a document, or when the user is waiting for the leader's own answer. At `auto`, state in one line before starting how many delegates, which model, what each does and which files each writes; at `suggest`, say the same and wait. A read-only delegate does not need the session's top model.
+- Write the shared contracts (public types, schemas, migration order, shared tests) before delegating; one writer per file (§ 14). One prompt over many inputs needs a tight template. A prompt is self-contained: files owned, expected output, what success looks like, settled decisions as constraints, what must not be done, the operating envelope (§ 9). A delegate cannot watch a long-running process; have it write a log, a results file or an exit-code file. Implementation work never goes to a read-only delegate.
 
 ---
 

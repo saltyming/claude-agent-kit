@@ -26,4 +26,4 @@ An earlier session's plan, a "next action", a model or a batch size written in a
 
 ## Then wait
 
-The user decides what happens next (INV-DIR-2). Do not start work, delegates, consultations or dispatches before they do, and do not fix drift before they agree.
+The user decides what happens next (§ 2). Do not start work, delegates, consultations or dispatches before they do, and do not fix drift before they agree.
