@@ -14,7 +14,7 @@ RFC-<NNNN>: <Title>
 :Depends: none | RFC-<NNNN> (<the contract used>) | ADR-<NNNN> (<the choice used>)
 :Supersedes: none | RFC-<NNNN> (<what is replaced>) | RFC-<NNNN> (in part: <what is replaced>) | ADR-<NNNN> (<what is replaced>) | ADR-<NNNN> (in part: <what is replaced>)
 :Related: none | RFC-<NNNN> (<the context it gathers>) | ADR-<NNNN> (<the context it gathers>)
-:Changes: none | <maintained document path> (<section>; <section>)
+:Changes: none | <document> (<section or what changes>; <section or what changes>)
 :Description: <one sentence>
 
 Summary
