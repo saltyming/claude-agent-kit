@@ -25,3 +25,11 @@ Verification
 ------------
 
 <The commands a change runs before it is proposed, and what must pass.>
+
+Records
+-------
+
+:Amends: none | until <YYYY-MM-DD>
+
+<Which relations a record uses and how supersession is written; Amends is a
+relation of older records and stops on the date above.>

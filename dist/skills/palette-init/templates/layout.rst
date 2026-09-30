@@ -18,4 +18,3 @@ Families
 :glossary: internal | <project path>
 :contributing: internal | <project path>
 :checker: none | <project command that validates the project's own documents>
-:amends-until: none | <YYYY-MM-DD>
