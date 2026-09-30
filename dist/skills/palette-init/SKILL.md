@@ -25,7 +25,7 @@ A few questions, only what changes what gets built: what the project is, who it 
 Every family is used; the user decides where each lives. Propose a layout, then ask:
 
 - work families (backlog, phase, deliverable, state): internal (`_palette/`, the user's personal record, not committed);
-- records and maintained documents (rfc, adr, changeset, staging, design, spec, principles, glossary): the project's existing documentation folder when it has one (reuse its subfolders, numbering and conventions), else `docs/`; internal if the user does not want them shared;
+- records and maintained documents (rfc, adr, changeset, staging, design, spec, principles, glossary, contributing): the project's existing documentation folder when it has one (reuse its subfolders, numbering and conventions), else `docs/`; internal if the user does not want them shared;
 - the project's own document checker, if it has one, as the layout's `checker`.
 
 Say that internal documents are git-ignored and never committed, and that documents under a project path are committed with the change they describe.
