@@ -4,6 +4,18 @@ All notable changes to Claude Agent Kit are documented here. Format loosely base
 
 Version numbers track the `Version` field in `CLAUDE.md`. Most entries correspond to operating-manual revisions and accompanying MCP server changes; the two ship together.
 
+## [13.3.0] - 2026-09-30
+
+**aside and dispatch run on one execution layer, under a guard of its own.** Ships alongside codex-agent-kit 0.11.0, kimi-agent-kit 0.11.0 and slate-agent-kit v0.10.0 (slate RFC-0008 and RFC-0014).
+
+- **agent-guard.** On Linux and macOS the servers start their backend CLIs through `agent-guard`, a small executable installed beside them, so a backend and everything it started die with the server. dispatch requires it: without it a run fails before anything starts, with a message saying how to install it. aside prefers it and answers unguarded without it. It is never registered with a harness. On Windows the Job Object is used as before and nothing new is installed.
+- **Installer.** `slate-setup` installs, replaces and records `agent-guard` with the servers (`--binaries build` builds it; `prebuilt` downloads `agent-guard-<target>.tar.gz`, checked like the others). A release that does not carry it installs the servers and adds one warning line. Uninstall keeps it while another kit still lists a server that needs it.
+- **One execution layer.** aside and dispatch share the code that finds the CLI, builds its arguments, captures output, classifies a failure and retries along the model fallback chain; each passes its own policy. Tool names, parameters and outputs are unchanged.
+- **Behavior that changed.** The codex prompt of aside travels on stdin. aside's truncation notes say `characters` where the cut is by character, and output that lost nothing is no longer marked truncated. A prompt the backend never read (it exited first) no longer hides the backend's own error from the fallback decision. On Linux a backend under the guard receives SIGTERM again (the guard leaked a blocked signal mask), and on Windows a child the backend starts at once is inside the Job Object. dispatch's spawn-failure text names `agent-guard`. In dispatch, a cancel now wins over an automatic restart decided at the same moment; a cancel after the backend exited kills a descendant that still holds its output open; and a cancel while opencode is starting ends the task as `cancelled`, not `failed`, with a bounded wait for the abort request.
+- **Token usage.** The shared layer parses token usage from a codex json stream or rollout, a claude json result and an opencode message into one set of buckets; the servers do not report it yet.
+
+Verified: slate CI green on ubuntu, macOS and Windows (`cargo test --workspace`, 655 tests, `clippy -D warnings`, `fmt --check`, `validate.sh`); on macOS, aside and dispatch run end to end against a stub backend through MCP, with and without `agent-guard` beside them, the guard process observed while a run lasted, a cancel after the backend had exited with a child still holding its output, a fallback to a second model, and no process left behind; `slate-setup` install of each kit into a scratch `HOME` with `--binaries build`. Not run: real codex, claude and opencode CLIs through the new layer before the live install, and the prebuilt download of `agent-guard` (the slate v0.10.0 release did not exist yet).
+
 ## [13.2.1] - 2026-09-30
 
 **The copilot backend is removed; RFC headers name ADRs; prefs migration keeps what it cannot map.** Ships alongside codex-agent-kit 0.10.1, kimi-agent-kit 0.10.1 and slate-agent-kit v0.9.1.

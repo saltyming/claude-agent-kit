@@ -1,7 +1,7 @@
 kit = "claude-agent-kit"
 harness = "claude"
-version = "13.2.1"
-slate_version = "0.9.1"
+version = "13.3.0"
+slate_version = "0.10.0"
 primary = "CLAUDE.md"
 load = "rules-dir"
 rules = [ "claude-agent-kit--task-execution.md", "claude-agent-kit--palette.md", "claude-agent-kit--parallel-work.md", "claude-agent-kit--git-workflow.md", "claude-agent-kit--aside.md", "claude-agent-kit--dispatch.md" ]

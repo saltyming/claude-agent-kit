@@ -2,7 +2,7 @@
 
 An operating manual and rule set for Claude Code (`CLAUDE.md` plus rule files), the palette document system with its skills, and three shared MCP servers: `aside` (second opinions from another model family), `dispatch` (asynchronous execution by a codex, opencode or claude backend) and `palette` (reads, checks and writes palette documents). One installer, `slate-setup`, installs all of it, writes your preferences and sets Claude Code's subagent default model.
 
-This is claude-agent-kit 13.2.1. Its rules, skills, templates and prefs templates are rendered from [`slate-agent-kit`](https://github.com/saltyming/slate-agent-kit), which also builds the servers and the installer; its release v0.7.0 provides the binaries.
+This is claude-agent-kit 13.3.0. Its rules, skills, templates and prefs templates are rendered from [`slate-agent-kit`](https://github.com/saltyming/slate-agent-kit), which also builds the servers and the installer; its release v0.7.0 provides the binaries.
 
 ## What's Inside
 
@@ -154,7 +154,7 @@ irm https://raw.githubusercontent.com/saltyming/claude-agent-kit/main/install.ps
 
 The PowerShell script also accepts the earlier installers' switches: `-Uninstall`, `-SkipMcp` and `-DispatchRoots <paths>`.
 
-The entry point downloads the prebuilt `slate-setup` for your platform from slate release v0.9.1, verifies its checksum, and runs it on the kit's payload. `slate-setup` performs every step, with the same code on Linux, macOS and Windows.
+The entry point downloads the prebuilt `slate-setup` for your platform from slate release v0.10.0, verifies its checksum, and runs it on the kit's payload. `slate-setup` performs every step, with the same code on Linux, macOS and Windows.
 
 | Command | Does |
 |---|---|
@@ -164,7 +164,7 @@ The entry point downloads the prebuilt `slate-setup` for your platform from slat
 
 | Option | Meaning |
 |---|---|
-| `--binaries prebuilt\|build\|skip` | `prebuilt` (default) downloads `aside`, `dispatch` and `palette` from the slate release, checked against `checksums.txt` (if release v0.9.1 does not exist it uses the latest and says so). `build` runs `cargo build --release` in `--slate-dir` and needs Rust. `skip` installs no binaries and registers no servers. `--skip-mcp` still works. |
+| `--binaries prebuilt\|build\|skip` | `prebuilt` (default) downloads `aside`, `dispatch` and `palette`, and on Linux and macOS `agent-guard`, from the slate release, checked against `checksums.txt` (if release v0.10.0 does not exist it uses the latest and says so). `build` runs `cargo build --release` in `--slate-dir` and needs Rust. `skip` installs no binaries and registers no servers. `--skip-mcp` still works. |
 | `--slate-dir <dir>` | The slate checkout to build from. |
 | `--roots <paths>` | Workspace roots dispatch and palette may work in, as an OS path list. When it is not given, the `DISPATCH_ROOTS` environment variable is used. |
 | `--set <key>=<value>` | Pre-answers a prefs question; repeatable. Keys are `<file>.<key>`, for example `aside.level=auto` or `git.signing=no-gpg-sign`. |
@@ -185,7 +185,7 @@ Every run has the same shape: detect, ask, summarize and confirm, apply, report.
 4. **Apply**: cleanup of leftovers from earlier installers (see Upgrading), binaries, `CLAUDE.md`, rules and skills, prefs files and custom rules, server registration (`claude mcp add ... -s user`), and the `settings.json` edits.
 5. **Report** the installed paths and that Claude Code needs a restart.
 
-What it writes: `CLAUDE.md`, `rules/` and `skills/` in the Claude home; `aside`, `dispatch` and `palette` in the binary folder; `settings.json` (the subagent model, and the palette read-tool permissions); and a manifest, `.claude-agent-kit-manifest.toml`, listing every file, backup, configuration key with its previous value, and registration. Kit-managed Markdown files start with `<!-- slate-agent-kit:common -->` or `<!-- claude-agent-kit -->`. An existing `CLAUDE.md` that is not kit-managed is copied to `CLAUDE.md.bak-<UTC timestamp>` first. Each `*.md` in a custom rules folder is copied into `rules/` as `claude-agent-kit--<name>.md` and signed as yours; a file that would replace a kit-managed one is refused.
+What it writes: `CLAUDE.md`, `rules/` and `skills/` in the Claude home; `aside`, `dispatch` and `palette` in the binary folder (with `agent-guard`, the executable the servers start their backends through, beside them on Linux and macOS); `settings.json` (the subagent model, and the palette read-tool permissions); and a manifest, `.claude-agent-kit-manifest.toml`, listing every file, backup, configuration key with its previous value, and registration. Kit-managed Markdown files start with `<!-- slate-agent-kit:common -->` or `<!-- claude-agent-kit -->`. An existing `CLAUDE.md` that is not kit-managed is copied to `CLAUDE.md.bak-<UTC timestamp>` first. Each `*.md` in a custom rules folder is copied into `rules/` as `claude-agent-kit--<name>.md` and signed as yours; a file that would replace a kit-managed one is refused.
 
 ### Upgrading
 
