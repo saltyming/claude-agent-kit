@@ -27,7 +27,7 @@ The rule files, in `~/.claude/rules/`:
 - `claude-agent-kit--aside.md` and `claude-agent-kit--dispatch.md`: when consultation and dispatch are worth using.
 - `claude-agent-kit--git-workflow.md`: how your git preferences are read, asked for and recorded.
 
-Where `CLAUDE.md` contradicts Claude Code's system prompt, `CLAUDE.md` takes precedence; its bindings section names the cases (memory, the restraint directives and cost cautions, output styles). `CLAUDE.md` and the rule files that load every session come to about 25 KB; skills and prefs load only when used.
+Where `CLAUDE.md` contradicts Claude Code's system prompt, `CLAUDE.md` takes precedence; its bindings section names the cases (memory, the restraint directives and cost cautions, output styles). `CLAUDE.md`, the rule files and the prefs files load every session and come to about 30 KB; skills load only when used.
 
 ### Action levels
 
