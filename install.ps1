@@ -1,311 +1,231 @@
-# install.ps1 — Windows installer for claude-agent-kit
-# Usage:
-#   iwr https://raw.githubusercontent.com/saltyming/claude-agent-kit/main/install.ps1 | iex
-#   iwr https://raw.githubusercontent.com/saltyming/claude-agent-kit/main/install.ps1 -OutFile install.ps1; .\install.ps1 -Uninstall
+# install.ps1 - installs, reconfigures or removes claude-agent-kit on Windows.
+#
+# This script obtains two things and runs the installer; it implements no
+# installer step itself:
+#   1. the kit payload: the dist\ folder beside this script when it has one,
+#      otherwise the archive of the kit repository (saltyming/claude-agent-kit) at --ref;
+#   2. slate-setup: built with cargo from --slate-dir when --binaries build is
+#      given, otherwise the prebuilt binary for this platform from the slate
+#      release v0.7.0, verified against the release's checksums.txt.
+#
+# Usage: .\install.ps1 [install|configure|uninstall] [options]
+# The command is optional and defaults to install, also when the first argument
+# starts with a dash. Every option is passed to slate-setup, except --ref, which
+# selects the kit archive; --uninstall and --skip-mcp are kept as aliases of the
+# uninstall command and of --binaries skip; -Uninstall, -SkipMcp and
+# -DispatchRoots <paths> from the earlier script work too, and $env:DISPATCH_ROOTS
+# stands for --roots when none is given. slate-setup reads its questions from
+# the console itself, so nothing here redirects standard input.
+#
+# One-liner (arguments after the script block go to the script):
+#   & ([scriptblock]::Create((Invoke-RestMethod https://raw.githubusercontent.com/saltyming/claude-agent-kit/main/install.ps1))) install
 
-param([switch]$Uninstall, [string]$DispatchRoots = $env:DISPATCH_ROOTS)
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.ServicePointManager]::SecurityProtocol } catch { }
 
-$ErrorActionPreference = "Stop"
+$KitName = 'claude-agent-kit'
+$KitRepo = 'saltyming/claude-agent-kit'
+$SlateRepo = if ($env:SLATE_RELEASE_REPO) { $env:SLATE_RELEASE_REPO } else { 'saltyming/slate-agent-kit' }
+$SlateVersion = '0.7.0'
+$ReleaseHost = if ($env:SLATE_RELEASE_BASE_URL) { $env:SLATE_RELEASE_BASE_URL.TrimEnd('/') } else { 'https://github.com' }
+$KitArchiveHost = if ($env:KIT_ARCHIVE_BASE_URL) { $env:KIT_ARCHIVE_BASE_URL.TrimEnd('/') } else { 'https://github.com' }
 
-$Repo      = "saltyming/claude-agent-kit"
-$SlateRepo = if ($env:SLATE_REPO) { $env:SLATE_REPO } else { "saltyming/slate-agent-kit" }
-$Branch    = "main"
-$RawBase   = "https://raw.githubusercontent.com/$Repo/$Branch"
-$ClaudeDir = Join-Path $env:USERPROFILE ".claude"
-$RulesDir  = Join-Path $ClaudeDir "rules"
-$SkillsDir = Join-Path $ClaudeDir "skills"
-$BinDir    = Join-Path $env:USERPROFILE ".local\bin"
-$Manifest  = Join-Path $ClaudeDir ".claude-agent-kit-manifest"
-$Signature       = "claude-agent-kit"
-$CustomSignature = "claude-agent-kit-custom"
-# Rendered kit files carry the shared slate signature; files from before v10 carry
-# the kit's own. Both are kit-managed (install.sh and the Makefile match both too).
-$CoreSignaturePattern = "<!-- (slate-agent-kit:common|" + [regex]::Escape($Signature) + ") -->"
+function Show-Usage {
+    @"
+Usage: .\install.ps1 [install|configure|uninstall] [options]
 
-$RuleFiles = @(
-    "claude-agent-kit--task-execution.md"
-    "claude-agent-kit--git-workflow.md"
-    "claude-agent-kit--framework-conventions.md"
-    "claude-agent-kit--parallel-work.md"
-    "claude-agent-kit--aside.md"
-    "claude-agent-kit--dispatch.md"
-    "claude-agent-kit--palette.md"
-)
+  install      full install or reinstall of $KitName (default)
+  configure    prefs, custom rules, native configuration and server registration
+  uninstall    reverse what install recorded
 
-$Binaries = @("aside", "dispatch")
+Options are passed to slate-setup. The common ones:
+  --home DIR            harness home (default: the harness's own folder)
+  --bin-dir DIR         where binaries go (default: %USERPROFILE%\.local\bin)
+  --binaries MODE       prebuilt (default), build, or skip
+  --slate-dir DIR       slate checkout to build from (with --binaries build)
+  --roots PATHS         workspace roots for dispatch and palette (separated by ;)
+  --set KEY=VALUE       set a prefs value, for example aside.level=auto
+  --custom-rules DIR    folder of your own *.md rule files
+  --payload DIR         install from this dist folder
+  --yes                 ask nothing; take current or default values
+  --dry-run             print the summary and stop
+Only for this script:
+  --ref REF             kit branch, tag or commit to download (default: main)
+  --uninstall           same as the uninstall command
+  --skip-mcp            same as --binaries skip
+  -Uninstall, -SkipMcp, -DispatchRoots PATHS    the switches of the earlier script
+Environment:
+  DISPATCH_ROOTS        same as --roots when --roots is not given
+"@
+}
 
-$SkillNames = @("palette-init", "palette-spec", "palette-ux", "palette-ui", "palette-rules")
-
-# workslate shipped through 11.x and was dropped in 12.0.0. Its settings.json
-# hooks, binary, MCP registration and per-project db have to go on upgrade and on
-# uninstall; scripts/remove-legacy-workslate.ps1 owns that (see its header).
-function Remove-LegacyWorkslate {
-    $tmp = Join-Path $env:TEMP ("cak-workslate-" + [System.Guid]::NewGuid())
-    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
-    $script = Join-Path $tmp "remove-legacy-workslate.ps1"
+function Get-Download([string]$Url, [string]$Dest) {
+    # Returns $true on success and $false when the server answers 404.
     try {
-        Invoke-WebRequest -Uri "$RawBase/scripts/remove-legacy-workslate.ps1" -OutFile $script
-        & $script -ClaudeDir $ClaudeDir -BinDir $BinDir
+        Invoke-WebRequest -Uri $Url -OutFile $Dest -UseBasicParsing
+        return $true
     } catch {
-        $settingsPath = Join-Path $ClaudeDir "settings.json"
-        $leftover = (Test-Path (Join-Path $BinDir "workslate.exe")) -or
-            ((Test-Path $settingsPath) -and (Select-String -Path $settingsPath -Pattern "workslate" -Quiet))
-        if ($leftover) {
-            Write-Warning "could not run remove-legacy-workslate.ps1 ($_); workslate leftovers were not cleaned up. Re-run this installer when online."
-        }
-    } finally {
-        Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        $status = $null
+        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+        if ($status -eq 404) { return $false }
+        throw "cannot download ${Url}: $($_.Exception.Message)"
     }
 }
 
-function Do-Uninstall {
-    Remove-LegacyWorkslate
-    if (-not (Test-Path $Manifest)) {
-        Write-Host "No manifest found. Nothing to uninstall."
-        return
+# --- arguments ---------------------------------------------------------------
+$rest = New-Object System.Collections.Generic.List[string]
+foreach ($a in $args) { $rest.Add([string]$a) }
+$cmd = 'install'
+if ($rest.Count -gt 0 -and @('install', 'configure', 'uninstall') -contains $rest[0]) {
+    $cmd = $rest[0]
+    $rest.RemoveAt(0)
+}
+$ref = 'main'
+$binaries = 'prebuilt'
+$slateDir = $null
+$payloadGiven = $null
+$rootsGiven = $false
+$passthrough = New-Object System.Collections.Generic.List[string]
+$i = 0
+while ($i -lt $rest.Count) {
+    $a = $rest[$i]
+    switch -Regex ($a) {
+        '^(-h|--help)$' { Show-Usage; exit 0 }
+        '^--ref$' { $i++; if ($i -ge $rest.Count) { throw '--ref needs a value' }; $ref = $rest[$i] }
+        '^--ref=(.*)$' { $ref = $Matches[1] }
+        # Aliases for the flags earlier releases had.
+        '^(--uninstall|-Uninstall)$' { $cmd = 'uninstall' }
+        '^(--skip-mcp|-SkipMcp)$' { $binaries = 'skip'; $passthrough.Add('--binaries'); $passthrough.Add('skip') }
+        '^-DispatchRoots$' {
+            $i++
+            if ($i -ge $rest.Count) { throw '-DispatchRoots needs a value' }
+            $rootsGiven = $true
+            $passthrough.Add('--roots')
+            $passthrough.Add($rest[$i])
+        }
+        '^-DispatchRoots:(.*)$' { $rootsGiven = $true; $passthrough.Add('--roots'); $passthrough.Add($Matches[1]) }
+        '^--roots$' {
+            $i++
+            if ($i -ge $rest.Count) { throw '--roots needs a value' }
+            $rootsGiven = $true
+            $passthrough.Add($a)
+            $passthrough.Add($rest[$i])
+        }
+        '^--roots=(.*)$' { $rootsGiven = $true; $passthrough.Add($a) }
+        '^--(binaries|slate-dir|payload)$' {
+            $name = $Matches[1]
+            $i++
+            if ($i -ge $rest.Count) { throw "$a needs a value" }
+            $val = $rest[$i]
+            if ($name -eq 'binaries') { $binaries = $val }
+            elseif ($name -eq 'slate-dir') { $slateDir = $val }
+            else { $payloadGiven = $val }
+            $passthrough.Add($a)
+            $passthrough.Add($val)
+        }
+        '^--binaries=(.*)$' { $binaries = $Matches[1]; $passthrough.Add($a) }
+        '^--slate-dir=(.*)$' { $slateDir = $Matches[1]; $passthrough.Add($a) }
+        '^--payload=(.*)$' { $payloadGiven = $Matches[1]; $passthrough.Add($a) }
+        default { $passthrough.Add($a) }
     }
-    $customList = @()
-    foreach ($f in Get-Content $Manifest) {
-        if (Test-Path $f -PathType Leaf) {
-            if ($f -like "*.md") {
-                $first = Get-Content $f -TotalCount 1
-                if ($first -match [regex]::Escape("<!-- $CustomSignature")) {
-                    $customList += $f
-                } elseif ($first -match $CoreSignaturePattern) {
-                    Remove-Item $f -Force
-                    Write-Host "  removed $f"
-                } else {
-                    Write-Host "  skipped $f (signature mismatch)"
+    $i++
+}
+
+# The earlier installers read DISPATCH_ROOTS; it still seeds --roots.
+if (-not $rootsGiven -and $env:DISPATCH_ROOTS) {
+    $passthrough.Add('--roots')
+    $passthrough.Add($env:DISPATCH_ROOTS)
+}
+
+$tmp = Join-Path ([IO.Path]::GetTempPath()) ('slate-setup-' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $tmp | Out-Null
+$exitCode = 1
+try {
+    # --- the kit payload -------------------------------------------------------
+    $here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+    if ($payloadGiven) {
+        $payload = $payloadGiven
+    } elseif (Test-Path -LiteralPath (Join-Path $here 'dist\kit.toml')) {
+        $payload = Join-Path $here 'dist'
+    } else {
+        Write-Host "Downloading $KitName ($ref)..."
+        $zip = Join-Path $tmp 'kit.zip'
+        if (-not (Get-Download "$KitArchiveHost/$KitRepo/archive/$ref.zip" $zip)) {
+            throw "cannot download the $KitName archive for '$ref'"
+        }
+        Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $tmp 'kit')
+        $payload = $null
+        foreach ($d in Get-ChildItem -LiteralPath (Join-Path $tmp 'kit') -Directory) {
+            $candidate = Join-Path $d.FullName 'dist'
+            if (Test-Path -LiteralPath (Join-Path $candidate 'kit.toml')) { $payload = $candidate; break }
+        }
+        if (-not $payload) { throw "the archive for '$ref' has no dist\kit.toml" }
+    }
+
+    # --- slate-setup -------------------------------------------------------------
+    if ($binaries -eq 'build') {
+        if (-not $slateDir) { throw '--binaries build needs --slate-dir <slate checkout>' }
+        if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) { throw 'cargo is required for --binaries build' }
+        Write-Host "Building slate-setup in $slateDir..."
+        & cargo build --release -p slate-setup --manifest-path (Join-Path $slateDir 'Cargo.toml')
+        if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
+        $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $slateDir 'target' }
+        $setup = Join-Path $targetDir 'release\slate-setup.exe'
+    } else {
+        if ($env:SLATE_PLATFORM) {
+            $platform = $env:SLATE_PLATFORM
+        } else {
+            $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+            switch ($arch) {
+                'ARM64' { $cpu = 'aarch64' }
+                'AMD64' { $cpu = 'x86_64' }
+                default { throw "unsupported architecture $arch; use --binaries build --slate-dir <slate checkout>" }
+            }
+            $platform = "$cpu-pc-windows-msvc"
+        }
+        $asset = "slate-setup-$platform.zip"
+        $base = "$ReleaseHost/$SlateRepo/releases/download/v$SlateVersion"
+        $latest = "$ReleaseHost/$SlateRepo/releases/latest/download"
+        Write-Host "Downloading slate-setup ($platform)..."
+        $archive = Join-Path $tmp $asset
+        if (-not (Get-Download "$base/$asset" $archive)) {
+            Write-Host "slate release v$SlateVersion has no $asset; using the latest release."
+            $base = $latest
+            if (-not (Get-Download "$base/$asset" $archive)) {
+                throw "cannot download $asset; use --binaries build --slate-dir <slate checkout>"
+            }
+        }
+        $sums = Join-Path $tmp 'checksums.txt'
+        if (Get-Download "$base/checksums.txt" $sums) {
+            $line = Get-Content -LiteralPath $sums | Where-Object { $_ -match "^\s*([0-9a-fA-F]{64})\s+\*?$([regex]::Escape($asset))\s*$" } | Select-Object -First 1
+            if (-not $line) {
+                Write-Warning "checksums.txt has no entry for $asset; it is not verified."
+            } else {
+                $expected = ($line -split '\s+')[0].ToLowerInvariant()
+                $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($expected -ne $actual) {
+                    throw "checksum mismatch for $asset (expected $expected, got $actual)"
                 }
-            } else {
-                Remove-Item $f -Force
-                Write-Host "  removed $f"
-            }
-        }
-    }
-
-    if ($customList.Count -gt 0) {
-        Write-Host ""
-        Write-Host "The following user-owned files were installed alongside the kit:"
-        $customList | ForEach-Object { Write-Host "  $_" }
-        $keep = $true
-        if ($env:ASIDE_UNINSTALL_KEEP_PREFS) {
-            if ($env:ASIDE_UNINSTALL_KEEP_PREFS -match '^(no|n|NO|N|No)$') { $keep = $false }
-        } elseif ([Environment]::UserInteractive) {
-            $answer = Read-Host "Remove these too? [y/N]"
-            if ($answer -match '^(y|Y|yes|YES|Yes)$') { $keep = $false }
-        }
-        if (-not $keep) {
-            foreach ($f in $customList) {
-                Remove-Item $f -Force
-                Write-Host "  removed $f"
             }
         } else {
-            Write-Host ""
-            Write-Host "Preserved (not managed by claude-agent-kit from this point on):"
-            $customList | ForEach-Object { Write-Host "  $_" }
+            Write-Warning "the release has no checksums.txt; $asset is not verified."
         }
+        Expand-Archive -LiteralPath $archive -DestinationPath $tmp -Force
+        $setup = Join-Path $tmp 'slate-setup.exe'
     }
 
-    # Remove palette skill directories recorded in the manifest (core-signed only)
-    foreach ($d in Get-Content $Manifest) {
-        if ($d -like "*\skills\palette-*" -and (Test-Path $d -PathType Container)) {
-            $skillMd = Join-Path $d "SKILL.md"
-            if ((Test-Path $skillMd) -and (Select-String -Path $skillMd -Pattern ($CoreSignaturePattern) -Quiet)) {
-                Remove-Item $d -Recurse -Force
-                Write-Host "  removed $d"
-            } else {
-                Write-Host "  skipped $d (signature mismatch)"
-            }
-        }
-    }
-    Remove-Item $Manifest -Force
-    if (Get-Command claude -ErrorAction SilentlyContinue) {
-        foreach ($srv in $Binaries) {
-            try {
-                claude mcp remove $srv -s user 2>$null
-                Write-Host "  $srv unregistered."
-            } catch {}
-        }
-    }
-    Write-Host "Uninstalled."
+    # --- run -----------------------------------------------------------------------
+    $runArgs = New-Object System.Collections.Generic.List[string]
+    $runArgs.Add($cmd)
+    if (-not $payloadGiven) { $runArgs.Add('--payload'); $runArgs.Add($payload) }
+    foreach ($p in $passthrough) { $runArgs.Add($p) }
+    & $setup @runArgs
+    $exitCode = $LASTEXITCODE
+} catch {
+    [Console]::Error.WriteLine("error: $($_.Exception.Message)")
+    $exitCode = 1
+} finally {
+    Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
-
-if ($Uninstall) {
-    Do-Uninstall
-    return
-}
-
-Write-Host "Installing claude-agent-kit..."
-
-# Detect architecture
-$arch = if ([Environment]::Is64BitOperatingSystem) {
-    if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "aarch64" } else { "x86_64" }
-} else {
-    Write-Host "Error: 32-bit systems not supported"; exit 1
-}
-$platform = "$arch-pc-windows-msvc"
-
-New-Item -ItemType Directory -Force -Path $RulesDir | Out-Null
-New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
-Remove-LegacyWorkslate
-Set-Content $Manifest -Value ""
-
-# aside / dispatch come from slate-agent-kit's release (this kit ships no
-# binaries). A failed download skips that server; the rules still install.
-$Fetched = @()
-foreach ($bin in $Binaries) {
-    Write-Host "Downloading $bin binary ($platform) from $SlateRepo..."
-    $releaseUrl = "https://github.com/$SlateRepo/releases/latest/download/$bin-$platform.zip"
-    $zip = Join-Path $env:TEMP ("$bin-$platform-" + [System.Guid]::NewGuid() + ".zip")
-    $extractDir = Join-Path $env:TEMP ("claude-agent-kit-extract-$bin-" + [System.Guid]::NewGuid())
-    try {
-        Invoke-WebRequest -Uri $releaseUrl -OutFile $zip
-        Expand-Archive -Path $zip -DestinationPath $extractDir -Force
-        $binDest = Join-Path $BinDir "$bin.exe"
-        Copy-Item (Join-Path $extractDir "$bin.exe") -Destination $binDest -Force
-        Add-Content $Manifest $binDest
-        $Fetched += $bin
-    } catch {
-        Write-Warning "could not fetch $bin from $SlateRepo releases ($_); $bin will not be registered."
-    } finally {
-        Remove-Item $zip -Force -ErrorAction SilentlyContinue
-        Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
-}
-
-# CLAUDE.md
-Write-Host "Downloading CLAUDE.md..."
-$claudeDest = Join-Path $ClaudeDir "CLAUDE.md"
-Invoke-WebRequest -Uri "$RawBase/CLAUDE.md" -OutFile $claudeDest
-Add-Content $Manifest $claudeDest
-
-# Rule files
-Write-Host "Downloading rules..."
-foreach ($f in $RuleFiles) {
-    $dest = Join-Path $RulesDir $f
-    Invoke-WebRequest -Uri "$RawBase/claude-rules/$f" -OutFile $dest
-    Add-Content $Manifest $dest
-}
-
-
-# Palette skills (each is a directory holding one SKILL.md)
-Write-Host "Downloading palette skills..."
-foreach ($s in $SkillNames) {
-    $skillDir = Join-Path $SkillsDir $s
-    New-Item -ItemType Directory -Force -Path $skillDir | Out-Null
-    Invoke-WebRequest -Uri "$RawBase/claude-skills/$s/SKILL.md" -OutFile (Join-Path $skillDir "SKILL.md")
-    Add-Content $Manifest $skillDir
-}
-
-Write-Host ""
-Write-Host "Installed:"
-Write-Host "  Binaries: $(($Fetched | ForEach-Object { Join-Path $BinDir "$_.exe" }) -join ', ')"
-Write-Host "  Config:   $claudeDest"
-Write-Host "  Rules:    $RulesDir\claude-agent-kit--*.md"
-Write-Host "  Skills:   $SkillsDir\palette-*"
-Write-Host ""
-
-# PATH check
-$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if ($userPath -notlike "*$BinDir*") {
-    Write-Host "WARNING: $BinDir is not in your PATH."
-    Write-Host ""
-    Write-Host "  Add it by running:"
-    Write-Host "    [Environment]::SetEnvironmentVariable('Path', `"$BinDir;`$env:Path`", 'User')"
-    Write-Host ""
-    Write-Host "  Then restart your terminal."
-    Write-Host ""
-}
-
-# Register MCP servers — absolute paths + per-server env, mirroring
-# install-mcp.sh's configure_claude (bare-name registration fails when
-# ~/.local\bin is not on PATH; aside needs ASIDE_HARNESS, dispatch needs
-# SLATE_AGENT_STATE_HOME so per-project task history is not orphaned).
-if (Get-Command claude -ErrorAction SilentlyContinue) {
-    foreach ($srv in $Fetched) {
-        $srvExe = Join-Path $BinDir "$srv.exe"
-        $envArgs = @()
-        if ($srv -eq "aside") {
-            $envArgs = @("-e", "ASIDE_HARNESS=claude")
-        } elseif ($srv -eq "dispatch") {
-            $envArgs = @("-e", "SLATE_AGENT_STATE_HOME=$ClaudeDir")
-            if ($DispatchRoots) { $envArgs += @("-e", "DISPATCH_EXTRA_ROOTS=$DispatchRoots") }
-        }
-        Write-Host "Registering $srv MCP server..."
-        claude mcp remove $srv -s user 2>$null | Out-Null
-        try {
-            claude mcp add $srv -s user --transport stdio @envArgs -- $srvExe 2>$null
-            Write-Host "  $srv registered."
-        } catch {
-            Write-Host "  $srv registration failed. Add manually: claude mcp add $srv -s user --transport stdio @envArgs -- $srvExe"
-        }
-    }
-} else {
-    Write-Host "Claude Code CLI not found. Register MCP servers manually, e.g.:"
-    Write-Host "  claude mcp add aside -s user --transport stdio -e ASIDE_HARNESS=claude -- $(Join-Path $BinDir 'aside.exe')"
-    Write-Host "  claude mcp add dispatch -s user --transport stdio -e SLATE_AGENT_STATE_HOME=$ClaudeDir -- $(Join-Path $BinDir 'dispatch.exe')"
-}
-
-# ── aside, dispatch, git, comment preferences (the shared configure-prefs.ps1) ──
-# The SAME generator every kit uses — interactive-first, asks before overwrite,
-# injection-safe. slate's POSIX configure-prefs.sh cannot run on Windows, so it
-# is fetched alongside the rules and invoked here.
-$prefsTmp = Join-Path $env:TEMP ("cak-prefs-" + [System.Guid]::NewGuid())
-New-Item -ItemType Directory -Force -Path $prefsTmp | Out-Null
-Invoke-WebRequest -Uri "$RawBase/scripts/configure-prefs.ps1" -OutFile (Join-Path $prefsTmp "configure-prefs.ps1")
-foreach ($t in @("aside", "dispatch", "git", "comment")) {
-    Invoke-WebRequest -Uri "$RawBase/scripts/claude-agent-kit--$t-prefs.md.tmpl" -OutFile (Join-Path $prefsTmp "claude-agent-kit--$t-prefs.md.tmpl")
-}
-& (Join-Path $prefsTmp "configure-prefs.ps1") -RulesDir $RulesDir -Prefix "claude-agent-kit" -Manifest $Manifest
-Remove-Item $prefsTmp -Recurse -Force -ErrorAction SilentlyContinue
-
-# Custom-rules directory (claude-specific; ingested by Install-CustomRules below).
-$customRules = $null
-if ([Environment]::GetEnvironmentVariable("CUSTOM_RULES_DIR")) {
-    $customRules = [Environment]::GetEnvironmentVariable("CUSTOM_RULES_DIR")
-} elseif ([Environment]::GetEnvironmentVariable("ASIDE_CUSTOM_RULES_DIR")) {
-    $customRules = [Environment]::GetEnvironmentVariable("ASIDE_CUSTOM_RULES_DIR")
-} elseif ([Environment]::UserInteractive) {
-    $ans = Read-Host "Path to a directory of your own custom rule files (blank to skip)"
-    if (-not [string]::IsNullOrEmpty($ans)) { $customRules = $ans }
-}
-
-# Shared custom-rules ingestion — a function (parity with cak-common.sh's
-# ingest_custom_rules on the shell side), called once after both prefs configs.
-function Install-CustomRules {
-    if (-not ($customRules -and (Test-Path $customRules -PathType Container))) {
-        if ($customRules) { Write-Host "  custom rules dir not found: $customRules — skipping" }
-        return
-    }
-    Write-Host "Ingesting custom rules from $customRules ..."
-    foreach ($src in Get-ChildItem -Path $customRules -Filter *.md) {
-        $base = $src.Name
-        $destName = if ($base.StartsWith("claude-agent-kit--")) { $base } else { "claude-agent-kit--$base" }
-        $dest = Join-Path $RulesDir $destName
-
-        if ((Test-Path $dest) -and ((Get-Content $dest -TotalCount 1) -match $CoreSignaturePattern)) {
-            Write-Host "  refusing to overwrite core kit file: $dest"
-            continue
-        }
-
-        $firstLine = Get-Content $src.FullName -TotalCount 1
-        if ($firstLine -match [regex]::Escape("<!-- $CustomSignature")) {
-            Copy-Item $src.FullName -Destination $dest -Force
-        } else {
-            $body = Get-Content $src.FullName -Raw
-            Set-Content $dest -Value "<!-- $CustomSignature`:user -->`n$body" -NoNewline
-        }
-
-        $existingManifest = Get-Content $Manifest
-        if ($existingManifest -notcontains $dest) {
-            Add-Content $Manifest $dest
-        }
-        Write-Host "  installed $dest"
-    }
-}
-Install-CustomRules
-
-Write-Host ""
-Write-Host "To uninstall, run:"
-Write-Host "  iwr $RawBase/install.ps1 -OutFile install.ps1; .\install.ps1 -Uninstall"
+exit $exitCode

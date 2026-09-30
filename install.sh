@@ -1,268 +1,238 @@
 #!/bin/sh
-set -e
+# install.sh - installs, reconfigures or removes claude-agent-kit.
+#
+# This script obtains two things and runs the installer; it implements no
+# installer step itself:
+#   1. the kit payload: the dist/ folder beside this script when it has one,
+#      otherwise the archive of the kit repository (saltyming/claude-agent-kit) at --ref;
+#   2. slate-setup: built with cargo from --slate-dir when --binaries build is
+#      given, otherwise the prebuilt binary for this platform from the slate
+#      release v0.7.0, verified against the release's checksums.txt.
+#
+# Usage: sh install.sh [install|configure|uninstall] [options]
+# The command is optional and defaults to install, also when the first argument
+# starts with a dash. Every option is passed to slate-setup, except --ref, which
+# selects the kit archive; --uninstall and --skip-mcp are kept as aliases of the
+# uninstall command and of --binaries skip, and DISPATCH_ROOTS in the environment
+# stands for --roots when none is given. Run `sh install.sh --help` for the list.
+set -eu
 
-REPO="saltyming/claude-agent-kit"
-BRANCH="main"
-RAW_BASE="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
-CLAUDE_DIR="${HOME}/.claude"
-RULES_DIR="${CLAUDE_DIR}/rules"
-SKILLS_DIR="${CLAUDE_DIR}/skills"
-BIN_DIR="${HOME}/.local/bin"
-MANIFEST="${CLAUDE_DIR}/.claude-agent-kit-manifest"
-SIGNATURE="claude-agent-kit"
-CUSTOM_SIGNATURE="claude-agent-kit-custom"
+KIT_NAME="claude-agent-kit"
+KIT_REPO="saltyming/claude-agent-kit"
+SLATE_REPO="${SLATE_RELEASE_REPO:-saltyming/slate-agent-kit}"
+SLATE_VERSION="0.7.0"
+RELEASE_HOST="${SLATE_RELEASE_BASE_URL:-https://github.com}"
+KIT_ARCHIVE_HOST="${KIT_ARCHIVE_BASE_URL:-https://github.com}"
 
-RULE_FILES="
-claude-agent-kit--task-execution.md
-claude-agent-kit--git-workflow.md
-claude-agent-kit--framework-conventions.md
-claude-agent-kit--parallel-work.md
-claude-agent-kit--aside.md
-claude-agent-kit--dispatch.md
-claude-agent-kit--palette.md
-"
+usage() {
+  cat <<USAGE
+Usage: sh install.sh [install|configure|uninstall] [options]
 
-SKILL_FILES="
-palette-init
-palette-spec
-palette-ux
-palette-ui
-palette-rules
-"
+  install      full install or reinstall of $KIT_NAME (default)
+  configure    prefs, custom rules, native configuration and server registration
+  uninstall    reverse what install recorded
 
-download() {
-    url="$1"
-    dest="$2"
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$url" -o "$dest"
-    elif command -v wget >/dev/null 2>&1; then
-        wget -qO "$dest" "$url"
-    else
-        echo "Error: curl or wget required"
-        exit 1
-    fi
+Options are passed to slate-setup. The common ones:
+  --home DIR            harness home (default: the harness's own folder)
+  --bin-dir DIR         where binaries go (default: ~/.local/bin)
+  --binaries MODE       prebuilt (default), build, or skip
+  --slate-dir DIR       slate checkout to build from (with --binaries build)
+  --roots PATHS         workspace roots for dispatch and palette
+  --set KEY=VALUE       set a prefs value, for example aside.level=auto
+  --custom-rules DIR    folder of your own *.md rule files
+  --payload DIR         install from this dist/ folder
+  --yes                 ask nothing; take current or default values
+  --dry-run             print the summary and stop
+Only for this script:
+  --ref REF             kit branch, tag or commit to download (default: main)
+  --uninstall           same as the uninstall command
+  --skip-mcp            same as --binaries skip
+Environment:
+  DISPATCH_ROOTS        same as --roots when --roots is not given
+USAGE
 }
 
-# workslate shipped through 11.x and was dropped in 12.0.0. Its settings.json
-# hooks, binary, MCP registration and per-project db have to go on upgrade and on
-# uninstall; scripts/remove-legacy-workslate.sh owns that (see its header).
-remove_legacy_workslate() {
-    rlw_tmp=$(mktemp -d)
-    if download "$RAW_BASE/scripts/remove-legacy-workslate.sh" "$rlw_tmp/remove-legacy-workslate.sh" 2>/dev/null; then
-        CLAUDE_DIR="$CLAUDE_DIR" BIN_DIR="$BIN_DIR" sh "$rlw_tmp/remove-legacy-workslate.sh" || true
-    elif [ -e "$BIN_DIR/workslate" ] || grep -q 'workslate' "$CLAUDE_DIR/settings.json" 2>/dev/null; then
-        echo "  WARNING: could not fetch remove-legacy-workslate.sh; workslate leftovers were not cleaned up." >&2
-        echo "           Re-run this installer when online." >&2
-    fi
-    rm -rf "$rlw_tmp"
+fetch() {
+  # fetch URL DEST: exit status 0 on success, 22 when the server answers 404, 1 otherwise.
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$1" -o "$2" 2>/dev/null
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$2" "$1" 2>/dev/null
+  else
+    echo "error: curl or wget is required to download files" >&2
+    exit 1
+  fi
 }
 
-uninstall() {
-    remove_legacy_workslate
-    if [ ! -f "$MANIFEST" ]; then
-        echo "No manifest found. Nothing to uninstall."
-        exit 0
-    fi
-    custom_list_file="$(mktemp)"
-    while IFS= read -r f; do
-        if [ -f "$f" ]; then
-            case "$f" in
-                *.md)
-                    first="$(head -1 "$f" 2>/dev/null || true)"
-                    if printf '%s' "$first" | grep -Fq "<!-- ${CUSTOM_SIGNATURE}"; then
-                        printf '%s\n' "$f" >> "$custom_list_file"
-                    elif printf '%s' "$first" | grep -Eq "<!-- (slate-agent-kit:common|${SIGNATURE}) -->"; then
-                        rm -f "$f"
-                        echo "  removed $f"
-                    else
-                        echo "  skipped $f (signature mismatch)"
-                    fi ;;
-                *)
-                    rm -f "$f"
-                    echo "  removed $f" ;;
-            esac
-        fi
-    done < "$MANIFEST"
-
-    if [ -s "$custom_list_file" ]; then
-        echo ""
-        echo "The following user-owned files were installed alongside the kit:"
-        sed 's/^/  /' "$custom_list_file"
-        keep="yes"
-        if [ -n "$ASIDE_UNINSTALL_KEEP_PREFS" ]; then
-            case "$ASIDE_UNINSTALL_KEEP_PREFS" in
-                no|NO|No|n|N) keep="no" ;;
-                *)            keep="yes" ;;
-            esac
-        elif [ -r /dev/tty ]; then
-            printf "Remove these too? [y/N]: " > /dev/tty
-            read answer < /dev/tty || answer=""
-            case "$answer" in
-                y|Y|yes|YES|Yes) keep="no" ;;
-                *)               keep="yes" ;;
-            esac
-        fi
-        if [ "$keep" = "no" ]; then
-            while IFS= read -r f; do
-                [ -z "$f" ] && continue
-                rm -f "$f" && echo "  removed $f"
-            done < "$custom_list_file"
-        else
-            echo ""
-            echo "Preserved (not managed by claude-agent-kit from this point on):"
-            sed 's/^/  /' "$custom_list_file"
-        fi
-    fi
-    rm -f "$custom_list_file"
-    # Remove palette skill directories recorded in the manifest (core-signed only)
-    grep -E '/skills/palette-' "$MANIFEST" 2>/dev/null | while IFS= read -r d; do
-        if [ -d "$d" ] && [ -f "$d/SKILL.md" ] && head -8 "$d/SKILL.md" 2>/dev/null | grep -Eq "<!-- (slate-agent-kit:common|${SIGNATURE}) -->"; then
-            rm -rf "$d" && echo "  removed $d"
-        elif [ -e "$d" ]; then
-            echo "  skipped $d (signature mismatch)"
-        fi
-    done
-    rm -f "$MANIFEST"
-    if command -v claude >/dev/null 2>&1; then
-        for srv in aside dispatch; do
-            claude mcp remove "$srv" -s user 2>/dev/null && echo "  $srv unregistered." || true
-        done
-    fi
-    echo "Uninstalled."
-    exit 0
-}
-
-for arg in "$@"; do
-    case "$arg" in
-        --uninstall) uninstall ;;
-        --skip-mcp) SKIP_MCP=1 ;;
-        -h|--help)
-            echo "Usage: $0 [--uninstall] [--skip-mcp]"
-            echo "  --uninstall   remove kit-signed files (user-owned '-custom:' prefs are kept)"
-            echo "  --skip-mcp    install rules/skills only; skip shared aside/dispatch"
-            echo "Env: SKIP_MCP=1, SLATE_AGENT_KIT_DIR=<path>, CLAUDE_DIR=<path>, BIN_DIR=<path>,"
-            echo "     SLATE_REPO / SLATE_BRANCH, ASIDE_* / DISPATCH_* prefs, CUSTOM_RULES_DIR"
-            exit 0 ;;
-    esac
-done
-
-echo "Installing claude-agent-kit..."
-
-mkdir -p "$RULES_DIR" "$BIN_DIR"
-remove_legacy_workslate
-: > "$MANIFEST"
-
-# CLAUDE.md — back up an existing unmanaged file before overwriting it
-if [ -f "$CLAUDE_DIR/CLAUDE.md" ] && ! head -1 "$CLAUDE_DIR/CLAUDE.md" | grep -Eq "<!-- (slate-agent-kit:common|${SIGNATURE}) -->"; then
-    bak="$CLAUDE_DIR/CLAUDE.md.bak-$(date -u +%Y%m%dT%H%M%SZ)"
-    cp -p "$CLAUDE_DIR/CLAUDE.md" "$bak"
-    echo "  WARNING: existing $CLAUDE_DIR/CLAUDE.md is not managed by this kit; backed up to $bak"
-    echo "## backup: $bak" >> "$MANIFEST"
-fi
-echo "Downloading CLAUDE.md..."
-download "$RAW_BASE/CLAUDE.md" "$CLAUDE_DIR/CLAUDE.md"
-echo "$CLAUDE_DIR/CLAUDE.md" >> "$MANIFEST"
-
-# Rule files
-echo "Downloading rules..."
-for f in $RULE_FILES; do
-    download "$RAW_BASE/claude-rules/$f" "$RULES_DIR/$f"
-    echo "$RULES_DIR/$f" >> "$MANIFEST"
-done
-
-# Palette skills (each is a directory holding one SKILL.md)
-echo "Downloading palette skills..."
-for s in $SKILL_FILES; do
-    mkdir -p "$SKILLS_DIR/$s"
-    download "$RAW_BASE/claude-skills/$s/SKILL.md" "$SKILLS_DIR/$s/SKILL.md"
-    echo "$SKILLS_DIR/$s" >> "$MANIFEST"
-done
-
-echo ""
-echo "Installed:"
-echo "  Binaries: aside/dispatch are installed via slate-agent-kit below"
-echo "  Config:   $CLAUDE_DIR/CLAUDE.md"
-echo "  Rules:    $RULES_DIR/claude-agent-kit--*.md"
-echo "  Skills:   $SKILLS_DIR/palette-*"
-echo ""
-
-# PATH check
-case ":$PATH:" in
-    *":$BIN_DIR:"*) ;;
-    *)
-        echo "WARNING: $BIN_DIR is not in your PATH."
-        echo ""
-        SHELL_NAME=$(basename "${SHELL:-/bin/sh}")
-        case "$SHELL_NAME" in
-            zsh)  RC="~/.zshrc" ;;
-            bash) RC="~/.bashrc" ;;
-            fish) RC="~/.config/fish/config.fish" ;;
-            *)    RC="your shell config" ;;
-        esac
-        echo "  Add it by running:"
-        if [ "$SHELL_NAME" = "fish" ]; then
-            echo "    fish_add_path $BIN_DIR"
-        else
-            echo "    echo 'export PATH=\"$BIN_DIR:\$PATH\"' >> $RC"
-            echo "    source $RC"
-        fi
-        echo "" ;;
-esac
-
-# Build + register the SHARED aside/dispatch servers from slate-agent-kit
-find_slate_dir() {
-    if [ -n "${SLATE_AGENT_KIT_DIR:-}" ] && [ -x "$SLATE_AGENT_KIT_DIR/tooling/install-mcp.sh" ]; then
-        printf '%s' "$SLATE_AGENT_KIT_DIR"
-        return 0
-    fi
-    for candidate in "../slate-agent-kit" "../.."; do
-        if [ -x "$candidate/tooling/install-mcp.sh" ]; then
-            (CDPATH= cd -- "$candidate" && pwd)
-            return 0
-        fi
-    done
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | cut -d' ' -f1
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$1" | sed 's/^.*= *//'
+  else
     return 1
+  fi
 }
 
-install_shared_mcp() {
-    if [ "${SKIP_MCP:-0}" = "1" ]; then
-        echo "Skipping shared aside/dispatch installation because SKIP_MCP=1."
-        return 0
-    fi
-    if slate_dir="$(find_slate_dir 2>/dev/null)"; then
-        BIN_DIR="$BIN_DIR" CLAUDE_DIR="$CLAUDE_DIR" "$slate_dir/tooling/install-mcp.sh" --configure-claude
-        return 0
-    fi
-    command -v git >/dev/null 2>&1 || {
-        echo "Error: git is required to fetch slate-agent-kit for aside/dispatch. Re-run with SKIP_MCP=1 to install the rules only." >&2
+detect_platform() {
+  if [ -n "${SLATE_PLATFORM:-}" ]; then
+    printf '%s' "$SLATE_PLATFORM"
+    return 0
+  fi
+  arch=$(uname -m)
+  case "$arch" in
+    arm64|aarch64) arch=aarch64 ;;
+    x86_64|amd64) arch=x86_64 ;;
+    *) echo "error: unsupported architecture $arch; use --binaries build --slate-dir <slate checkout>" >&2; exit 1 ;;
+  esac
+  case "$(uname -s)" in
+    Darwin) printf '%s-apple-darwin' "$arch" ;;
+    Linux)
+      # musl distributions cannot run the glibc binary.
+      if [ -f "/lib/ld-musl-$arch.so.1" ] \
+        || { command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; }; then
+        printf '%s-unknown-linux-musl' "$arch"
+      else
+        printf '%s-unknown-linux-gnu' "$arch"
+      fi
+      ;;
+    MINGW*|MSYS*|CYGWIN*) printf '%s-pc-windows-msvc' "$arch" ;;
+    *) echo "error: unsupported system $(uname -s); use --binaries build --slate-dir <slate checkout>" >&2; exit 1 ;;
+  esac
+}
+
+# --- arguments -------------------------------------------------------------
+case "${1:-}" in
+  install|configure|uninstall) CMD=$1; shift ;;
+  *) CMD=install ;;
+esac
+REF=main
+BINARIES=prebuilt
+SLATE_DIR=
+PAYLOAD_GIVEN=
+ROOTS_GIVEN=
+n=$#
+while [ "$n" -gt 0 ]; do
+  arg=$1
+  shift
+  n=$((n - 1))
+  case "$arg" in
+    -h|--help) usage; exit 0 ;;
+    # Aliases for the flags earlier releases had.
+    --uninstall) CMD=uninstall ;;
+    --skip-mcp) BINARIES=skip; set -- "$@" --binaries skip ;;
+    --ref)
+      [ "$n" -gt 0 ] || { echo "error: --ref needs a value" >&2; exit 2; }
+      REF=$1; shift; n=$((n - 1)) ;;
+    --ref=*) REF=${arg#--ref=} ;;
+    --binaries|--slate-dir|--payload)
+      [ "$n" -gt 0 ] || { echo "error: $arg needs a value" >&2; exit 2; }
+      val=$1; shift; n=$((n - 1))
+      case "$arg" in
+        --binaries) BINARIES=$val ;;
+        --slate-dir) SLATE_DIR=$val ;;
+        --payload) PAYLOAD_GIVEN=$val ;;
+      esac
+      set -- "$@" "$arg" "$val" ;;
+    --roots|--roots=*) ROOTS_GIVEN=1; set -- "$@" "$arg" ;;
+    --binaries=*) BINARIES=${arg#--binaries=}; set -- "$@" "$arg" ;;
+    --slate-dir=*) SLATE_DIR=${arg#--slate-dir=}; set -- "$@" "$arg" ;;
+    --payload=*) PAYLOAD_GIVEN=${arg#--payload=}; set -- "$@" "$arg" ;;
+    *) set -- "$@" "$arg" ;;
+  esac
+done
+# The earlier Kimi installer read DISPATCH_ROOTS; it still seeds --roots.
+if [ -z "$ROOTS_GIVEN" ] && [ -n "${DISPATCH_ROOTS:-}" ]; then
+  set -- "$@" --roots "$DISPATCH_ROOTS"
+fi
+
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/slate-setup.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT
+trap 'exit 1' HUP INT TERM
+
+# --- the kit payload -------------------------------------------------------
+HERE=$(unset CDPATH; cd -- "$(dirname -- "$0")" 2>/dev/null && pwd) || HERE=.
+if [ -n "$PAYLOAD_GIVEN" ]; then
+  PAYLOAD=$PAYLOAD_GIVEN
+elif [ -f "$HERE/dist/kit.toml" ]; then
+  PAYLOAD=$HERE/dist
+elif [ -f "./dist/kit.toml" ]; then
+  PAYLOAD=$(pwd)/dist
+else
+  echo "Downloading $KIT_NAME ($REF)..."
+  fetch "$KIT_ARCHIVE_HOST/$KIT_REPO/archive/$REF.tar.gz" "$TMP/kit.tar.gz" \
+    || { echo "error: cannot download the $KIT_NAME archive for '$REF'" >&2; exit 1; }
+  mkdir "$TMP/kit"
+  tar xzf "$TMP/kit.tar.gz" -C "$TMP/kit"
+  PAYLOAD=
+  for d in "$TMP"/kit/*/dist; do
+    [ -f "$d/kit.toml" ] && PAYLOAD=$d && break
+  done
+  [ -n "$PAYLOAD" ] || { echo "error: the archive for '$REF' has no dist/kit.toml" >&2; exit 1; }
+fi
+
+# --- slate-setup -----------------------------------------------------------
+if [ "$BINARIES" = build ]; then
+  [ -n "$SLATE_DIR" ] || { echo "error: --binaries build needs --slate-dir <slate checkout>" >&2; exit 2; }
+  command -v cargo >/dev/null 2>&1 || { echo "error: cargo is required for --binaries build" >&2; exit 1; }
+  echo "Building slate-setup in $SLATE_DIR..."
+  cargo build --release -p slate-setup --manifest-path "$SLATE_DIR/Cargo.toml"
+  SETUP=${CARGO_TARGET_DIR:-$SLATE_DIR/target}/release/slate-setup
+else
+  PLATFORM=$(detect_platform)
+  case "$PLATFORM" in
+    *windows*) EXT=zip; EXE=slate-setup.exe ;;
+    *) EXT=tar.gz; EXE=slate-setup ;;
+  esac
+  ASSET="slate-setup-$PLATFORM.$EXT"
+  BASE="$RELEASE_HOST/$SLATE_REPO/releases/download/v$SLATE_VERSION"
+  LATEST="$RELEASE_HOST/$SLATE_REPO/releases/latest/download"
+  echo "Downloading slate-setup ($PLATFORM)..."
+  if ! fetch "$BASE/$ASSET" "$TMP/$ASSET"; then
+    echo "slate release v$SLATE_VERSION has no $ASSET; using the latest release."
+    BASE=$LATEST
+    fetch "$BASE/$ASSET" "$TMP/$ASSET" \
+      || { echo "error: cannot download $ASSET; use --binaries build --slate-dir <slate checkout>" >&2; exit 1; }
+  fi
+  if fetch "$BASE/checksums.txt" "$TMP/checksums.txt"; then
+    expected=$(awk -v f="$ASSET" '$2 == f || $2 == "*" f { print $1; exit }' "$TMP/checksums.txt")
+    if [ -z "$expected" ]; then
+      echo "warning: checksums.txt has no entry for $ASSET; it is not verified." >&2
+    elif actual=$(sha256_of "$TMP/$ASSET"); then
+      if [ "$expected" != "$actual" ]; then
+        echo "error: checksum mismatch for $ASSET" >&2
+        echo "  expected: $expected" >&2
+        echo "  actual:   $actual" >&2
         exit 1
-    }
-    slate_tmp=$(mktemp -d)
-    git clone --depth=1 --branch "${SLATE_BRANCH:-main}" "https://github.com/${SLATE_REPO:-saltyming/slate-agent-kit}.git" "$slate_tmp/slate-agent-kit"
-    BIN_DIR="$BIN_DIR" CLAUDE_DIR="$CLAUDE_DIR" "$slate_tmp/slate-agent-kit/tooling/install-mcp.sh" --configure-claude
-    rm -rf "$slate_tmp"
-}
+      fi
+    else
+      echo "warning: no sha256 tool found (sha256sum, shasum or openssl); $ASSET is not verified." >&2
+    fi
+  else
+    echo "warning: the release has no checksums.txt; $ASSET is not verified." >&2
+  fi
+  case "$EXT" in
+    zip)
+      command -v unzip >/dev/null 2>&1 || { echo "error: unzip is required" >&2; exit 1; }
+      unzip -oq "$TMP/$ASSET" -d "$TMP" ;;
+    *) tar xzf "$TMP/$ASSET" -C "$TMP" ;;
+  esac
+  SETUP=$TMP/$EXE
+  chmod +x "$SETUP"
+fi
 
-install_shared_mcp
-
-# Interactive aside, dispatch, git, and comment preference configuration — the SAME
-# configure-prefs.sh codex/kimi use (single source). Templates must sit next to
-# it (it resolves "$HERE/<PREFIX>--{aside,dispatch,git,comment}-prefs.md.tmpl").
-echo ""
-scripts_tmp=$(mktemp -d)
-download "$RAW_BASE/scripts/configure-prefs.sh" "$scripts_tmp/configure-prefs.sh"
-download "$RAW_BASE/scripts/cak-common.sh" "$scripts_tmp/cak-common.sh"
-download "$RAW_BASE/scripts/claude-agent-kit--aside-prefs.md.tmpl" "$scripts_tmp/claude-agent-kit--aside-prefs.md.tmpl"
-download "$RAW_BASE/scripts/claude-agent-kit--dispatch-prefs.md.tmpl" "$scripts_tmp/claude-agent-kit--dispatch-prefs.md.tmpl"
-download "$RAW_BASE/scripts/claude-agent-kit--git-prefs.md.tmpl" "$scripts_tmp/claude-agent-kit--git-prefs.md.tmpl"
-download "$RAW_BASE/scripts/claude-agent-kit--comment-prefs.md.tmpl" "$scripts_tmp/claude-agent-kit--comment-prefs.md.tmpl"
-RULES_DIR="$RULES_DIR" PREFIX=claude-agent-kit MANIFEST="$MANIFEST" \
-    sh "$scripts_tmp/configure-prefs.sh"
-# Custom-rules ingestion (claude-specific; separate concern from prefs)
-RULES_DIR="$RULES_DIR" MANIFEST="$MANIFEST" \
-    sh -c ". \"$scripts_tmp/cak-common.sh\"; ingest_custom_rules"
-rm -rf "$scripts_tmp"
-
-echo ""
-echo "To uninstall:"
-echo "  curl -fsSL $RAW_BASE/install.sh | sh -s -- --uninstall"
+# --- run -------------------------------------------------------------------
+if [ -n "$PAYLOAD_GIVEN" ]; then
+  set -- "$CMD" "$@"
+else
+  set -- "$CMD" --payload "$PAYLOAD" "$@"
+fi
+status=0
+if [ -r /dev/tty ] && (: </dev/tty) 2>/dev/null; then
+  "$SETUP" "$@" </dev/tty || status=$?
+else
+  "$SETUP" "$@" || status=$?
+fi
+exit "$status"
