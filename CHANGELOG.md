@@ -4,6 +4,18 @@ All notable changes to Claude Agent Kit are documented here. Format loosely base
 
 Version numbers track the `Version` field in `CLAUDE.md`. Most entries correspond to operating-manual revisions and accompanying MCP server changes; the two ship together.
 
+## [13.2.0] - 2026-09-30
+
+**Tables and code blocks in records and maintained documents (RFC-0012).** Ships alongside codex-agent-kit 0.10.0, kimi-agent-kit 0.10.0 and slate-agent-kit v0.9.0.
+
+- The house style admits `.. list-table::` and `.. code-block::` in RFC, ADR, changeset, staging, design, spec, principles, glossary and contributing documents. Backlog, phase, deliverable, state and layout documents keep the full ban, and every other directive, simple and grid tables, substitutions and footnotes stay forbidden (P001).
+- **list-table**: an optional title, only `:header-rows:` (non-negative integer) and `:widths:` (one positive integer per column, or `auto`), each once, directly after the directive line; a blank line; rows at the options' column starting `* -`, further cells `-` two columns deeper, one space before the cell text, cell text four columns deeper or more. **code-block**: exactly one language argument, no options, a blank line, indented content. Both are indented with spaces, not tabs.
+- New lint rule **P017** (error) reports a malformed one: an option outside the two, a repeated option, a bad value, a missing blank line, no rows or no content, a broken row or cell marker or indent, rows off the options' column, a tab in the indentation, a row whose cell count differs from the first, `:header-rows:` that leaves no body row, a `:widths:` count that differs from the columns, a code-block without one language or with options.
+- Table cells are scanned as text, each cell on its own: links in cells are checked by P004 and references by P001; a directive inside a cell is checked like any other. Code-block content is not checked.
+- palette 0.3.0.
+
+Verified: locally on macOS with the latest stable toolchain (1.98.1), `cargo test --workspace` (500 passed; new tests cover each P017 case, the admitted forms, and a changeset whose replace, insert-after and create edits carry both directives through staging and promote with LF and CRLF), `clippy -D warnings`, `fmt --check`, `sh tooling/render-kit.sh` for all three kits, `validate.sh` and `palette check` on the slate repository with and without `_palette/`; `slate-setup` install of each kit into a scratch `HOME` with stand-in harness CLIs and `--binaries build` (installed `palette --version` 0.3.0); `palette check` on the saltyos checkout (read-only): the 108 list-table and 35 code-block P001 findings of 0.2.1 are gone and no P017 is reported. Not run: the prebuilt download path (the slate v0.9.0 release does not exist yet) and real harness CLIs.
+
 ## [13.1.1] - 2026-09-30
 
 **Amends cutoff in the contributing document (RFC-0010).** Ships alongside codex-agent-kit 0.9.1, kimi-agent-kit 0.9.1 and slate-agent-kit v0.8.1.
