@@ -7,7 +7,7 @@
 #      otherwise the archive of the kit repository (saltyming/claude-agent-kit) at --ref;
 #   2. slate-setup: built with cargo from --slate-dir when --binaries build is
 #      given, otherwise the prebuilt binary for this platform from the slate
-#      release v0.9.0, verified against the release's checksums.txt.
+#      release v0.9.1, verified against the release's checksums.txt.
 #
 # Usage: sh install.sh [install|configure|uninstall] [options]
 # The command is optional and defaults to install, also when the first argument
@@ -20,7 +20,7 @@ set -eu
 KIT_NAME="claude-agent-kit"
 KIT_REPO="saltyming/claude-agent-kit"
 SLATE_REPO="${SLATE_RELEASE_REPO:-saltyming/slate-agent-kit}"
-SLATE_VERSION="0.9.0"
+SLATE_VERSION="0.9.1"
 RELEASE_HOST="${SLATE_RELEASE_BASE_URL:-https://github.com}"
 KIT_ARCHIVE_HOST="${KIT_ARCHIVE_BASE_URL:-https://github.com}"
 

@@ -4,6 +4,17 @@ All notable changes to Claude Agent Kit are documented here. Format loosely base
 
 Version numbers track the `Version` field in `CLAUDE.md`. Most entries correspond to operating-manual revisions and accompanying MCP server changes; the two ship together.
 
+## [13.2.1] - 2026-09-30
+
+**The copilot backend is removed; RFC headers name ADRs; prefs migration keeps what it cannot map.** Ships alongside codex-agent-kit 0.10.1, kimi-agent-kit 0.10.1 and slate-agent-kit v0.9.1.
+
+- **aside has two backends, codex and claude.** The `aside_copilot` tool, the copilot argv builder and the three copilot settings of the aside prefs are gone (slate RFC-0008). A prefs file that still has them installs: the installer reports them in one warning line, treats them and a `## Backend` value naming that backend as blank, and leaves the lines in your file.
+- **Prefs migration.** A 12.x / 0.7.x prefs file keeps every section the current template has no heading for, verbatim at the end of the migrated file (the spec said so; the code kept only Notes and Repository overrides). Values of a backend the kit no longer has are reported in one warning line and stay in the backup file. A preserved section is always separated from the next heading by one blank line.
+- **palette 0.3.1.** An RFC's `Depends`, `Supersedes` (whole or `in part:`) and `Related` may name an ADR, as an ADR's already could name an RFC; the age rule and the supersession rules apply unchanged.
+- **Wrapped links are checked.** A hyperlink whose text and `<target>` sit on different lines of a paragraph, list item, field or table cell was not seen at all; it now gets the same P004 and P005 findings as a one-line link, counts in the index's "Linked from", and is rewritten by `palette_layout_set`.
+
+Verified: locally on macOS with the latest stable toolchain, `cargo test --workspace` (528 passed), `clippy -D warnings`, `fmt --check`, `sh tooling/render-kit.sh` for all three kits, `validate.sh` (now also refusing the retired backend's name in sources and renders) and `palette check` on the slate repository; an install into a scratch `HOME` over a prefs file holding the retired backend's settings (exit 0, one warning, file unchanged). Not run: real harness CLIs.
+
 ## [13.2.0] - 2026-09-30
 
 **Tables and code blocks in records and maintained documents (RFC-0012).** Ships alongside codex-agent-kit 0.10.0, kimi-agent-kit 0.10.0 and slate-agent-kit v0.9.0.

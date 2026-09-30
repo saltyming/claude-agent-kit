@@ -2,7 +2,7 @@
 
 An operating manual and rule set for Claude Code (`CLAUDE.md` plus rule files), the palette document system with its skills, and three shared MCP servers: `aside` (second opinions from another model family), `dispatch` (asynchronous execution by a codex, opencode or claude backend) and `palette` (reads, checks and writes palette documents). One installer, `slate-setup`, installs all of it, writes your preferences and sets Claude Code's subagent default model.
 
-This is claude-agent-kit 13.1.1. Its rules, skills, templates and prefs templates are rendered from [`slate-agent-kit`](https://github.com/saltyming/slate-agent-kit), which also builds the servers and the installer; its release v0.7.0 provides the binaries.
+This is claude-agent-kit 13.2.1. Its rules, skills, templates and prefs templates are rendered from [`slate-agent-kit`](https://github.com/saltyming/slate-agent-kit), which also builds the servers and the installer; its release v0.7.0 provides the binaries.
 
 ## What's Inside
 
@@ -85,7 +85,7 @@ The `memory-triage` skill reviews `~/.claude/projects/<project>/memory/` and pro
 
 ### aside: consultation
 
-Asks another model family for a read-only opinion through a locally installed CLI: `aside_codex` (OpenAI), `aside_copilot` (GitHub) and `aside_claude` (a separate local Claude CLI pass); `aside_list` reports which are installed. It complements the built-in `advisor()` (a stronger Claude that receives the full transcript) and does not replace it. The two never run at the same time; when both are used in one turn, the agent calls aside first, so `advisor()` also sees the exchange.
+Asks another model family for a read-only opinion through a locally installed CLI: `aside_codex` (OpenAI) and `aside_claude` (a separate local Claude CLI pass); `aside_list` reports which are installed. It complements the built-in `advisor()` (a stronger Claude that receives the full transcript) and does not replace it. The two never run at the same time; when both are used in one turn, the agent calls aside first, so `advisor()` also sees the exchange.
 
 - **Transcript auto-forwarded, redacted.** `text` passes through verbatim; `tool_use`, `tool_result` and `thinking` become placeholders. 100 KB cap; `include_transcript=false` for decontextualised questions.
 - **Read-only, non-interactive.** Each backend can read files and grep the workspace itself but cannot edit files or run shells.
@@ -122,7 +122,7 @@ Five user-owned files in `~/.claude/rules/`, loaded with the other rules:
 
 | File | Sets | Installed default |
 |---|---|---|
-| `claude-agent-kit--aside-prefs.md` | Level; backend (`codex`, `copilot`, `claude`); model, reasoning effort and model fallback for the chosen backend | `suggest`, `codex` |
+| `claude-agent-kit--aside-prefs.md` | Level; backend (`codex` or `claude`); model, reasoning effort and model fallback for the chosen backend | `suggest`, `codex` |
 | `claude-agent-kit--dispatch-prefs.md` | Level; backend (`codex`, `opencode`, `claude`); model; reasoning effort; model fallback | `suggest`, `codex` |
 | `claude-agent-kit--subagent-prefs.md` | Level; default model | `suggest`, harness default |
 | `claude-agent-kit--git-prefs.md` | Commit signing, model attribution, commit message format, PR body format, branch naming | `unset`: the agent asks at first need and records the answer |
@@ -154,7 +154,7 @@ irm https://raw.githubusercontent.com/saltyming/claude-agent-kit/main/install.ps
 
 The PowerShell script also accepts the earlier installers' switches: `-Uninstall`, `-SkipMcp` and `-DispatchRoots <paths>`.
 
-The entry point downloads the prebuilt `slate-setup` for your platform from slate release v0.8.1, verifies its checksum, and runs it on the kit's payload. `slate-setup` performs every step, with the same code on Linux, macOS and Windows.
+The entry point downloads the prebuilt `slate-setup` for your platform from slate release v0.9.1, verifies its checksum, and runs it on the kit's payload. `slate-setup` performs every step, with the same code on Linux, macOS and Windows.
 
 | Command | Does |
 |---|---|
@@ -164,7 +164,7 @@ The entry point downloads the prebuilt `slate-setup` for your platform from slat
 
 | Option | Meaning |
 |---|---|
-| `--binaries prebuilt\|build\|skip` | `prebuilt` (default) downloads `aside`, `dispatch` and `palette` from the slate release, checked against `checksums.txt` (if release v0.8.1 does not exist it uses the latest and says so). `build` runs `cargo build --release` in `--slate-dir` and needs Rust. `skip` installs no binaries and registers no servers. `--skip-mcp` still works. |
+| `--binaries prebuilt\|build\|skip` | `prebuilt` (default) downloads `aside`, `dispatch` and `palette` from the slate release, checked against `checksums.txt` (if release v0.9.1 does not exist it uses the latest and says so). `build` runs `cargo build --release` in `--slate-dir` and needs Rust. `skip` installs no binaries and registers no servers. `--skip-mcp` still works. |
 | `--slate-dir <dir>` | The slate checkout to build from. |
 | `--roots <paths>` | Workspace roots dispatch and palette may work in, as an OS path list. When it is not given, the `DISPATCH_ROOTS` environment variable is used. |
 | `--set <key>=<value>` | Pre-answers a prefs question; repeatable. Keys are `<file>.<key>`, for example `aside.level=auto` or `git.signing=no-gpg-sign`. |
@@ -229,7 +229,7 @@ make install ARGS="--binaries build --slate-dir ../slate-agent-kit"   # options 
 
 - Linux, macOS or Windows. Rust is needed only for `--binaries build`.
 - The `claude` command, which the installer uses to register the servers.
-- The backend CLIs, installed separately (the servers only wrap them): [codex](https://github.com/openai/codex) (`npm i -g @openai/codex`), [copilot](https://docs.github.com/copilot/how-tos/copilot-cli) (GitHub's standalone Copilot CLI, not `gh copilot`), [Claude Code](https://claude.com/claude-code) (`npm i -g @anthropic-ai/claude-code`), and [OpenCode](https://opencode.ai/docs/cli/) for dispatch. `aside_list` and `dispatch_backends` report which are present; a missing one is reported as unavailable, not as an error.
+- The backend CLIs, installed separately (the servers only wrap them): [codex](https://github.com/openai/codex) (`npm i -g @openai/codex`), [Claude Code](https://claude.com/claude-code) (`npm i -g @anthropic-ai/claude-code`), and [OpenCode](https://opencode.ai/docs/cli/) for dispatch. `aside_list` and `dispatch_backends` report which are present; a missing one is reported as unavailable, not as an error.
 
 ## Kit Layout
 

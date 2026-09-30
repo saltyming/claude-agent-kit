@@ -13,7 +13,7 @@
 
 **codex**
 
-`codex` | `copilot` | `claude`
+`codex` | `claude`
 
 ## Codex model
 
@@ -30,18 +30,6 @@
 ****
 
 Comma-separated, tried in order on a transient failure.
-
-## Copilot model
-
-****
-
-## Copilot reasoning effort
-
-****
-
-## Copilot model fallback
-
-****
 
 ## Claude model
 
