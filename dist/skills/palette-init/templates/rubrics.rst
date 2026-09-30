@@ -39,7 +39,7 @@ The ``Priority-signal`` a new or deferred backlog item carries, set when the
 item is written with the user's consent.
 
 - Damage if left unresolved: correctness, trust or safety over cosmetics.
-- Whether it endangers the active phase's exit criteria or work in flight.
+- Whether it endangers an active phase's exit criteria or work in flight.
 - Whether this kind of problem has surfaced before.
 - Cost to fix: cheap before open-ended.
 

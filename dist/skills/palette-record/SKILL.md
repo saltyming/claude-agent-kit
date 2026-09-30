@@ -20,7 +20,8 @@ With the palette server, `palette_record_create` allocates the number and writes
 
 - **Evidence** goes into the record itself: the current code or document state when it exists, the basis in earlier records when nothing exists yet, and research findings, each with its source and date. Do not leave evidence in a separate file.
 - **Links** point only to older records. `Depends` lists the records whose contract this one uses directly, each with what it uses; do not list what those records depend on.
-- `Implementation`, `Verification`, `Implementers` and `Revised` are written by the server's tools; set their initial values only when writing by hand.
+- `Implementation`, `Verification`, `Implementers` and `Revised` are written by the server's tools; set their initial values only when writing by hand. `Implementation` is `in-progress` while work is under way, `partial` when a part landed and nothing is under way, `abandoned` when it will not land, `unassessed` when an inherited claim has not been re-verified; only `complete` is complete.
+- `Supersedes` names a whole record (`RFC-0104 (<what is replaced>)`, its status becomes `Superseded`) or a part (`RFC-0104 (in part: <what is replaced>)`, its status stays; the tools take `partial: true`). `Amends` is a relation of older records that no new record writes; the layout's `amends-until` bounds it.
 - No development stages, no task plan, no list of files to edit; the record explains the decision well enough to be understood without the conversation that produced it.
 
 Graduate the state entry once the record exists (`palette-state`).

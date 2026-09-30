@@ -4,6 +4,19 @@ All notable changes to Claude Agent Kit are documented here. Format loosely base
 
 Version numbers track the `Version` field in `CLAUDE.md`. Most entries correspond to operating-manual revisions and accompanying MCP server changes; the two ship together.
 
+## [13.1.0] - 2026-09-30
+
+**Record header rules and several active phases.** Ships alongside codex-agent-kit 0.9.0, kimi-agent-kit 0.9.0 and slate-agent-kit v0.8.0; decided in slate's RFC-0009.
+
+- **Partial supersession.** `:Supersedes: RFC-0104 (in part: <what is replaced>)` replaces a part of an older record and leaves its status; only a whole entry sets `Superseded`. The record index and `palette_status` show `Superseded by: RFC-0120 (in part: ...)`; `palette_record_create` and `palette_record_update` take `partial: true` on a supersedes entry.
+- **Implementation values.** `not-started | in-progress | partial | complete | abandoned | unassessed | not-applicable`: `in-progress` is work under way, `partial` a part that landed with nothing under way, `unassessed` an inherited claim not re-verified. Only `complete` counts as complete (P007, promote, status).
+- **Amends, legacy only.** `:Amends: RFC-N (<what changed>)` (right after `Related`, several entries) is parsed on older records and shown as `Amended by` in the index and status; no template or tool writes it. The layout gains a required setting `:amends-until: none | <YYYY-MM-DD>` that bounds the `Date` of a record that may carry it; an RFC may amend an RFC or an ADR, an ADR only an ADR.
+- **Accepted.** `:Accepted: <who> (<YYYY-MM-DDTHH:MMZ>)`, UTC; `palette_record_update` writes it when a record is accepted. New lint rule **P016** (warning): the person without the time. A parenthetical that is not a UTC time is a P002 error.
+- **Several active phases.** `palette_phase_open` no longer refuses while another phase is active; an item belongs to one phase; the deliverable tools accept an item of any active phase; `palette_status` and `palette-resume` report every active phase.
+- **Upgrading a palette project.** Add `:amends-until: none` to `_palette/layout.rst` (P012 error until it is there). Records accepted under the earlier `<date>, <who>` form lint as P016 warnings until rewritten; a new project from `palette_init` needs nothing.
+
+Verified: locally on macOS with the latest stable toolchain, `cargo test --workspace` (482 passed), `clippy -D warnings`, `fmt --check`, `sh tooling/render-kit.sh` for all three kits, `validate.sh` (`validate: OK`) and `palette check` on the slate repository; `cargo test -p palette` (171 passed) and palette 0.2.0 checked against the slate repository's own documents; `slate-setup` install of each kit into a scratch `HOME` with stand-in harness CLIs and `--binaries build`, the installed `palette --version` reporting 0.2.0 and the installed templates carrying the new fields. Not run: the prebuilt download path (the slate v0.8.0 release does not exist yet) and real harness CLIs.
+
 ## [13.0.0] - 2026-09-30
 
 **Direction and autonomy, palette as a document system, one installer.** Ships alongside codex-agent-kit 0.8.0, kimi-agent-kit 0.8.0 and slate-agent-kit v0.7.0.

@@ -11,13 +11,13 @@ A new session learns where the project stands from its documents, reports it, an
 ## Read
 
 - With the palette server: `palette_status` for the summary, then `palette_lint` for drift. Read a record or deliverable only when the summary points to it.
-- Without it: `_palette/layout.rst`, `_palette/state.rst`, the active phase's `phase.rst`, and the backlog items in that phase. Read other documents only when one of these points to them.
+- Without it: `_palette/layout.rst`, `_palette/state.rst`, each active phase's `phase.rst`, and the backlog items in those phases. Read other documents only when one of these points to them.
 
 ## Report
 
 In a few lines each:
 
-- where things stand: the active phase and its goal, and the status of its items as the backlog records them;
+- where things stand: each active phase and its goal, and the status of its items as the backlog records them;
 - what is open: open questions, discrepancies, decisions not yet written into a record;
 - what drifted: lint errors, or facts that disagree between documents;
 - a proposal for the next step, as a proposal.

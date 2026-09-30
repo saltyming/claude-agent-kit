@@ -2,17 +2,17 @@ RFC-<NNNN>: <Title>
 ===================
 
 :Status: Draft | Proposed | Accepted | Rejected | Superseded | Withdrawn
-:Implementation: not-started | partial | complete | not-applicable — <scope in one line>
+:Implementation: not-started | in-progress | partial | complete | abandoned | unassessed | not-applicable — <scope in one line>
 :Verification: none | documentation | static | build | runtime — <YYYY-MM-DD>; <limit>
 :Areas: <affected areas, separated by semicolons>
 :Authors: <actual authors>
 :Reviewers: none yet | <actual reviewers>
 :Implementers: none yet | <actual implementers>
-:Accepted: none | <YYYY-MM-DD>, <who accepted it>
+:Accepted: none | <who accepted it> | <who accepted it> (<YYYY-MM-DDTHH:MMZ>)
 :Date: <YYYY-MM-DD>
 :Revised: none | <YYYY-MM-DD> — <what changed, in one line>
 :Depends: none | RFC-<NNNN> (<the contract used>)
-:Supersedes: none | RFC-<NNNN> (<what is replaced>)
+:Supersedes: none | RFC-<NNNN> (<what is replaced>) | RFC-<NNNN> (in part: <what is replaced>)
 :Related: none | RFC-<NNNN> (<the context it gathers>)
 :Changes: none | <maintained document path> (<section>; <section>)
 :Description: <one sentence>

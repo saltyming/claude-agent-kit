@@ -13,7 +13,7 @@ Use the palette server's write tools when they are available; each one changes e
 ## When something changes
 
 - **A decision is made** by the user: `palette_state_record` as a decision, one line, with its source and the record or document it will be written into. When that record exists, `palette_state_resolve` it as graduated.
-- **A question blocks the active phase**: record it as an open question, without choosing an answer; a proposal is marked with who proposed it and when. When the user answers, resolve it as answered (it becomes a decision).
+- **A question blocks an active phase**: record it as an open question, without choosing an answer; a proposal is marked with who proposed it and when. When the user answers, resolve it as answered (it becomes a decision).
 - **Two sources disagree** (a document and the code, two documents): record a discrepancy with the kind of evidence and the date. Remove it when fixed.
 - **Item status changes**: `palette_backlog_update`. Status lives only in the backlog.
 
