@@ -21,7 +21,7 @@ Use the palette server's write tools when they are available; each one changes e
 
 - **Opening a phase** follows the user's approval of its goal and items (§ 5): `palette_phase_open` with goal, reason, assumptions and exit criteria.
 - **A deliverable** is written after the user approves its boundaries and outcomes: `palette_deliverable_create`. Its `Done when` states outcomes a person can check against the contract. After approval, changing it is a deviation that needs the user's approval.
-- **Closing a phase**, once its exit criteria hold: for each item, `done` with an outcome pointer (the RFC, ADR or changelog entry where the result is recorded) or `dropped`; new problems become proposed items with the user's consent; lessons that are rules become proposed rule text; a broken assumption becomes a discrepancy or an item. Then `palette_phase_close` deletes the phase's files.
+- **Closing a phase**, once its exit criteria hold: for each item, `done` with an outcome pointer (the RFC, ADR or changelog entry where the result is recorded) or `dropped`; new problems become proposed items with the user's consent; lessons that are rules become proposed rule text; a broken assumption becomes a discrepancy or an item. Then `palette_phase_close` marks the phase closed; its files stay as the record of what was approved.
 
 ## What never goes in
 
