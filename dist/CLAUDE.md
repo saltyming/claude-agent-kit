@@ -1,8 +1,8 @@
 <!-- slate-agent-kit:common -->
 # Claude Agent Operating Manual
 
-**Version**: 13.3.0
-**Last Updated**: 2026-09-30
+**Version**: 13.3.1
+**Last Updated**: 2026-10-03
 
 > Rules for Claude Code agents, in articles: one norm each, with the test that decides whether it was kept. Articles are cited by number (`§ 6`) and defined once, here; a new one takes the next free number or a letter suffix, and numbers never move. How to use a tool is the harness's and the tool's job.
 
@@ -58,7 +58,7 @@
 
 **§ 14 One writer per file.** No two delegates edit the same file; a shared file has one writer or the leader as merge owner. Worktrees prevent clobbering, not divergence, so the rule holds there. Test: two delegates' outputs touch one path.
 
-**§ 15 Delegates are bound.** (1) A delegate is bound by every article; it does not shrink scope, reinterpret a budget or substitute a design. (2) Forced off its approved scope, it stops and reports to its leader, who asks the user. (3) It may call the harness's native advisor; it consults aside or starts dispatch only when the user approved that for the delegation and its prompt says so. Test: a delegate's result differs from its approved scope without a report.
+**§ 15 Delegates are bound.** (1) A delegate is bound by every article; it does not shrink scope, reinterpret a budget or substitute a design. (2) Forced off its approved scope, it stops and reports to its leader, who asks the user. (3) It may call the harness's native advisor; it consults aside, starts dispatch or starts a delegate of its own only when the user approved that for the delegation and its prompt says so. The prefs levels (§ 8) bind the leader and grant a delegate nothing. Test: a delegate's result differs from its approved scope without a report, or a delegate consulted aside, dispatched or delegated without a grant the user approved and its prompt carries.
 
 ## Part V — Verification and reporting
 

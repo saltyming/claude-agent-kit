@@ -6,7 +6,7 @@
 #      otherwise the archive of the kit repository (saltyming/claude-agent-kit) at --ref;
 #   2. slate-setup: built with cargo from --slate-dir when --binaries build is
 #      given, otherwise the prebuilt binary for this platform from the slate
-#      release v0.10.0, verified against the release's checksums.txt.
+#      release v0.10.1, verified against the release's checksums.txt.
 #
 # Usage: .\install.ps1 [install|configure|uninstall] [options]
 # The command is optional and defaults to install, also when the first argument
@@ -27,7 +27,7 @@ try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::
 $KitName = 'claude-agent-kit'
 $KitRepo = 'saltyming/claude-agent-kit'
 $SlateRepo = if ($env:SLATE_RELEASE_REPO) { $env:SLATE_RELEASE_REPO } else { 'saltyming/slate-agent-kit' }
-$SlateVersion = '0.10.0'
+$SlateVersion = '0.10.1'
 $ReleaseHost = if ($env:SLATE_RELEASE_BASE_URL) { $env:SLATE_RELEASE_BASE_URL.TrimEnd('/') } else { 'https://github.com' }
 $KitArchiveHost = if ($env:KIT_ARCHIVE_BASE_URL) { $env:KIT_ARCHIVE_BASE_URL.TrimEnd('/') } else { 'https://github.com' }
 

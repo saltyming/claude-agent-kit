@@ -4,6 +4,15 @@ All notable changes to Claude Agent Kit are documented here. Format loosely base
 
 Version numbers track the `Version` field in `CLAUDE.md`. Most entries correspond to operating-manual revisions and accompanying MCP server changes; the two ship together.
 
+## [13.3.1] - 2026-10-03
+
+**A delegate starts no delegate of its own unless its prompt grants it.** Ships alongside codex-agent-kit 0.11.1, kimi-agent-kit 0.11.1 and slate-agent-kit v0.10.1. Rules only; the servers and the installer are unchanged.
+
+- **§ 15(3).** The clause that let a delegate consult aside or start dispatch only when the user approved it for the delegation and its prompt says so now also covers starting a delegate of its own: a subagent, a workflow or a dispatch run. The prefs levels bind the leader and grant a delegate nothing. The article's Test also names a delegate that consulted, dispatched or delegated without a grant the user approved and its prompt carries.
+- **Delegation rule.** A self-contained prompt also says whether the delegate may delegate in turn; a nested delegate counts toward the count and files the leader stated.
+
+Verified: `sh tooling/render-kit.sh` for all three kits, `sh tooling/validate.sh` (`validate: OK`, including `palette check` on the slate repository), and an install of each kit into a scratch `HOME` with `--binaries skip` (exit 0, the manual at the new version). Not run: Rust tests and clippy (no Rust source changed).
+
 ## [13.3.0] - 2026-09-30
 
 **aside and dispatch run on one execution layer, under a guard of its own.** Ships alongside codex-agent-kit 0.11.0, kimi-agent-kit 0.11.0 and slate-agent-kit v0.10.0 (slate RFC-0008 and RFC-0014).
