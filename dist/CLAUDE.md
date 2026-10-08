@@ -1,8 +1,8 @@
 <!-- slate-agent-kit:common -->
 # Claude Agent Operating Manual
 
-**Version**: 13.3.1
-**Last Updated**: 2026-10-03
+**Version**: 13.3.2
+**Last Updated**: 2026-10-08
 
 > Rules for Claude Code agents, in articles: one norm each, with the test that decides whether it was kept. Articles are cited by number (`§ 6`) and defined once, here; a new one takes the next free number or a letter suffix, and numbers never move. How to use a tool is the harness's and the tool's job.
 

@@ -4,6 +4,15 @@ All notable changes to Claude Agent Kit are documented here. Format loosely base
 
 Version numbers track the `Version` field in `CLAUDE.md`. Most entries correspond to operating-manual revisions and accompanying MCP server changes; the two ship together.
 
+## [13.3.2] - 2026-10-08
+
+**The dispatch follow-up is `ScheduleWakeup` inside `/loop` or not.** Ships alongside codex-agent-kit 0.11.2, kimi-agent-kit 0.11.2 and slate-agent-kit v0.10.2. Rules only; the servers and the installer are unchanged.
+
+- **Dispatch rule.** The Claude Code paragraph armed `ScheduleWakeup` only under `/loop` and, outside a loop, told the user the run was still going. `ScheduleWakeup` re-invokes the session without a loop, so the paragraph now names it as the follow-up in either case: an interval matched to the run's expected duration and a prompt naming the run to check.
+- **Manual.** `Last Updated` is 2026-10-08.
+
+Verified: `sh tooling/render-kit.sh` for all three kits, `sh tooling/validate.sh` (`validate: OK`, including `palette check` on the slate repository), and an install of each kit into a scratch `HOME` with `--binaries skip` (exit 0, the manual at the new version, the new dispatch paragraph in place). Not run: Rust tests and clippy (no Rust source changed), and a `ScheduleWakeup` wake outside `/loop` (the change rests on that having been observed in use).
+
 ## [13.3.1] - 2026-10-03
 
 **A delegate starts no delegate of its own unless its prompt grants it.** Ships alongside codex-agent-kit 0.11.1, kimi-agent-kit 0.11.1 and slate-agent-kit v0.10.1. Rules only; the servers and the installer are unchanged.
