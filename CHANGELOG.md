@@ -11,7 +11,7 @@ Version numbers track the `Version` field in `CLAUDE.md`. Most entries correspon
 - **Dispatch rule.** The Claude Code paragraph armed `ScheduleWakeup` only under `/loop` and, outside a loop, told the user the run was still going. `ScheduleWakeup` re-invokes the session without a loop, so the paragraph now names it as the follow-up in either case: an interval matched to the run's expected duration and a prompt naming the run to check.
 - **Manual.** `Last Updated` is 2026-10-08.
 
-Verified: `sh tooling/render-kit.sh` for all three kits, `sh tooling/validate.sh` (`validate: OK`, including `palette check` on the slate repository), and an install of each kit into a scratch `HOME` with `--binaries skip` (exit 0, the manual at the new version, the new dispatch paragraph in place). Not run: Rust tests and clippy (no Rust source changed), and a `ScheduleWakeup` wake outside `/loop` (the change rests on that having been observed in use).
+Verified: `sh tooling/render-kit.sh` for all three kits, `sh tooling/validate.sh` (`validate: OK`, including `palette check` on the slate repository), and an install of each kit into a scratch `HOME` with `--binaries skip` (exit 0, the manual at the new version, the new dispatch paragraph in place). Not run: Rust tests and clippy (no Rust source changed).
 
 ## [13.3.1] - 2026-10-03
 
