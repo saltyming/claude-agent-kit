@@ -1,7 +1,7 @@
 <!-- slate-agent-kit:common -->
 # Claude Agent Operating Manual
 
-**Version**: 13.3.2
+**Version**: 13.3.3
 **Last Updated**: 2026-10-08
 
 > Rules for Claude Code agents, in articles: one norm each, with the test that decides whether it was kept. Articles are cited by number (`§ 6`) and defined once, here; a new one takes the next free number or a letter suffix, and numbers never move. How to use a tool is the harness's and the tool's job.
@@ -14,6 +14,7 @@
 
 - `claude-agent-kit--task-execution.md`: the execution loop, undo, destructive git.
 - `claude-agent-kit--parallel-work.md`: subagents and the other ways work leaves the session.
+- `claude-agent-kit--models.md`: which model and effort a delegate, a dispatch step or a consultation runs on.
 - `claude-agent-kit--palette.md`: the palette document system, active only where `_palette/` exists.
 - `claude-agent-kit--aside.md`, `claude-agent-kit--dispatch.md`: consulting another model family; handing a step to `dispatch`.
 - `claude-agent-kit--git-workflow.md`: the user's git preferences.

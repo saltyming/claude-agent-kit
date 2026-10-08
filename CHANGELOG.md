@@ -4,6 +4,19 @@ All notable changes to Claude Agent Kit are documented here. Format loosely base
 
 Version numbers track the `Version` field in `CLAUDE.md`. Most entries correspond to operating-manual revisions and accompanying MCP server changes; the two ship together.
 
+## [13.3.3] - 2026-10-08
+
+**Each kit names its vendor's models and the effort each kind of work starts at.** Ships alongside codex-agent-kit 0.11.3, kimi-agent-kit 0.11.3 and slate-agent-kit v0.10.3 (slate RFC-0017). Rules only; the servers and the installer are unchanged.
+
+- **Models rule.** A new rule file, `claude-agent-kit--models.md`, says which model and effort a subagent, a dispatch step or a consultation runs on when the user, the prefs or the call has not fixed it: scoped work, whose shape is given however many files it touches, goes to the cheapest tier the table lists for it at that tier's starting effort; work that needs design reasoning runs at high; a lower tier never means a lower effort or a smaller task; a delegate on scoped work names its model instead of inheriting the session's; parallel workers cut wall time more reliably than cost; and a dispatch step or consultation on another vendor's backend keeps the model its prefs name, else that backend's default. It lists only Claude Code models, by the names `fable`, `opus`, `sonnet` and `haiku` the `model` parameter takes, each with a tier, what it is for and its starting effort, and cites the vendor's own figures where it gives them.
+- **Delegation rule.** The sentence "A read-only delegate does not need the session's top model." is replaced by a pointer to the models rule for which model and effort a delegate runs on.
+- **Manual.** The File Map lists the models rule.
+- **Corpus budget.** The standing corpus grows by the models rule, so this kit's byte ceiling in `validate.sh` is raised from 26000 to 28500 bytes (measured 28352).
+- **README.** The rule list names the models rule and the size of the standing files is given as about 32 KB.
+- **Entry points.** `install.sh` and `install.ps1` download `slate-setup` from slate release v0.10.3.
+
+Verified: `sh tooling/render-kit.sh` for all three kits, `sh tooling/validate.sh` (`validate: OK`, including `palette check` on the slate repository), and an install of each kit into a scratch `HOME` with `--binaries skip` (exit 0, the models rule file installed, the manual at the new version). Not run: Rust tests and clippy (no Rust source changed).
+
 ## [13.3.2] - 2026-10-08
 
 **The dispatch follow-up is `ScheduleWakeup` inside `/loop` or not.** Ships alongside codex-agent-kit 0.11.2, kimi-agent-kit 0.11.2 and slate-agent-kit v0.10.2. Rules only; the servers and the installer are unchanged.

@@ -1,10 +1,10 @@
 kit = "claude-agent-kit"
 harness = "claude"
-version = "13.3.2"
-slate_version = "0.10.2"
+version = "13.3.3"
+slate_version = "0.10.3"
 primary = "CLAUDE.md"
 load = "rules-dir"
-rules = [ "claude-agent-kit--task-execution.md", "claude-agent-kit--palette.md", "claude-agent-kit--parallel-work.md", "claude-agent-kit--git-workflow.md", "claude-agent-kit--aside.md", "claude-agent-kit--dispatch.md" ]
+rules = [ "claude-agent-kit--task-execution.md", "claude-agent-kit--palette.md", "claude-agent-kit--parallel-work.md", "claude-agent-kit--models.md", "claude-agent-kit--git-workflow.md", "claude-agent-kit--aside.md", "claude-agent-kit--dispatch.md" ]
 skills = [ "palette-init", "palette-resume", "palette-state", "palette-record", "palette-spec", "palette-ux", "palette-ui", "palette-rules", "memory-triage" ]
 prefs = [ "aside", "dispatch", "subagent", "git", "comment" ]
 servers = [ "aside", "dispatch", "palette" ]
