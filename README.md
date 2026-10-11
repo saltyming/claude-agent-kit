@@ -2,7 +2,7 @@
 
 An operating manual and rule set for Claude Code (`CLAUDE.md` plus rule files), the palette document system with its skills, and three shared MCP servers: `aside` (second opinions from another model family), `dispatch` (asynchronous execution by a codex, opencode or claude backend) and `palette` (reads, checks and writes palette documents). One installer, `slate-setup`, installs all of it, writes your preferences and sets Claude Code's subagent default model.
 
-This is claude-agent-kit 13.3.2. Its rules, skills, templates and prefs templates are rendered from [`slate-agent-kit`](https://github.com/saltyming/slate-agent-kit), which also builds the servers and the installer; its release v0.10.2 provides the binaries.
+This is claude-agent-kit 26.10.0 (contract 1). Its rules, skills, templates and prefs templates are rendered from [`slate-agent-kit`](https://github.com/saltyming/slate-agent-kit), which also builds the servers and the installer; its release v26.10.0 provides the binaries. The three kits and the slate release share one version, `YY.MM.N`; the contract number alone says whether an installed kit stays compatible.
 
 ## What's Inside
 
@@ -21,14 +21,15 @@ This is claude-agent-kit 13.3.2. Its rules, skills, templates and prefs template
 
 The rule files, in `~/.claude/rules/`:
 
-- `claude-agent-kit--task-execution.md`: the execution loop, undo and destructive git.
-- `claude-agent-kit--parallel-work.md`: subagents and the other ways work leaves the session, with the Claude Code delegation surfaces.
+- `claude-agent-kit--claude-surface.md`: how the rules load, and the harness defaults your preferences settle (memory, minimalism, output styles, subagents).
+- `claude-agent-kit--task-execution.md`: the execution loop, undo and memory.
+- `claude-agent-kit--delegation.md`: subagents and the other ways work leaves the session, with the Claude Code delegation surfaces.
 - `claude-agent-kit--models.md`: which model and effort a delegate, a dispatch step or a consultation runs on, with the Claude Code models.
 - `claude-agent-kit--palette.md`: the palette document system.
 - `claude-agent-kit--aside.md` and `claude-agent-kit--dispatch.md`: when consultation and dispatch are worth using.
-- `claude-agent-kit--git-workflow.md`: how your git preferences are read, asked for and recorded.
+- `claude-agent-kit--git-workflow.md`: how your git preferences are read, asked for and recorded, and destructive git.
 
-Where `CLAUDE.md` contradicts Claude Code's system prompt, `CLAUDE.md` takes precedence; its bindings section names the cases (memory, the restraint directives and cost cautions, output styles). `CLAUDE.md`, the rule files and the prefs files load every session and come to about 32 KB; skills load only when used.
+`CLAUDE.md` opens with a preamble stating the intent the articles derive from; it guides interpretation where the rules leave a choice and overrides no article. It is your standing instruction: where Claude Code's defaults leave a choice to you (memory, how much to add unasked, output styles, when to delegate), the surface rule records the choice; it changes nothing the harness reserves to itself. `CLAUDE.md`, the rule files and the prefs files load every session and come to about 35 KB; skills load only when used.
 
 ### Action levels
 
@@ -155,7 +156,7 @@ irm https://raw.githubusercontent.com/saltyming/claude-agent-kit/main/install.ps
 
 The PowerShell script also accepts the earlier installers' switches: `-Uninstall`, `-SkipMcp` and `-DispatchRoots <paths>`.
 
-The entry point downloads the prebuilt `slate-setup` for your platform from slate release v0.10.2, verifies its checksum, and runs it on the kit's payload. `slate-setup` performs every step, with the same code on Linux, macOS and Windows.
+The entry point downloads the prebuilt `slate-setup` for your platform from slate release v26.10.0, verifies its checksum, and runs it on the kit's payload. `slate-setup` performs every step, with the same code on Linux, macOS and Windows.
 
 | Command | Does |
 |---|---|
@@ -165,7 +166,7 @@ The entry point downloads the prebuilt `slate-setup` for your platform from slat
 
 | Option | Meaning |
 |---|---|
-| `--binaries prebuilt\|build\|skip` | `prebuilt` (default) downloads `aside`, `dispatch` and `palette`, and on Linux and macOS `agent-guard`, from the slate release, checked against `checksums.txt` (if release v0.10.2 does not exist it uses the latest and says so). `build` runs `cargo build --release` in `--slate-dir` and needs Rust. `skip` installs no binaries and registers no servers. `--skip-mcp` still works. |
+| `--binaries prebuilt\|build\|skip` | `prebuilt` (default) downloads `aside`, `dispatch` and `palette`, and on Linux and macOS `agent-guard`, from the slate release, checked against `checksums.txt` (if release v26.10.0 does not exist it uses the latest and says so). `build` runs `cargo build --release` in `--slate-dir` and needs Rust. `skip` installs no binaries and registers no servers. `--skip-mcp` still works. |
 | `--slate-dir <dir>` | The slate checkout to build from. |
 | `--roots <paths>` | Workspace roots dispatch and palette may work in, as an OS path list. When it is not given, the `DISPATCH_ROOTS` environment variable is used. |
 | `--set <key>=<value>` | Pre-answers a prefs question; repeatable. Keys are `<file>.<key>`, for example `aside.level=auto` or `git.signing=no-gpg-sign`. |

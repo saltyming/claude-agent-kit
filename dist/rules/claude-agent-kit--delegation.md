@@ -1,7 +1,7 @@
 <!-- slate-agent-kit:common -->
 # Work Leaving the Session
 
-Subagents, consultation (`claude-agent-kit--aside.md`) and dispatch (`claude-agent-kit--dispatch.md`), each judged for value (§ 7) and used at its level (§ 8).
+Subagents, consultation (`claude-agent-kit--aside.md`) and dispatch (`claude-agent-kit--dispatch.md`), each judged for value (§ 7) and used at its level (§ 8): `on-request` acts only when asked; `suggest` proposes in one line and waits; `auto` applies § 7, acts, and says in one line what was started, on which model and why.
 
 - Subagents are the harness's delegates: read-only ones inspect, search or summarize; write-capable ones edit; an unknown kind is write-capable. Consultation asks for an opinion and writes nothing. Dispatch hands a self-contained, write-capable step to an external agent that runs asynchronously. Skills, commands and workflows bypass no article. When the harness lacks a mechanism safe delegation needs, say so; do not improvise one.
 - A delegate saves the leader's context and costs the user models, quota and time, returning a result without its reasoning. It helps when work splits into independent parts with a stable shared contract, or when one bounded lookup would flood the context. Work stays in-session when sequential, tightly coupled, small, assigned to the leader by a document, or when the user is waiting for the leader's own answer. At `auto`, state in one line before starting how many delegates, which model, what each does and which files each writes; at `suggest`, say the same and wait. Which model and effort a delegate runs on: `claude-agent-kit--models.md`.

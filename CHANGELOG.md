@@ -2,9 +2,25 @@
 
 All notable changes to Claude Agent Kit are documented here. Format loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-Version numbers track the `Version` field in `CLAUDE.md`. Most entries correspond to operating-manual revisions and accompanying MCP server changes; the two ship together.
+Version numbers track the `Version` field in `CLAUDE.md`; from 26.10.0 the three kits and the slate release share one number, `YY.MM.N`, and the contract number in parentheses names the compatibility line. Most entries correspond to operating-manual revisions and accompanying MCP server changes; the two ship together.
 
-## [13.3.3] - 2026-10-08
+## 26.10.0 (contract 1) - 2026-10-11
+
+**The manual is a constitution with a preamble, a reply leaves the decision with the user, and the three kits share one version.** Ships alongside codex-agent-kit 26.10.0, kimi-agent-kit 26.10.0 and slate-agent-kit v26.10.0 (slate RFC-0018). Rules, descriptor and installer change; the servers change only in version.
+
+- **Preamble.** `CLAUDE.md` opens with a preamble stating the intent the articles derive from: the person sets what is done, in what order, what counts as done and which choices stay theirs; the agent chooses method and delivers the approved scope whole, verified and reported as the files would show it; a proposal is shown with its grounds and stays a proposal until the person decides. The preamble guides interpretation where the rules leave a choice; it overrides no article, grants no authorization and changes nothing the harness reserves to itself.
+- **§ 19 (4).** An answer to a question is not approval of the agent's next action. A proposal carries the grounds the user needs to judge it, with the uncertainty and the trade-off, and in a deliberative reply the grounds come before the course of action; no command, label or emphasis presents an unapproved proposal as settled; structure and length follow the question. One before/after example; the test gains the two matching failures.
+- **Articles trimmed to norm and test.** § 8 keeps the levels and their precedence; what each level does is stated once, in the delegation rule. § 11 keeps the norm; the undo phrases move to the execution rule. § 13 keeps the named command and the full-line authorization; the command list and the pre-flight move to the git rule, out of the execution rule. § 21 keeps its three obligations; what memory never holds and how a correction becomes rule text move to the execution rule. No obligation is dropped (RFC-0018, Design).
+- **Surface rule.** New file `claude-agent-kit--claude-surface.md`: how the rules load, and the bindings that were in `CLAUDE.md` (memory, minimalism, output styles, subagents) under a Standing Instruction: the manual is the user's standing instruction and settles the choices Claude Code leaves to the user; it changes nothing the harness reserves to itself. The sentence "where this document contradicts the system prompt, this document takes precedence" is replaced by that. `CLAUDE.md` now carries no harness-specific text and is the same text in every kit apart from file names.
+- **Rule file renamed.** `claude-agent-kit--parallel-work.md` is `claude-agent-kit--delegation.md`, the name the other kits use; the installer removes the old file on upgrade.
+- **Corpus budget.** The standing corpus grows by the preamble, § 19 (4) and the surface rule's frame; this kit's byte ceiling in `validate.sh` is raised from 28500 to 31500 bytes (measured 31049).
+- **Descriptor.** `dist/kit.toml` gains `contract = 1`: the compatibility line of the descriptor, the manifest, the prefs and the server interfaces; the installer records it in the manifest and reads a descriptor without it as contract 1. The release number alone no longer signals compatibility.
+- **Version.** Numbering joins the slate release's: `YY.MM.N`, one number for the three kits, the slate release and the workspace crates (slate RFC-0018; `docs/contributing.rst`, Branches).
+- **Entry points.** `install.sh` and `install.ps1` download `slate-setup` from slate release v26.10.0.
+
+Verified: `sh tooling/render-kit.sh` for all three kits; `sh tooling/validate.sh` (`validate: OK`, including `palette check` on the slate repository); `cargo test --workspace`, `cargo clippy --workspace --all-targets --all-features -- -D warnings` and `cargo fmt --all -- --check` on rustc 1.99.0; and an upgrade of each kit from its previous release into a scratch `HOME` with `--binaries skip` (exit 0, the stale rule file removed, a `-custom:` prefs file unchanged byte for byte, the manifest at `26.10.0` with `contract = 1`). Not run: the behavioural comparison of the preamble (RFC-0018, Verification strategy).
+
+## 13.3.3 - 2026-10-08
 
 **Each kit names its vendor's models and the effort each kind of work starts at.** Ships alongside codex-agent-kit 0.11.3, kimi-agent-kit 0.11.3 and slate-agent-kit v0.10.3 (slate RFC-0017). Rules only; the servers and the installer are unchanged.
 
@@ -17,7 +33,7 @@ Version numbers track the `Version` field in `CLAUDE.md`. Most entries correspon
 
 Verified: `sh tooling/render-kit.sh` for all three kits, `sh tooling/validate.sh` (`validate: OK`, including `palette check` on the slate repository), and an install of each kit into a scratch `HOME` with `--binaries skip` (exit 0, the models rule file installed, the manual at the new version). Not run: Rust tests and clippy (no Rust source changed).
 
-## [13.3.2] - 2026-10-08
+## 13.3.2 - 2026-10-08
 
 **The dispatch follow-up is `ScheduleWakeup` inside `/loop` or not.** Ships alongside codex-agent-kit 0.11.2, kimi-agent-kit 0.11.2 and slate-agent-kit v0.10.2. Rules only; the servers and the installer are unchanged.
 
@@ -26,7 +42,7 @@ Verified: `sh tooling/render-kit.sh` for all three kits, `sh tooling/validate.sh
 
 Verified: `sh tooling/render-kit.sh` for all three kits, `sh tooling/validate.sh` (`validate: OK`, including `palette check` on the slate repository), and an install of each kit into a scratch `HOME` with `--binaries skip` (exit 0, the manual at the new version, the new dispatch paragraph in place). Not run: Rust tests and clippy (no Rust source changed).
 
-## [13.3.1] - 2026-10-03
+## 13.3.1 - 2026-10-03
 
 **A delegate starts no delegate of its own unless its prompt grants it.** Ships alongside codex-agent-kit 0.11.1, kimi-agent-kit 0.11.1 and slate-agent-kit v0.10.1. Rules only; the servers and the installer are unchanged.
 
@@ -35,7 +51,7 @@ Verified: `sh tooling/render-kit.sh` for all three kits, `sh tooling/validate.sh
 
 Verified: `sh tooling/render-kit.sh` for all three kits, `sh tooling/validate.sh` (`validate: OK`, including `palette check` on the slate repository), and an install of each kit into a scratch `HOME` with `--binaries skip` (exit 0, the manual at the new version). Not run: Rust tests and clippy (no Rust source changed).
 
-## [13.3.0] - 2026-09-30
+## 13.3.0 - 2026-09-30
 
 **aside and dispatch run on one execution layer, under a guard of its own.** Ships alongside codex-agent-kit 0.11.0, kimi-agent-kit 0.11.0 and slate-agent-kit v0.10.0 (slate RFC-0008 and RFC-0014).
 
@@ -47,7 +63,7 @@ Verified: `sh tooling/render-kit.sh` for all three kits, `sh tooling/validate.sh
 
 Verified: slate CI green on ubuntu, macOS and Windows (`cargo test --workspace`, 655 tests, `clippy -D warnings`, `fmt --check`, `validate.sh`); on macOS, aside and dispatch run end to end against a stub backend through MCP, with and without `agent-guard` beside them, the guard process observed while a run lasted, a cancel after the backend had exited with a child still holding its output, a fallback to a second model, and no process left behind; `slate-setup` install of each kit into a scratch `HOME` with `--binaries build`. Not run: real codex, claude and opencode CLIs through the new layer before the live install, and the prebuilt download of `agent-guard` (the slate v0.10.0 release did not exist yet).
 
-## [13.2.1] - 2026-09-30
+## 13.2.1 - 2026-09-30
 
 **The copilot backend is removed; RFC headers name ADRs; prefs migration keeps what it cannot map.** Ships alongside codex-agent-kit 0.10.1, kimi-agent-kit 0.10.1 and slate-agent-kit v0.9.1.
 
@@ -60,7 +76,7 @@ Verified: slate CI green on ubuntu, macOS and Windows (`cargo test --workspace`,
 
 Verified: locally on macOS with the latest stable toolchain, `cargo test --workspace` (542 passed), `clippy -D warnings`, `fmt --check`, `sh tooling/render-kit.sh` for all three kits, `validate.sh` (now also refusing the retired backend's name in sources and renders) and `palette check` on the slate repository; an install into a scratch `HOME` over a prefs file holding the retired backend's settings (exit 0, one warning, file unchanged). Not run: real harness CLIs.
 
-## [13.2.0] - 2026-09-30
+## 13.2.0 - 2026-09-30
 
 **Tables and code blocks in records and maintained documents (RFC-0012).** Ships alongside codex-agent-kit 0.10.0, kimi-agent-kit 0.10.0 and slate-agent-kit v0.9.0.
 
@@ -72,7 +88,7 @@ Verified: locally on macOS with the latest stable toolchain, `cargo test --works
 
 Verified: locally on macOS with the latest stable toolchain (1.98.1), `cargo test --workspace` (500 passed; new tests cover each P017 case, the admitted forms, and a changeset whose replace, insert-after and create edits carry both directives through staging and promote with LF and CRLF), `clippy -D warnings`, `fmt --check`, `sh tooling/render-kit.sh` for all three kits, `validate.sh` and `palette check` on the slate repository with and without `_palette/`; `slate-setup` install of each kit into a scratch `HOME` with stand-in harness CLIs and `--binaries build` (installed `palette --version` 0.3.0); `palette check` on the saltyos checkout (read-only): the 108 list-table and 35 code-block P001 findings of 0.2.1 are gone and no P017 is reported. Not run: the prebuilt download path (the slate v0.9.0 release does not exist yet) and real harness CLIs.
 
-## [13.1.1] - 2026-09-30
+## 13.1.1 - 2026-09-30
 
 **Amends cutoff in the contributing document (RFC-0010).** Ships alongside codex-agent-kit 0.9.1, kimi-agent-kit 0.9.1 and slate-agent-kit v0.8.1.
 
@@ -81,7 +97,7 @@ Verified: locally on macOS with the latest stable toolchain (1.98.1), `cargo tes
 
 Verified: locally on macOS with the latest stable toolchain, `cargo test --workspace` (485 passed), `clippy -D warnings`, `fmt --check`, `sh tooling/render-kit.sh` for all three kits, `validate.sh` and `palette check` on the slate repository with and without `_palette/`; palette 0.2.1 installed from this checkout.
 
-## [13.1.0] - 2026-09-30
+## 13.1.0 - 2026-09-30
 
 **Record header rules and several active phases.** Ships alongside codex-agent-kit 0.9.0, kimi-agent-kit 0.9.0 and slate-agent-kit v0.8.0; decided in slate's RFC-0009.
 
@@ -94,7 +110,7 @@ Verified: locally on macOS with the latest stable toolchain, `cargo test --works
 
 Verified: locally on macOS with the latest stable toolchain, `cargo test --workspace` (482 passed), `clippy -D warnings`, `fmt --check`, `sh tooling/render-kit.sh` for all three kits, `validate.sh` (`validate: OK`) and `palette check` on the slate repository; `cargo test -p palette` (171 passed) and palette 0.2.0 checked against the slate repository's own documents; `slate-setup` install of each kit into a scratch `HOME` with stand-in harness CLIs and `--binaries build`, the installed `palette --version` reporting 0.2.0 and the installed templates carrying the new fields. Not run: the prebuilt download path (the slate v0.8.0 release does not exist yet) and real harness CLIs.
 
-## [13.0.0] - 2026-09-30
+## 13.0.0 - 2026-09-30
 
 **Direction and autonomy, palette as a document system, one installer.** Ships alongside codex-agent-kit 0.8.0, kimi-agent-kit 0.8.0 and slate-agent-kit v0.7.0.
 
@@ -116,7 +132,7 @@ Verified: slate CI green on ubuntu, macOS and Windows (build, `cargo test --work
 
 Major bump: rule identifiers, prefs values, the palette document families and the kit layout change.
 
-## [12.0.1] - 2026-09-19
+## 12.0.1 - 2026-09-19
 
 **Comment preferences and interactive git preferences.** Ships alongside codex-agent-kit 0.7.1 and kimi-agent-kit 0.7.1.
 
@@ -129,7 +145,7 @@ Verified in-session: `sh tooling/render-kit.sh` for all three kits and `sh tooli
 
 Patch bump, at the user's direction.
 
-## [12.0.0] - 2026-09-19
+## 12.0.0 - 2026-09-19
 
 **Subtraction release: blacklist-style rules, workslate removed, git workflow as user preferences.** The rule text was rewritten and cut from 71.9 KB to 52.1 KB, the Claude-only `workslate` MCP server was removed along with everything that depended on it, and the git conventions became a user-owned prefs file.
 
@@ -154,7 +170,7 @@ Verified in-session: `sh tooling/render-kit.sh` for all three kits and `sh tooli
 
 Major bump: a shipped MCP server and its tools are removed, and standing git rules stop applying until the prefs are set.
 
-## [11.2.1] - 2026-09-05
+## 11.2.1 - 2026-09-05
 
 **codex ≥ 0.153 rollout schema — `dispatch` and `aside` MCP servers (binary-only; rules unchanged).** codex-cli stopped writing `event_msg/user_message` / `agent_message` / `patch_apply_end` events (partially in 0.147.0, entirely from 0.153.4); prose and file changes now live only in `event_msg/item_completed` items (`UserMessage` / `AgentMessage` / `FileChange`). dispatch identified a fresh run's rollout by the nonce marker inside a `user_message` event, so every codex submit since then never associated: `dispatch_logs` reported `session_pending` forever (even after the run succeeded), `dispatch_steer` failed with `session_not_ready`, and the unassociated-run watchdog was armed against any run that wrote nothing within 30s.
 
@@ -167,7 +183,7 @@ Verified in-session: `cargo fmt --check`, `cargo build/test/clippy --workspace -
 
 Patch bump (server behavior fix; no rule or tool-surface change).
 
-## [11.2.0] - 2026-07-22
+## 11.2.0 - 2026-07-22
 
 **`dispatch_wait` removed.** The `dispatch` MCP server's bounded long-poll tool — it blocked server-side until a dispatched task reached a terminal status (or a 30s/120s timeout), returning compact status plus a small curated log tail — is retired. Supervising a run is now `dispatch_status` (a non-blocking snapshot + terminal result) and `dispatch_logs` (the curated timeline); `dispatch_steer` / `dispatch_cancel` are unaffected. The advertised dispatch tool surface drops 8 → 7 tools.
 
@@ -181,7 +197,7 @@ Reviewed before implementation by `aside_codex` (gpt-5.6-sol, high reasoning) an
 
 Version bumped 11.1.0 → 11.2.0 (minor — a public-MCP-tool-surface removal, shipped as minor per the user's call; matches the v11.0.0→11.1.0 precedent of shipping a tool-surface removal as minor).
 
-## [11.1.0] - 2026-07-18
+## 11.1.0 - 2026-07-18
 
 **Stop verify hook removed.** The anti-self-grading Stop verify hook (added in v9.4.0) — a `type:"agent"` entry that spawned an independent verifier subagent on every Stop event, in every session, project-wide, to spot-check completion claims against real repository state — is retired. User judgment after months of daily use: the cost (a subagent spawn on every single turn-end, everywhere) wasn't earning its keep relative to the value it added. This is a removal, not a bug fix — the hook worked as designed (confirmed live in the v9.4.0 delivery); it just wasn't worth what it cost.
 
@@ -196,7 +212,7 @@ Reviewed before implementation by `aside_codex` (gpt-5.6-sol, high reasoning) an
 
 Version bumped 11.0.0 → 11.1.0 (minor — an installer-default/behavior removal, not a wire-protocol or public-MCP-tool-surface break; no existing tool signature changes for any caller. Matches the v9.2.0→9.3.0 precedent, which shipped a workslate tool-surface removal as minor for the same reason).
 
-## [11.0.0] - 2026-07-17
+## 11.0.0 - 2026-07-17
 
 **The subtraction release.** The standing rule corpus halves (149.7KB -> 72.6KB rendered) on the principle that models follow local, in-context signals better than a large recall-dependent corpus: policy/gates stay standing, operational mechanics move to just-in-time surfaces (MCP tool descriptions + server instructions, on-disk palette templates), and rules that only relayed history are deleted. workslate is refocused on the one thing the harness cannot do.
 
@@ -206,26 +222,26 @@ Version bumped 11.0.0 → 11.1.0 (minor — an installer-default/behavior remova
 - **rules: workslate task guidance replaced by native task-list guidance** across kernel decision tree, execution loop, and delegation surfaces; team coordination now reads: native task list for tasks, native SendMessage for messages, workslate doorbell for mid-turn delivery.
 - **validate: standing-corpus byte budgets (hard).** New § 8b fails the build when a rendered corpus regrows past its ceiling (claude 80KB; codex 68KB / kimi 67KB at current+margin — their adapter inserts are a follow-up slice).
 
-## [10.2.4] - 2026-07-08
+## 10.2.4 - 2026-07-08
 
 **aside prompt hardened against leading-question anchoring bias.** A leading/loaded question from the leader (e.g. "I fixed the race condition by adding a mutex — confirm this is correct") let the backend rubber-stamp the framing instead of independently checking the premise, defeating the point of a cross-family second opinion.
 
 - **aside**: `ROLE_FRAMING` now frames the backend's role as an independent second opinion rather than just "reviewing work". A new `INDEPENDENCE_REMINDER` is appended as the prompt's final section — after the question, not just folded into the top — so it isn't diluted by a large context/transcript block and lands with maximum salience right before the backend generates its answer. Guards against overcorrection: the backend still answers plainly when the premise holds, and answers simple factual questions directly. New `compose_prompt` unit tests cover section ordering, the no-context/no-transcript case, and continuation-join substring checks on the new multi-line literals (none existed before).
 - **rules**: `claude-agent-kit--aside.md` gets a new "Question framing" section instructing the leader to phrase `question`/`context` as an assessment to verify, not a conclusion to confirm.
 
-## [10.2.3] - 2026-07-06
+## 10.2.3 - 2026-07-06
 
 **dispatch poll responses slimmed — no more re-echoing the whole spec on every poll.** Polling a long-running dispatch task re-sent the entire submitted spec on every call, burning the caller's context.
 
 - **dispatch**: `dispatch_status` is compact by default — the accepted `spec`, the rendered `prompt`, and `argv` move behind a new `include_spec` param (default false); the terminal `result`/`error` still return. `dispatch_logs` / `dispatch_wait` collapse the backend's initial prompt echo (and opencode's duplicate `[opencode]` re-echo) to a one-line placeholder for fresh submits, matched by canonical content vs the stored prompt so a steered task's new instruction stays visible; bare `</think>` markers are dropped. Verified for codex/opencode/claude via synthetic fixtures.
 
-## [10.2.2] - 2026-07-06
+## 10.2.2 - 2026-07-06
 
 **`dispatch_steer` inherits / can override `allow_concurrent`.** Steer previously had no `allow_concurrent` and always enforced the one-run-per-working_dir guard on its resume, so a task in a directory with other concurrent runs (submitted `allow_concurrent=true`) could not be steered — it hit `dir_busy` with no bypass.
 
 - **dispatch**: `allow_concurrent` is now persisted on the task row (additive, backward-compatible SQLite column — old `dispatch.db` files backfill to false). `dispatch_steer` inherits the parent task's `allow_concurrent` by default and accepts an explicit `allow_concurrent` override (`false` re-enforces the guard); the steer row persists the effective value so a chain of steers keeps inheriting. Tests cover round-trip, old-DB migration, and override precedence.
 
-## [10.2.1] - 2026-07-05
+## 10.2.1 - 2026-07-05
 
 **aside / dispatch recursion guard (security fix).** Closes a fork-bomb vector where a backend spawned by `aside`/`dispatch` — while still having them registered as MCP servers — could re-invoke them and spawn another backend without bound (reproduced live: `codex → aside → claude`).
 
@@ -233,7 +249,7 @@ Version bumped 11.0.0 → 11.1.0 (minor — an installer-default/behavior remova
 - **dispatch**: blocks dispatch→dispatch. A `DISPATCH_REENTRY_DEPTH` env marker (stamped on every spawned backend, refused at `dispatch_submit` / `dispatch_steer`) guards the claude and opencode backends, which forward their process env to the MCP servers they boot; codex does **not** forward env, so it is guarded fail-closed by spawning it with `-c mcp_servers.dispatch.enabled=false`. `aside` is left enabled, so dispatch→aside stays allowed. New structured error code `reentrant`.
 - Depth parsing fails closed (`var_os`; a malformed marker refuses rather than reading as top-level).
 
-## [10.2.0] - 2026-07-05
+## 10.2.0 - 2026-07-05
 
 **aside claude backend + installer/prefs hardening.** Adds a local `claude` advisor backend to the shared `aside` server, fixes a Codex-side MCP tool-call timeout on long calls, and consolidates the installer/prefs machinery across all three kits.
 
@@ -242,7 +258,7 @@ Version bumped 11.0.0 → 11.1.0 (minor — an installer-default/behavior remova
 - **Prefs**: now uses the single shared `configure-prefs.sh` (interactive-first, injection-safe, all knobs) + a `configure-prefs.ps1` Windows twin, replacing the bespoke `configure-aside.sh` / `configure-dispatch.sh`.
 - **README**: documents the claude dispatch backend and corrects the uninstall signature + manual registration.
 
-## [10.1.0] - 2026-07-03
+## 10.1.0 - 2026-07-03
 
 **INV-QUALITY-1 — durable implementation (rules-only release).** The corpus defended delivery *scope* (no shrinking, no placeholder stubs) but had no invariant against short-horizon *implementation* — patches that satisfy the triggering case on the authoring machine while breaking elsewhere in the code's already-declared support surface. Prompted by a real CI failure in the shared MCP crates: a unix-only path-separator test assertion and slash-only slug formulas that broke on Windows.
 
@@ -253,7 +269,7 @@ Version bumped 11.0.0 → 11.1.0 (minor — an installer-default/behavior remova
 - **Claude bindings**: the YAGNI/minimal-change [OVERRIDE] now states that the declared envelope is present-tense scope, not a "hypothetical future requirement".
 - Amendment cross-reviewed by `aside_codex` (proactive policy); its five findings (envelope evidence test, test-only-fix loophole, envelope-quartet consistency across delegation surfaces, scope-creep guard, pre-coding hook) are folded in.
 
-## [10.0.0] - 2026-07-03
+## 10.0.0 - 2026-07-03
 
 **Slate consolidation (breaking).** claude-agent-kit is now a rendered member of the [slate-agent-kit](https://github.com/saltyming/slate-agent-kit) family:
 
@@ -261,7 +277,7 @@ Version bumped 11.0.0 → 11.1.0 (minor — an installer-default/behavior remova
 - **Rules are render outputs.** `CLAUDE.md` and `claude-rules/*` are rendered from `slate-agent-kit/shared` sources + `adapters/claude` inserts (the redesigned corpus: an invariant kernel with stable INV-*/GATE-* IDs, execution/delegation loop files, consolidated palette gate bindings). File names and installed paths are unchanged; every 9.4.0 HARD RULE / [OVERRIDE] is mapped in slate's `docs/coverage-matrix.md`. Do not hand-edit rendered files — edit slate's shared sources and re-render.
 - **Prefs templates are rendered too** (from `slate-agent-kit/shared/prefs`, configure-time placeholders now `@@NAME@@`); the interactive `configure-aside.sh` / `configure-dispatch.sh` UX is unchanged.
 
-## [9.4.0] - 2026-07-02
+## 9.4.0 - 2026-07-02
 
 Three independent workstreams, prompted by a harness comparison against `lazycodex` (an OmO/oh-my-openagent distribution for Codex) that surfaced concrete gaps where lazycodex has real code-level mechanisms this kit only had as prompt discipline: workslate's hook installer gains an anti-self-grading Stop verify hook (installed by default, not gated behind an opt-in — see below), `dispatch`/`aside` gain automatic model-fallback retry, and `palette` gains explicit weighted scoring rubrics for three previously free-form decisions. The plan was reviewed by `aside_codex` before implementation began (per the user's explicit authorization for this planning pass); its dispatch/aside findings — a real nonce-reuse-across-fallback-attempts bug and an `AuthOrPermission` retry-worthiness error — are folded into the workstreams below rather than listed separately.
 
@@ -281,7 +297,7 @@ Both prefs templates (`claude-agent-kit--dispatch-prefs.md.tmpl`, `claude-agent-
 
 Version bumped 9.3.0 → 9.4.0 (minor — three additive workstreams across workslate/dispatch/aside/palette; no existing tool behavior changes for a caller who doesn't use `model_fallback` or the new rubric-informed decisions. The Stop hook is the one exception: it installs by default with `make install` and adds a verifier-subagent spawn to every Stop event project-wide — an explicit, accepted cost, not silent, but not opt-in either).
 
-## [9.3.0] - 2026-07-02
+## 9.3.0 - 2026-07-02
 
 Removed workslate's buffer-staging subsystem — the tool family behind "non-trivial code changes go through workslate first." User judgment: these 8 tools (`workslate_write`, `workslate_edit`, `workslate_read`, `workslate_list`, `workslate_diff`, `workslate_apply`, `workslate_clear`, `workslate_search`) weren't pulling their weight relative to the native `Edit`/`Write`/`Read`/`Grep` tools. Investigation ahead of the removal also found the doorbell footer's buffer-list feature ("── Buffers: N staged ──") was already dead in practice — `hooks.rs` always called `render_task_footer(&tasks, task_session, &[])`, since the doorbell hook runs in a separate process from the MCP server and can never see its in-memory buffers. Task tracking (`workslate_task_*`) and team messaging (`workslate_register` / `workslate_msg_send` / `workslate_inbox_read`) are unaffected — these are cleanly separate subsystems (direct SQLite, no shared buffer state) and remain the reason to run workslate at all.
 
@@ -295,7 +311,7 @@ Removed workslate's buffer-staging subsystem — the tool family behind "non-tri
 
 Version bumped 9.2.0 → 9.3.0 (minor — removal of workslate's buffer-staging tool surface, with accompanying doc cleanup across `CLAUDE.md` and five `claude-rules/` files).
 
-## [9.2.0] - 2026-07-01
+## 9.2.0 - 2026-07-01
 
 Four workstreams: OpenCode arrives as `dispatch`'s second backend (its first CHANGELOG entry — the integration had accumulated across prior uncommitted sessions without ever being released), a rules-doc duplication cleanup, an audit of every `[OVERRIDE]` block's quoted system-prompt text against the *current* session's actual system prompt (not the "4.7" prompt two prior self-corrections targeted), and **palette**, a new product-intent outer loop layered onto the existing inner loop (its own section below). The OpenCode work is code + docs, delegated to `dispatch`'s own codex backend and independently reviewed; the other two are docs-only.
 
@@ -346,7 +362,7 @@ The fix is platform-native rather than one-size-fits-all, since no single primit
 
 Version bumped 9.1.1 → 9.2.0 (minor — OpenCode as a second `dispatch` backend plus its reasoning-default behavior, doc restructuring, **palette** the product-intent outer loop, workslate `after_line`/`before_line` edit modes plus a CRLF line-range fix, and a CC BY 4.0 → MIT relicense; not yet built/installed/live-verified — see Verification above).
 
-## [9.1.1] - 2026-06-27
+## 9.1.1 - 2026-06-27
 
 Patch refining `dispatch_wait` output shape. The bounded long-poll now returns compact task status plus a small curated `log_tail` instead of inlining the full `dispatch_status`-style payload (`result`, `prompt`, `spec`, `argv`, owner/session metadata). This keeps wait responses useful for supervision without forcing agents to immediately call `dispatch_logs`, while avoiding large captured stdout/prompt/spec payloads in the hot wait path.
 
@@ -356,7 +372,7 @@ Verification in-session: `cargo check -p dispatch`, `cargo test -p dispatch` (10
 
 Version bumped 9.1.0 → 9.1.1 (patch — compact `dispatch_wait` payload with built-in curated log tail).
 
-## [9.1.0] - 2026-06-27
+## 9.1.0 - 2026-06-27
 
 Dispatch now has an explicit **execution policy** preference, parallel to aside's auto-call policy but still constrained by dispatch's write-capable approval gate. The user-owned `claude-agent-kit--dispatch-prefs.md` template now records `conservative` / `preference-only` / `proactive`: conservative only dispatches on explicit request or direct approval; preference-only applies dispatch defaults when the user asks for execution delegation without naming a surface; proactive instructs Claude to initiate suitable execution steps. The existing approval mode remains separate: `approval mode: ask` still confirms working_dir + step scope + approval granularity before the first submit, while `approval mode: auto` pre-authorizes that prompt within server-enforced guards.
 
@@ -370,7 +386,7 @@ Verification in-session: `sh -n` for the relevant shell scripts, proactive and d
 
 Version bumped 9.0.0 → 9.1.0 (minor — new dispatch execution-policy preference plus install/config/rule integration).
 
-## [9.0.0] - 2026-06-26
+## 9.0.0 - 2026-06-26
 
 New `dispatch` MCP server — a third delegation surface. Where `aside` asks another model family for a read-only second opinion (horizontal consultation), `dispatch` hands an execution *step* to an external coding agent (codex) running as a headless, write-capable subprocess (hierarchical delegation). Adds `mcp-servers/dispatch/` (Rust, rmcp), a new rule file, a user-owned prefs file, and the `CLAUDE.md` / `README` / build-script wiring. Design pressure-tested with `aside_codex` (gpt-5.5 / xhigh) and built-in `advisor()`; the MCP-protocol paths (boot, tools/list, backends probe, every input guard) and the unit tests (cross-connection concurrency guard, rollout curation/paging) were verified in-session, and the full codex round-trip — submit → run → `succeeded`, a live curated log tail while `running`, and session-resume steering — was verified end-to-end against real codex. Propagates on next `make install`.
 
@@ -390,13 +406,13 @@ New `dispatch` MCP server — a third delegation surface. Where `aside` asks ano
 
 Version bumped 8.13.1 → 9.0.0 (major — new MCP server, the third delegation surface; a deliberate milestone bump opening the 9.x line). The rollout-association fix and the dispatch_wait / structured-error / rule-integration work above were folded into this unreleased 9.0.0 entry rather than a new version.
 
-## [8.13.1] - 2026-06-25
+## 8.13.1 - 2026-06-25
 
 Patch correcting the no-concurrency wording in `claude-agent-kit--aside.md` — it should have shipped in 8.13. The "HARD RULE — no concurrency" block said aside and `advisor()` must not run "in the same turn" and that `advisor()` goes "in a subsequent response". The actual hazard is *concurrency* (aside's stdio transport interfering with `advisor()`'s transcript forwarding while both are live), NOT same-turn adjacency: the two MAY run **sequentially within the same turn** — fire aside, await its full reply, then call `advisor()` in a later tool-use block — and the prohibition is only on calling them concurrently / in the same tool-use block / while the other is still running. The "Required sequence" step 3 was corrected to match. Docs-only; propagates on next `make install`.
 
 Version bumped 8.13 → 8.13.1 (patch — single-rule wording correction in `aside.md`).
 
-## [8.13] - 2026-06-25
+## 8.13 - 2026-06-25
 
 Three additive prompt-discipline rules in `parallel-work.md`, adapted from an external subagent-orchestration doc the user evaluated for adoption. Docs-only (no MCP server code, no install-script changes; propagates on next `make install`). Most of the external doc already existed in the kit (one-writer-per-file = "isolated seams"; the `Workflow` pipeline/barrier section = "fan out + synergize"; leader-as-task-graph-architect = "orchestrator owns decomposition"), so only the genuinely-absent items below were taken. Pressure-tested with `aside_codex` (gpt-5.5 / xhigh — read the file itself, confirmed the overlap but refuted two of the agent's mappings) and built-in `advisor()` (caught the headless-output headline as falsifiable, forcing the scoping below).
 
@@ -410,7 +426,7 @@ Deliberately excluded after review: a shared-captured-context rule (emergent fro
 
 Version bumped 8.12 → 8.13 (minor — three rule additions to `parallel-work.md`).
 
-## [8.12] - 2026-06-24
+## 8.12 - 2026-06-24
 
 Three workstreams: a backend removal in the `aside` MCP server, an Agent-Team coordination-rule fix, and a workslate sender-attribution code hardening. The aside change is code + docs + install-scripts; the coordination change is docs-only; the workslate change is code + docs. Design pressure-tested with `aside_codex` (gpt-5.5 / xhigh) and reviewed by built-in `advisor()`. Propagates on next `make install`.
 
@@ -422,13 +438,13 @@ Three workstreams: a backend removal in the `aside` MCP server, an Agent-Team co
 
 Version bumped 8.11.1 → 8.12 (minor — one backend removed from the aside server, plus coordination-rule and workslate-code changes).
 
-## [8.11.1] - 2026-06-23
+## 8.11.1 - 2026-06-23
 
 Patch correcting a contradiction in 8.11's delegation reframe. The "read-only delegation is free — use it proactively" exemption wrongly listed **read-only research `Workflow`s** alongside read-only subagents. A `Workflow` — read-only or write-capable — fans out many subagents and is expensive (the bundled `deep-research` run spends hundreds of agents / millions of tokens), so it stays **cost-gated** (surface/propose → user agreement) regardless of whether it writes; only read-only **subagents** (`Explore` / `Plan` / `claude-code-guide`) are free and proactive. For a `Workflow`, the read-only-vs-write distinction affects only the *implementation-approval* gate, not the cost/opt-in gate. Corrected in `parallel-work.md` (*Delegation*), `CLAUDE.md` (Collaboration override), and the 8.11 entry above. Docs-only.
 
 Version bumped 8.11 → 8.11.1 (patch — single-claim correction).
 
-## [8.11] - 2026-06-23
+## 8.11 - 2026-06-23
 
 Two related operating-manual workstreams, both docs-only (no MCP server code, no install-script changes; propagates on next `make install`). The design was grounded in a `deep-research` workflow over Anthropic's primary docs and pressure-tested with `aside_codex` (gpt-5.5 / xhigh) + built-in `advisor()`.
 
@@ -440,7 +456,7 @@ Two related operating-manual workstreams, both docs-only (no MCP server code, no
 
 Version bumped 8.10 → 8.11 (minor — two operating-manual workstreams across `parallel-work.md`, `CLAUDE.md`, and the README; docs-only).
 
-## [8.10] - 2026-06-21
+## 8.10 - 2026-06-21
 
 Two related operating-manual carve-outs, both resolving a HARD RULE's edge case the same way — an **explicit user decision**, never unilateral agent action. Docs-only across the board (no MCP server code, no install-script changes); propagates on next `make install`. Both were pressure-tested with `aside_codex` (gpt-5.5 / xhigh) and reviewed by built-in `advisor()`.
 
@@ -452,7 +468,7 @@ Two related operating-manual carve-outs, both resolving a HARD RULE's edge case 
 
 Version bumped 8.9 → 8.10 (minor — two behavioral carve-outs across three rule files).
 
-## [8.9] - 2026-06-20
+## 8.9 - 2026-06-20
 
 Fixes a critical defect in 8.8's workslate team-messaging feature and realigns the parallel-work rules to the current Claude Code "single implicit team" model. The doorbell mechanism and solo/single-session use were correct in 8.8, but the **team use-case was non-functional**: live testing showed that subagents spawned via the `Agent` tool share the parent's `CLAUDE_CODE_SESSION_ID` and do **not** fire `SessionStart`, so a teammate's `workslate_register` clobbered the leader's `session_context` row (single-column `claude_session_id` primary key, last-writer-wins). Leader and teammate collapsed to one identity — role-addressed steering broke and sender attribution was wrong.
 
@@ -466,7 +482,7 @@ Fixes a critical defect in 8.8's workslate team-messaging feature and realigns t
 
 **Tests.** New unit tests cover the `session_context` rebuild migration (old single-PK → composite, plus fresh-DB create), composite-key coexistence, the `--hook=subagent-start` parse path, composite-key **sender resolution** (`resolve_sender`: same `session_id`, distinct `agent_id` → distinct sender), the `event_name` mapping (`Task` → `PostToolUse`, `Inbox` → `PreToolUse`), and session-scoped task-footer resolution (a `PostToolUse` stdin without `agent_id` still resolves the session's unique task_session, rendering nothing if ambiguous); `cargo test -p workslate` is green (30 tests). Propagates on next `make install`, which registers the new `SubagentStart` doorbell and moves the task doorbell to `PostToolUse` (migrating the old `PreToolUse` task handler out, user hooks preserved).
 
-## [8.8] - 2026-06-16
+## 8.8 - 2026-06-16
 
 First release that ships MCP server code, hook scripts, and install-script changes together with the rule docs (recent entries were docs-only). Adds a **team-messaging + per-tool-call steering layer to workslate** so an Agent Teams leader can redirect a running teammate before its current turn ends — closing the long-standing gap where a message to a busy teammate is only delivered at the next turn boundary, by which point it may have completed work in the wrong direction.
 
@@ -486,7 +502,7 @@ First release that ships MCP server code, hook scripts, and install-script chang
 
 **Docs.** `parallel-work.md` gains a **Mid-Turn Steering & Team Messaging** subsection (tools, the SessionStart `session_id` hint → `task_init(session_id=…)` → `register(role, session_id=…)` → `inbox_read` startup sequence, doorbell behavior, role-uniqueness, workslate-vs-`SendMessage`) and a teammate-startup step; `task-execution.md` documents the new tools. Version bumped 8.7 → 8.8. Unlike recent entries this release changes MCP server code and install scripts; propagates on next `make install`, which now also registers the doorbell hooks.
 
-## [8.7] - 2026-04-20
+## 8.7 - 2026-04-20
 
 Batched fixes from a professional audit of the rule set, performed via `aside_codex` at `gpt-5.4` / `xhigh` reasoning effort against `CLAUDE.md` + all five files under `claude-rules/` + `CHANGELOG.md` + `README.md`. The audit found one *major* framing error with the same shape as the 8.6.11 / 8.6.12 mistake plus seven other major issues across internal consistency, subsection boundary definition, coverage gaps, and operability; consolidated into a single minor-version bump (8.6.13 → 8.7) rather than a patch-level cascade.
 
@@ -522,150 +538,150 @@ Batched fixes from a professional audit of the rule set, performed via `aside_co
 
 Version bumped from 8.6.13 to 8.7 (minor bump, matching the scope of bundled fixes — not a single-issue patch). Docs-only across the board — no MCP server code changes, no install-script changes. Propagates on next `make install`.
 
-## [8.6.13] - 2026-04-20
+## 8.6.13 - 2026-04-20
 
 Structural correction — 8.6.11 and 8.6.12 both placed the rule in the wrong file and framed the problem wrong. User feedback in rapid iteration clarified the core misunderstanding: **when a user says "revert" / "undo" / "discard" / "되돌려" in a Claude Code session, they mean reverse the edits the model made in this session — not run a git operation.** The whole premise of 8.6.11 and 8.6.12 (that a user's rollback request should be translated into a destructive git command, and the only question was which one) was a category error. Git operations touch repo state including the user's out-of-session work that the model has no view into; reverting a session edit by running `git checkout --` or `git reset --hard` or even the "surgical" `git revert HEAD` can collaterally destroy adjacent uncommitted work, unrelated commits, or stashes the user never mentioned. The session's edits are edits; they should be undone the same way they were made — by editing. Changes in this release: (1) **`claude-rules/claude-agent-kit--git-workflow.md`** — the entire `## Scope Failure and Destructive Operations (HARD RULE)` section added in 8.6.11 and the `### Blast-radius check for user-requested rollbacks (HARD RULE)` subsection added in 8.6.12 were both **deleted via file edits** (not via `git revert` or `git reset` — the rule about not using destructive git to undo session edits applies to this very edit); the file is restored to its pre-8.6.11 structure (`## Commit Rules` / `## Commit Message Format` / `## Pull Request Rules`). (2) **`claude-rules/claude-agent-kit--task-execution.md`** — new top-level section **`## Undo / Revert Handling (HARD RULE)`** inserted between `## Implementation` and `## Code Staging`. Three subsections, each a HARD RULE in its own right: **A. Model-initiated rollback is forbidden** — when the model judges mid- or post-implementation that the scope is too large or the approach was wrong, it MUST NOT use **any** mechanism to undo / destroy / hide work; the forbidden list is scope-expanded from 8.6.11's "destructive git ops only" to cover `Edit` / `Write` / `workslate_apply` used to overwrite the model's own work, file / directory deletion, and "any shell command, MCP tool, or action whose purpose is to erase the incomplete state" (per user request — the rule should bind any tool surface, not just git), with an explicit *distinct-from-normal-iteration* note so bug fixes and typo corrections inside the approved scope remain unaffected. **B. User-requested revert / undo: reverse session edits via file edits** — the rule's new core. Default interpretation of "revert" / "undo" / "discard" / "roll back" / "되돌려" in-session is to reverse the model's own session edits via `Edit` / `Write` / `workslate_edit` / `workslate_apply` (writing the inverse content, deleting the lines you added, removing files you created), with sources for identifying session edits (conversation history, workslate task / buffer records, narration), a six-step procedure that ends with "do NOT reach for git — `checkout --` / `restore` / `revert` / `reset` / `stash` are all the wrong tool for undoing your own session edits," and explicit handling for edge cases (edit was already committed during the session → route through subsection C; undo would touch files the model did NOT edit → stop and clarify). **C. Explicit git-command requests (narrow carve-out, HARD RULE)** — the only path under which a destructive git op may run in response to a rollback / cleanup intent, and only when the user *explicitly names* the git command in their request. Generic phrasings ("revert it", "undo that", "roll back", "되돌려") do NOT name a git command and explicitly fall under B. When a command is named, the five-step pre-flight preserves the valuable part of 8.6.12's blast-radius work: identify the exact command, inspect surrounding state via `git status` / `git stash list`, propose with full blast radius (every file / commit / stash / branch affected, not just what the user named), wait for explicit per-command authorization (no command substitution), execute only the authorized command. (3) **`CLAUDE.md`** Core Principles > Quality Standards — the scope-ownership cross-reference block's bullet #2 rewritten from 8.6.12's "Destructive git operations (two triggers)" (which still lived under the wrong file-pointer framing) to **Undo / revert handling** with three labeled clauses: (a) model-initiated rollback forbidden via *any* mechanism, (b) user "revert" request defaults to file-edit reversal, (c) narrow carve-out for explicitly-named git commands; the full-rule pointer now points at `claude-agent-kit--task-execution.md` → **Undo / Revert Handling** (singular), replacing the dual-pointer to the now-removed git-workflow.md sections. Version bumped to 8.6.13; `task-execution.md` gains the new section; `git-workflow.md` is shorter. 8.6.11 and 8.6.12 CHANGELOG entries are left in place as historical record (they document real failure-mode iterations even though the rules themselves were wrong). Docs-only — no MCP server code changes, no install-script changes. The deletion of the 8.6.11/8.6.12 content was performed by file edits rather than by `git revert v8.6.11 v8.6.12` or `git reset --hard`, exercising subsection A of the very rule this release installs; CHANGELOG entries for those versions were NOT reverted in git history. Propagates on next `make install`.
 
-## [8.6.12] - 2026-04-20
+## 8.6.12 - 2026-04-20
 
 Tighten 8.6.11's **User-requested rollback** carve-out in the Scope Failure and Destructive Operations rule. Observed gap (user-reported within minutes of the 8.6.11 release): as written, the carve-out said *"When the user explicitly says 'revert my last commit' / 'reset this branch to origin/main' / 'discard these changes,' execute the requested command"* — it placed no bounds on *which* destructive operation the model picks to satisfy the user's named target. The concrete failure mode: a user asks to revert one commit while other uncommitted work exists in the tree, and the model runs `git reset --hard HEAD~1`, which wipes the uncommitted work along with the requested commit; the user says *"undo the change to foo.ts"* while `bar.ts` / `baz.ts` also have edits, and the model runs `git checkout .` losing the other files; the user says *"discard these changes"* with an ambiguous referent and the model runs a broad destructive op with no confirmation. The rollback carve-out should not be readable as "any phrasing whose surface meaning covers a destructive op authorizes that specific op" — it should be "authorization to run *a* destructive op, with the operation choice still constrained so its effect matches the user's named target." Changes: new subsection **`### Blast-radius check for user-requested rollbacks (HARD RULE)`** added to `claude-rules/claude-agent-kit--git-workflow.md` (after the main-rule Rationale, as its own HARD RULE at the sibling level rather than folded into the carve-out bullet so it is load-bearing and visible) — four-step pre-flight: (1) identify the named target (commit SHA, file path, hunk, branch), (2) inspect surrounding state via `git status` + `git stash list` to enumerate everything the candidate op would also affect, (3) pick the most surgical operation whose effect stays inside the named target — four concrete worked examples naming both the wrong op and the right op (revert last commit + dirty tree → `git revert HEAD` not `reset --hard HEAD~1`; undo one file + other files dirty → `git checkout -- <file>` not `checkout .`; branch reset + unmentioned local commits → list commits to be discarded, confirm; ambiguous "these changes" → enumerate first), (4) if no surgical option exists or the blast radius still exceeds the target, stop-describe-wait rather than defaulting to the broader op. The rollback carve-out bullet itself (`- **User-requested rollback.**`) was reworded to `- **User-requested rollback (with blast-radius check).**` and now explicitly points at the new subsection rather than reading as an unconditional license. In `CLAUDE.md` Core Principles > Quality Standards: the scope-ownership cross-reference's bullet #2 (previously **Mid-implementation scope failure**, scoped only to the model's own scope judgment trigger) was expanded to **Destructive git operations** covering two distinct triggers — (a) the model's own mid-/post-implementation scope judgment (unchanged from 8.6.11) and (b) user-requested rollback with oversized blast radius (new) — with the full-rule pointer extended to include the new subsection alongside the original. Version bumped to 8.6.12; `task-execution.md` untouched (the fix is specific to destructive git ops, not to the post-inspection scope deferral path in **Plan Integrity**). Docs-only — no MCP server code changes, no install-script changes. Propagates on next `make install`.
 
-## [8.6.11] - 2026-04-20
+## 8.6.11 - 2026-04-20
 
 Close two scope-judgment loopholes that existing overrides did not cover. Observed failure modes: (a) when the model concluded mid- or post-implementation that a task's scope was too large to complete, nothing in the rule set explicitly forbade using destructive git operations (`git checkout -- <file>`, `git restore`, `git reset --hard`, `git revert`, `git clean -f`, `git stash drop`, `git branch -D`, `git push --force*`) to roll back, discard, or hide the work it had already done — the system prompt's *"consider whether there is a safer alternative"* is a soft consideration rule, not a hard prohibition, and left room for "I considered it and decided rollback was cleanest"; (b) when a plan explicitly deferred scope determination to post-inspection review (*"actual scope will be determined after reading the code"* / *"scope TBD pending investigation"* / *"코드 확인 후 정한다"*), nothing forbade the model from completing the inspection, deciding the scope itself, and continuing straight to implementation without returning to the user for the deferred decision — the existing `[OVERRIDE]` in Core Principles > Quality Standards forbidding silent scope *reduction* governs a *defined* scope, not a *deferred* one, and Humility First's *"ask before proceeding when the ambiguity is about WHAT"* is a general principle that did not specifically name the post-inspection pattern. Both failure modes share a common root: treating scope as an agent-owned variable rather than a user-owned one. Changes: new section **`## Scope Failure and Destructive Operations (HARD RULE)`** appended to `claude-rules/claude-agent-kit--git-workflow.md` — enumerates the forbidden git operations explicitly (no "equivalent" hedging, and calls out shell equivalents like `rm` on tracked files to mirror `git clean` or `cp` over a tracked file to mirror `checkout --`), defines the trigger narrowly as the model's own scope/approach judgment (not user-requested rollback, not pre-approved plan steps), and mandates a four-step stop / preserve-state / report / wait procedure; carve-out paragraph makes clear the rule does NOT apply to user-requested rollbacks or to plan steps the user already approved, and cross-references the Quality Standards override that covers the *pre-implementation* case (`raise that before starting implementation, not at completion time`) so the two read as complementary rather than overlapping. New section **`## Plan Integrity: Scope Confirmation After Post-Inspection Deferral (HARD RULE)`** inserted into `claude-rules/claude-agent-kit--task-execution.md` between `## Investigation Mode` and `## Implementation` — the positional choice is deliberate: it sits on the "investigated → implement" path so the scope-confirmation checkpoint is structurally unavoidable when a reader scans the file sequentially; lists the triggering phrasings (both English and Korean equivalents, since the user originally raised the issue with a Korean example), enumerates the four forbidden actions (expand / shrink / substitute / continue), mandates the five-step complete-inspection / report / propose / wait / implement sequence, and closes three adjacent loopholes in its clarification block — (i) "the revised scope looked like the obvious next step" does not exempt, (ii) the existing silent-reduction override and the new rule are complementary (defined vs deferred scope; a "small" unilateral definition is still unilateral), (iii) the Collaboration observe-but-don't-act default is reinforced for the scope-confirmation case. In `CLAUDE.md`: new paragraph **Scope judgment is user-owned** added to Core Principles > Quality Standards after the existing `[OVERRIDE]` blocks and before `### Communication`, declaring the principle, pointing at the two rule files for the detailed procedures, and giving a one-line rationale — the main manual carries the principle and the pointers while the action-level detail lives in the topic-specific rule files, which keeps `CLAUDE.md` short but makes the new rules discoverable from the entry point. Version bumped to 8.6.11; rule file contents unchanged outside the two new sections (no existing override was reworded). Docs-only — no MCP server code changes, no install-script changes. `CHANGELOG.md` continues to be repo-only (not matched by `RULE_FILES := $(wildcard claude-rules/*.md)`, not covered by the top-level `cp CLAUDE.md` rule), consistent with 8.6.10's split. Propagates on next `make install`.
 
-## [8.6.10] - 2026-04-19
+## 8.6.10 - 2026-04-19
 
 Split version history out of `CLAUDE.md`. The `**Version History:**` block had accumulated 33 entries (v1.0 through v8.6.9); as individual entries grew into multi-paragraph narratives, that single section came to dominate the installed rule document by byte count even though the outline still listed just one line per version, bloating every `~/.claude/CLAUDE.md` read with change-log prose that operating agents do not need in live context. Extract the entire block into a new `CHANGELOG.md` at the repo root, rewritten in [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) style: each `- vX.Y.Z (YYYY-MM-DD): body` bullet becomes a `## [X.Y.Z] - YYYY-MM-DD` header followed by the body, reproduced verbatim (no rewording, no re-wrapping, no summarisation — the bodies are the historical record and the split must not lose or alter them). Version ranges (`6.0-6.4`, `5.0-5.2.5`, `4.0-4.2.2`, `1.0-3.0`) are preserved as bracketed ranges rather than forced into per-version sections, since the original entries are themselves ranges and splitting them would invent history that never happened. `CLAUDE.md` keeps its top-of-file `**Version**` / `**Last Updated**` headers, and the vacated section at the bottom of the file is replaced with a single-line `See [CHANGELOG.md](CHANGELOG.md) for version history.` pointer. **`CHANGELOG.md` is repo metadata only — it is NOT deployed by `make install`.** The `Makefile` is unchanged: `RULE_FILES := $(wildcard claude-rules/*.md)` does not match the repo-root `CHANGELOG.md`, and the top-level `cp CLAUDE.md $(CLAUDE_DIR)/CLAUDE.md` rule was left as-is, so `~/.claude/` continues to hold only the operating manual plus the rule files. The `See [CHANGELOG.md](CHANGELOG.md)` link resolves only from a checkout of this repo, which is consistent with the split's purpose (keep the installed rule document small — agents reading `~/.claude/CLAUDE.md` at session start do not need the change log, and dragging it into every prompt would defeat the whole exercise). No MCP server code changes; no install-script changes; no new rule file under `claude-rules/`; docs-only. Propagates on next `make install`.
 
-## [8.6.9] - 2026-04-18
+## 8.6.9 - 2026-04-18
 
 aside backends can read files themselves — doctrine shift from "embed-first" to "path-first." Field observation: agents were calling `aside_codex` / `aside_gemini` / `aside_copilot` with massive `context` payloads containing pasted file contents, following the v8.6.5 HARD RULE that read "if your question depends on tool output, you MUST embed the relevant excerpt." That rule was written assuming the backends were pure Q&A (no tools), which was only true for copilot's then-empty `--available-tools=` whitelist. **It was wrong for codex and gemini, and copilot's whitelist could be widened cheaply.** Verified empirically: codex under `-s read-only -a never` permits file reads (sandbox blocks writes/exec, not reads); gemini under `--approval-mode plan` has read/grep/web tools available and can read files within the spawn-cwd workspace (tested by writing a file with a unique token, asking gemini to quote the matching line, and receiving the verbatim token); copilot's built-in tool list (via CLI help) includes `view` (read file), `rg` (ripgrep), `glob` (path match), and `web_fetch` (URL bodies) — all read-only, no mutation, no exec. Changes: **`mcp-servers/aside/src/backend.rs`** — copilot command now spawns with `--available-tools=view,rg,glob,web_fetch` instead of the empty list (per user request including `web_fetch` for docs/spec lookups); `bash` / `write_bash` / `read_bash` / `task` / `skill` / `sql` / `store_memory` / `report_intent` explicitly excluded so copilot cannot exec shells or mutate state — aside remains a consultation surface, not a delegate. Codex comment updated to state reads ARE allowed (prior "prevents file writes / shell side effects" was technically correct but implied no reads). Gemini comment corrected from "read-only mode (no edits, no tools)" — misleading — to "plan mode: read/grep/web tools available, no edits, no exec, no approvals; reads restricted to spawn-cwd workspace." **`mcp-servers/aside/src/main.rs`** — all three `#[tool(description = ...)]` attributes and the server-level `with_instructions(...)` block rewritten: each backend now documents its actual read capabilities and instructs callers to "PREFER passing file paths in `question` / `context` and let the backend read them." Server-level instructions replace the blanket "you MUST embed the relevant excerpt" framing with the path-first default plus the three narrow exceptions. **`claude-rules/claude-agent-kit--aside.md`** — new `## Backend capabilities` section (6-column matrix: Read / Grep / Web fetch / Write-exec / CLI flags / Notes) added before Transcript redaction, making the read capability matrix the first thing agents see when auditing this rule file. v8.6.5 HARD RULE (`### HARD RULE: embed tool-derived context`) rewritten as `### HARD RULE: hand the backend file paths; embed only when necessary` — default is path-first; embedding is reserved for three specific cases: (1) line-range focus when you want to prevent the backend from wandering the rest of a file, (2) off-disk data (command stdout, API response, staged workslate buffer not yet applied, in-memory state), (3) out-of-workspace path (gemini workspace restriction). Paired with three new worked examples (path-first / line-range-focus / off-disk-data) and one "bad example" that pastes 800 lines when a path would do. Surface-comparison table row updated to reference the new Backend capabilities section. Transcript redaction section itself unchanged — redaction still happens, it just matters less now that backends can fetch data via paths. Aside-first-then-advisor() sequencing rule preserved. `include_transcript=false` guidance preserved. No MCP server API break (flag changes are internal; tool signatures unchanged). `make install` rebuilds the aside binary so users pick up the new copilot whitelist on normal upgrade path. Propagates on next `make install`.
 
-## [8.6.8] - 2026-04-18
+## 8.6.8 - 2026-04-18
 
 Gate write-capable subagent delegation (`Agent(subagent_type="general-purpose", ...)`) and Agent Teams (calling `TeamCreate` at all, or spawning any teammate into a team via `Agent(team_name=..., ...)`) behind **explicit user request** — either a per-turn ask in the current conversation OR a **specific and unambiguous** durable pre-authorization in `~/.claude/CLAUDE.md` / project `CLAUDE.md` / auto-memory that names the delegation pattern AND its scope (e.g., "always delegate build verification in this repo to a general-purpose subagent"). Both paths satisfy the gate; **generic wording like "use agents proactively" / "parallelize when helpful" / "delegate when it makes sense" does NOT count** — if the durable instruction is not specific and unambiguous, treat it as no authorization. Read-only `subagent_type`s (`Explore`, `Plan`, `claude-code-guide`, any advisory-only type whose documentation explicitly marks it as unable to edit files) remain proactively allowed — they're context-saving lookups whose output is reviewed back into the leader's context, not work delegation. **The gate is based on the agent's capabilities, not on the prompt** — do not pick `general-purpose` with a "just read things" prompt as a workaround for wanting `Explore`. **Default for unknown or ambiguous `subagent_type`s: treat as write-capable and gated unless the tool's own description explicitly marks it advisory-only / read-only.** Err on the side of gating. **aside (`mcp__aside__aside_*`) and built-in `advisor()` are out of scope** — they are consultations, not file-mutating delegates, and remain governed by `claude-agent-kit--aside.md` and its own proactive-policy triggers. Rationale (in order of durability, not litigability): (1) write-capable delegates mutate files — once `Apply`/`Edit`/`Write` lands the state change is durable on disk, a misread task becomes a committed mistake; (2) the leader sees only the agent's compressed final summary, not its chain-of-reasoning or intermediate tool outputs — the system prompt itself frames this as "Trust but verify," and diff review catches some failures but not semantic-contract misreads; (3) the `Agent` tool exposes no `reasoning_effort` parameter (only `model` — `sonnet`/`opus`/`haiku`), and **Opus 4.7 becomes very dumb without a high reasoning-effort setting** — every spawned write-capable agent runs at the CLI's default reasoning level with no way for the leader to raise it. This is the aggravating factor on top of (1) and (2) and also the specific, current-generation reason the gate is in place *today* rather than five years from now (user-specified framing; the phrasing is deliberate and not to be softened to "more sensitive to reasoning budget in practice" or similar — the point is that without reasoning-effort control, a default-reasoning Opus 4.7 delegate is unacceptably unreliable for file-mutating work, and the rule should read that way). Gate revisits when `Agent` exposes reasoning-effort control; (1) and (2) will still apply but the practical risk from (3) drops. Concrete changes: new **HARD RULE** section at the top of `claude-rules/claude-agent-kit--parallel-work.md` (right after the two-paragraph preamble) spelling out the gate, the capability-based framing, the "explicit request" definition (per-turn OR specific-durable), the generic-memory exclusion, the read-only carve-out, the unknown-type-defaults-to-gated rule, the aside/advisor out-of-scope note, and the reordered three-point rationale; **Subagents §When to use** rewritten as two lists — proactive (read-only types) vs. gated (write-capable types); **Agent Teams §When to Use** prepended with an explicit-request bullet as the gate, with viability bullets demoted to "and also"; **scale-criteria table** restructured into two columns ("baseline — no user request yet" vs. "if user has explicitly asked for parallelism") so scale no longer reads as permission; two new anti-pattern rows covering unprompted `general-purpose` spawn and team-creation-because-scale-matches. In `CLAUDE.md`: new **[OVERRIDE]** block in Core Principles > Collaboration narrowing the system prompt's `"If the agent description mentions that it should be used proactively, then you should try your best to use it without the user having to ask for it first."` directive to read-only `subagent_type`s only, plus the Agent-tool-description directive `"When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you."` which is preserved for Explore but not extended to write-capable types — with an opening "this override applies to delegation tools only" clause so future sessions don't over-apply it to unrelated "agent-like" tools; decision tree's "Complex parallel task?" branch rewritten to split on explicit user request, with the no-request path defaulting to single session + optional read-only subagents and an explicit "propose, don't spawn" instruction. Copilot (aside) review pass applied before landing — flagged four loopholes (TeamCreate soft framing, capability-vs-prompt escape hatch, ambiguous durable-memory wording, missing aside/advisor carve-out) that were all closed in this revision. No MCP server code changes. No install-script changes. Docs-only; propagates on next `make install`.
 
-## [8.6.7] - 2026-04-18
+## 8.6.7 - 2026-04-18
 
 fix(workslate): replace `blocking_write()` with `.write().await` in startup buffer restore path (`main.rs:1529`). `tokio::sync::RwLock::blocking_write()` panics when called from within a Tokio runtime context (`#[tokio::main]`). The bug was latent — only triggered when SQLite contained leftover buffers from a prior abnormal shutdown (crash, kill, ESC), since normal shutdowns auto-clear buffers on successful `workslate_apply`. Single-line fix; no API, schema, or behavioral change. Propagates on next `make install`.
 
-## [8.6.6] - 2026-04-17
+## 8.6.6 - 2026-04-17
 
 CLAUDE.md `[OVERRIDE]` drift audit against the Opus 4.7 system prompt. Re-quoted or demoted six stale `[OVERRIDE]` blocks whose quoted target strings had been removed or reworded in the 4.7 system prompt: (a) `CLAUDE.md` Humility First — `"Escalate to the user with AskUserQuestion..."` removed entirely, block demoted to a standalone "Clarification heuristic"; (b) `CLAUDE.md` Communication — `"Lead with the answer or action, not the reasoning."` / `"If you can say it in one sentence, don't use three."` / `"Go straight to the point. Be extra concise."` all removed, replaced with a re-anchored override pairing the still-live `"Your responses should be short and concise."` with the new `"Length limits: keep text between tool calls to ≤25 words. Keep final responses to ≤100 words unless the task requires more detail."`; (c) `CLAUDE.md` Collaboration executor-framing — `"Go straight to the point"` / `"Just do it"` both removed, block demoted to a standalone "Collaboration default"; (d) `CLAUDE.md` adjacent-bug observation — `"A bug fix doesn't need surrounding code cleaned up."` reworded to `"A bug fix doesn't need surrounding cleanup; a one-shot operation doesn't need a helper."`, `"Don't add features, refactor code, or make 'improvements' beyond what was asked."` reworded to `"Don't add features, refactor, or introduce abstractions beyond what the task requires."`, re-quoted and extended with `"Don't design for hypothetical future requirements."`; (e) `task-execution.md` over-engineering — same reword pair, re-quoted and extended with `"Three similar lines is better than a premature abstraction."`; (f) `task-execution.md` file-creation — `"Do not create files unless they're absolutely necessary."` removed, re-anchored to the still-live `"ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required."`. Added one new override: `CLAUDE.md` Communication now also carries an "Exploratory-question precedence" rule resolving the new `"For exploratory questions..."` 2-3 sentence cap against the existing "elaborate on design decisions" rule — direction-level questions stay short, design-level questions elaborate, ambiguous starts short with an explicit offer to expand. The new `"Don't add error handling, fallbacks, or validation for scenarios that can't happen. Trust internal code and framework guarantees. Only validate at system boundaries."` directive was considered and explicitly NOT overridden — defensive error-handling remains valued in this codebase, and the system-prompt rule's narrow scope ("scenarios that can't happen") does not conflict with Quality Standards in practice; an auto-memory feedback was saved so future audits do not re-propose the override. All `git-workflow.md` quotations (`--no-gpg-sign`, Co-Authored-By model-name string, `🤖 Generated with [Claude Code]`) verified still-live in the 4.7 system prompt — no edits needed. `parallel-work.md` / `framework-conventions.md` / `aside.md` / `aside-prefs.md` carry no system-prompt quotations and were not touched. Docs-only — no code changes, no behavior change to MCP servers. Propagates on next `make install`.
 
-## [8.6.5] - 2026-04-15
+## 8.6.5 - 2026-04-15
 
 aside transcript-redaction documentation. Field observation: agents were calling aside with `include_transcript=true` and assuming the third-party backend received the same thing `advisor()` does. It does not. `mcp-servers/aside/src/transcript.rs::render_content` rewrites `tool_use` blocks as `[tool_use: <name>]` with arguments stripped, `tool_result` blocks as a literal `[tool_result]` placeholder with the body dropped, and `thinking` blocks as `[thinking]` with content dropped. Only `text` blocks pass through verbatim. Redaction is intentional (trust boundary — tool results contain file contents / command output / secrets that shouldn't cross to OpenAI / Google / GitHub CLIs, plus the 100 KB budget would be blown by any reasonably sized tool output, plus no-CoT-leak policy). But the rule file claimed parity with `advisor()` ("same behavior as `advisor()`" in the surface-comparison table), which set up the wrong expectation — agents assumed tool-produced substance was available to the backend when it structurally was not. v8.6.5 adds a new **Transcript redaction — aside ≠ advisor()** section to `claude-rules/claude-agent-kit--aside.md` with a per-block truthful table of what each block type becomes, contrasts against `advisor()` (which still receives the full unredacted transcript), and adds a **HARD RULE** that when the aside question depends on tool output the agent must embed the relevant excerpt (file lines, command output, diff hunk) in `question`/`context` explicitly — the transcript alone will not carry it. Surface-comparison table entry corrected to state that the forwarded transcript is "in redacted form" rather than "same behavior as `advisor()`." The aside-first-then-advisor() sequencing rule from v8.6.4 is explicitly preserved — `advisor()` still sees full transcript on its subsequent turn, so the pairing still works. Server binary description strings corrected in the same release (`mcp-servers/aside/src/main.rs`): the three `#[tool(description = ...)]` attributes on `aside_codex` / `aside_gemini` / `aside_copilot` and the server-level `with_instructions(...)` block no longer claim parity with `advisor()` — each now names the redaction explicitly and points agents at the embed-tool-output-in-`question`/`context` rule. `make install` rebuilds the aside binary, so this reaches existing installs on the normal upgrade path. Propagates on next `make install`.
 
-## [8.6.4] - 2026-04-15
+## 8.6.4 - 2026-04-15
 
 aside ↔ advisor sequencing fix. Field report: calling `mcp__aside__aside_*` and built-in `advisor()` concurrently (same turn, same parallel tool-use block) breaks `advisor()` — aside's stdio transport interferes with `advisor()`'s automatic transcript forwarding, so the advisor reply either fails or returns corrupted. v8.6.2 hardened the pair-with-`advisor()` trigger to read "fire an aside call in the same turn," which unintentionally instructed agents to do exactly the thing that breaks advisor. Rewrote that bullet in `claude-rules/claude-agent-kit--aside.md` as a **HARD RULE**: aside fires FIRST, in its own turn; agent waits for the reply and summarises it; `advisor()` runs in a **subsequent response**, never alongside aside. Rationale for ordering aside-before-advisor rather than advisor-before-aside: aside replies are cheaper and faster, and `advisor()` benefits from seeing the aside reply in the transcript it forwards — the Opus reviewer can then reconcile its own view against the cross-family second opinion. The re-audit warning ("I decided this isn't really high-stakes after all") is preserved — the concurrency ban is a sequencing fix, not a license to drop the pair. Rule-file + version metadata only; no code changes. Propagates on next `make install`. Known issue unchanged: `aside` MCP server process dies on tool-call cancellation (Claude Code ESC) — tracked separately, still requires live reproduction to diagnose.
 
-## [8.6.3] - 2026-04-15
+## 8.6.3 - 2026-04-15
 
 aside prefs template — remove the "Per-topic overrides" section entirely (template-only; user's existing `~/.claude/rules/claude-agent-kit--aside-prefs.md` is preserved and must be regenerated via `make configure` if they want the new shape). Rationale: the v8.6.1 "Fill in to activate routing" reframing + `<!-- example; edit or remove -->` marker was a soft signal that still got misread — multiple sessions read the example bullets (`Frontend → gemini`, `Rust systems → copilot`, etc.) as active routing rules even with the marker present. Marker-based disambiguation proved insufficient under attention pressure. Structural fix: if no examples exist in the file, there is nothing to misread. Section deleted; replaced with a one-sentence addition to `## Notes` ("Anything you write here is treated as a live rule; there are no templates or placeholders to disambiguate."). Users who want per-topic routing write it in free-form prose under `## Notes` — no examples, no placeholders. Template-only change; `make install` propagates to fresh installs and to existing users who run `make configure`. Known issue tracked separately (not in this release): `aside` MCP server process dies on tool-call cancellation (Claude Code ESC), likely due to stdio-transport EOF handling when the client severs the connection — requires live reproduction to diagnose.
 
-## [8.6.2] - 2026-04-15
+## 8.6.2 - 2026-04-15
 
 workslate MCP diff fix + aside pair rule tightening. **workslate**: `workslate_edit` diff now reflects surrounding lines. Two changes together: (a) unified-diff context radius bumped **3 → 10** across `workslate_edit`, `workslate_write`, and `workslate_diff` (full + summary-mode `grouped_ops(...)`), centralised as `DIFF_CONTEXT_RADIUS` in `mcp-servers/workslate/src/main.rs`; (b) **fix**: `workslate_edit` previously built its diff from a localised excerpt (`old_text` vs `new_string`) via `buffer::diff_texts`, so context radius had no surrounding lines to draw from — a one-line edit would render as a hunk with no structure. The edit handler now diffs full `base_content` against the full `result_content`, matching what `workslate_write` and `workslate_diff` already do. Dead code removed: `buffer::diff_texts` (no remaining callers) and `ResolvedTarget.old_text` (only fed into `diff_texts`). No schema or API change. **aside**: `claude-rules/claude-agent-kit--aside.md` pair-with-`advisor()` trigger hardened. Previously read "IF `advisor()` is available AND you're about to call it for a high-stakes decision → fire an aside call at the same moment" — the "high-stakes decision" gate let the model re-audit the decision and talk itself out of the pair even after choosing to call `advisor()`. Reworded as an unconditional rule: whenever you are about to call `advisor()`, fire aside in the same turn; the act of calling `advisor()` is itself the signal. Legitimate skip reasons narrowed to prefs (`policy: conservative` / `preference-only`) or no backend installed. Cost-awareness budget line reframed from "per high-stakes decision" to "per advisor-paired decision or other triggered scope" to align with the new framing. Also removed a duplicate "Passing model and reasoning_effort" section in the same file (pure cleanup). Applies on next `make install`.
 
-## [8.6.1] - 2026-04-15
+## 8.6.1 - 2026-04-15
 
 aside policy tightening — `proactive` mode guidance now uses **SHOULD** (active instruction) instead of "may" (permission), adds an explicit trigger list in `claude-agent-kit--aside.md` (architecture decisions spanning 3+ modules, API / wire-protocol / schema changes, concurrency / invariant changes, security-sensitive code, and pairing with built-in `advisor()` when it's about to fire for the same decision). Aside firing is **independent** of `advisor()` availability — triggers still apply when only aside exists. Cost-awareness adds a carve-out stating proactive-triggered calls are NOT speculative (~1–2 per high-stakes decision). Template `claude-agent-kit--aside-prefs.md.tmpl` reframes "Per-topic overrides" as "Fill in to activate routing" (was "Examples"), marking each line with an `<!-- example; edit or remove -->` comment so new installs see them as placeholders to customise. No code changes; applies on next `make install` for existing users (user's own `claude-agent-kit--aside-prefs.md` is preserved — edit manually or `make configure` to regenerate from the new template).
 
-## [8.6] - 2026-04-14
+## 8.6 - 2026-04-14
 
 New **aside** MCP server — cross-family second-opinion tools that wrap locally-installed codex / gemini / copilot CLIs so Claude can consult another model family mid-session. Tools: `aside_list` / `aside_codex` / `aside_gemini` / `aside_copilot`. `include_transcript` defaults to `true` (mirrors built-in `advisor()`) — the current Claude Code JSONL transcript is rendered as plain text and forwarded, capped at 100 KB with front-trimming. Each backend is invoked read-only / non-interactive so it behaves as pure Q&A (codex `-s read-only -a never exec`, gemini `--approval-mode plan`, copilot `--available-tools=`). Per-backend `model` and `reasoning_effort` tool params map to each CLI's respective flag; gemini ignores `reasoning_effort` (CLI has no knob). New rule file `claude-agent-kit--aside.md` overrides the system prompt's `# Advisor Tool` section to coexist with built-in `advisor()` (not replace it) and routes MCP calls through user preferences in `claude-agent-kit--aside-prefs.md` (generated at install time, signed `claude-agent-kit-custom:aside-prefs` so `make uninstall` preserves it by default behind an interactive `[y/N]` prompt). Install flow now has `make install` (interactive) / `make configure` (re-run preferences only) / env-var overrides (`ASIDE_PREFERRED`, `ASIDE_{CODEX,GEMINI,COPILOT}_MODEL`, `ASIDE_{CODEX,COPILOT}_EFFORT`, `ASIDE_POLICY`, `ASIDE_CUSTOM_RULES_DIR`, `ASIDE_UNINSTALL_KEEP_PREFS`). Custom-rules passthrough: install accepts a directory of user `.md` rules and ingests each with the custom signature, kit-prefixed filename, and manifest tracking. Dual-signature uninstall: core files removed, custom files prompted. CI extended — `release.yml` builds both binaries per platform and publishes `{workslate,aside}-{platform}.{tar.gz,zip}`; new `ci.yml` runs `cargo build -p workslate -p aside` + `cargo test` on push/PR plus shellcheck on install scripts.
 
-## [8.5.4] - 2026-04-14
+## 8.5.4 - 2026-04-14
 
 workslate MCP — lenient deserializers for `Option<Vec<String>>` / `Option<bool>` / `Option<u32>` params. Array (`depends_on`), boolean (`dry_run`, `force`, `summary`, `regex`, `line_numbers`, `all`), and integer (`match_index`, `line_start`, `line_end`, `start_line`, `end_line`, `context`) fields now accept both native JSON types and JSON-encoded strings as a best-effort tolerance shim. On failure the error message points at the expected JSON shape instead of serde's default cryptic mismatch. Schema doc comments reinforced with explicit JSON-type examples. Mitigates frequent agent failure of sending `depends_on: "[\"ws:1\"]"` (stringified) instead of `depends_on: ["ws:1"]` (JSON array). Docs + new `src/lenient.rs` module with 20 unit tests. No breaking change — existing correct call sites unaffected.
 
-## [8.5.3] - 2026-04-14
+## 8.5.3 - 2026-04-14
 
 Parallel-work — new Leader Intervention bullet: when a teammate stops for a reason other than `shutdown_request` / task completion / explicit teammate error report, treat it as a **user-initiated interrupt on that teammate** and do NOT re-assign, pivot, spawn a replacement, or infer what the teammate "would have done." Wait for the user's instruction instead. Addresses observed pattern where the leader over-reacts to teammate interrupts by attempting recovery the user did not ask for.
 
-## [8.5.2] - 2026-04-14
+## 8.5.2 - 2026-04-14
 
 Close loopholes in scope-reduction overrides. New `[OVERRIDE]` in Core Principles > Quality Standards forbidding deferral of any requested work to a follow-up PR / subsequent commit / future ticket / "future refactor," regardless of whether a design doc was provided, and regardless of whether the split is announced openly or silently (closes the `silently reduce scope` loophole). `task-execution.md` scope override strengthened to list follow-up-PR deferral alongside stubs/placeholders/TODOs and cross-reference the Core Principles rule. Addresses observed pattern where agents complete part of a request and push remainder to a follow-up.
 
-## [8.5.1] - 2026-04-14
+## 8.5.1 - 2026-04-14
 
 Added `[OVERRIDE]` in Core Principles > Quality Standards forbidding context-usage-based task abandonment. Addresses observed failure mode where agents declare a task unfinishable at low context usage (e.g., 34%) despite auto-compact making window limit irrelevant. Clarifies that "token cost" / "save context" warnings elsewhere in the manual are scoped to Agent Team coordination / model selection / prompt-cache retention, not solo-session stopping conditions.
 
-## [8.5] - 2026-04-14
+## 8.5 - 2026-04-14
 
 Parallel-work docs — clarify that the `Agent` tool spawns both subagents (no `team_name`) and teammates (with `team_name`, after a prior `TeamCreate`). Added explicit "Spawn mechanism" section in `parallel-work.md`, split the leader workflow's single "TeamCreate → Team + teammates created" step into two (TeamCreate creates container, then Agent per teammate), added `subagent_type` guidance (read-only types like `Explore` / `Plan` cannot edit files, so never use for implementation teammates), new anti-pattern rows, and propagated the two-step spawn framing into the main CLAUDE.md decision tree. Docs-only; no code or behavior change.
 
-## [8.4] - 2026-04-13
+## 8.4 - 2026-04-13
 
 Agent Teams — default teammates to `model="sonnet"` for cost efficiency (each teammate is a full Claude instance; Sonnet handles scoped task-claiming work reliably). Leader stays on Opus. Exception carve-out for `verifier-review` / `arch-designer` roles that genuinely need cross-module reasoning. Added leader checklist item and note to verifier creation-prompt examples.
 
-## [8.3] - 2026-04-11
+## 8.3 - 2026-04-11
 
 Field feedback pass — `workslate_clear` safety (bare call forbidden, `all=true` opt-in with buffer list preview), stale buffer detection via SHA-256 `source_hash` recorded at load/write and verified at apply (`force=true` override), footer buffer status line, successful `workslate_apply` now auto-clears the buffer from both memory and SQLite (failed apply preserves buffer for retry), Agent Teams token cost warning + scale criteria in parallel-work.md, HARD RULE completion report format template
 
-## [8.2.1] - 2026-04-09
+## 8.2.1 - 2026-04-09
 
 Rename DB to workslate.db (auto-migrate from workslate-tasks.db)
 
-## [8.2] - 2026-04-09
+## 8.2 - 2026-04-09
 
 SQLite buffer persistence (survives restarts), same-file collision guard (one buffer per file enforced), edit tool signatures in docs, search regex? clarification
 
-## [8.1.1] - 2026-04-08
+## 8.1.1 - 2026-04-08
 
 Clarify regex option in workslate_search — tool description, task-execution rules, and decision tree now include `regex?` parameter
 
-## [8.1] - 2026-04-08
+## 8.1 - 2026-04-08
 
 Security + stability — project root path guard (file ops restricted to cwd), mutex poison safety (no more panics), task_create transaction (fixes next_id race), is_binary/resolve_target edge cases, owner empty→None reset, recompute error logging, Windows HOME fallback
 
-## [8.0.1] - 2026-04-08
+## 8.0.1 - 2026-04-08
 
 Unify task tools — teammates use `workslate_task_*` (team: namespace) instead of built-in TaskCreate/TaskUpdate, consistent with SQLite WAL concurrency model
 
-## [8.0] - 2026-04-08
+## 8.0 - 2026-04-08
 
 SQLite-backed task system (replaces JSON), ws:/team: namespace separation, team task support (owner, cross-namespace deps), buffer dependency ordering, workslate_diff summary mode, workslate_apply dry_run, JSON→SQLite auto-migration
 
-## [7.2] - 2026-04-07
+## 7.2 - 2026-04-07
 
 Buffer-first editing (workslate_edit: file_path=load from disk, no file_path=edit buffer), BufferContent enum→struct, workslate_apply/diff simplified to single path, task tracking trigger rule, server-side task session nudge
 
-## [7.1] - 2026-04-07
+## 7.1 - 2026-04-07
 
 Mandatory named sessions (task_init required before task operations), install scripts (install.sh, install.ps1, Makefile) with manifest-based uninstall, auto MCP registration, rule file prefix + signature for safe uninstall, PATH detection
 
-## [7.0.1] - 2026-04-07
+## 7.0.1 - 2026-04-07
 
 Split CLAUDE.md into claude-rules/ modules (task-execution, git-workflow, framework-conventions, parallel-work) — main file under 200 lines
 
-## [7.0] - 2026-04-07
+## 7.0 - 2026-04-07
 
 workslate_read file mode (line-numbered file reading with range support), workslate_search (pattern search with context and line number summary), workslate_write shows full content for new files; module split (main.rs → buffer.rs, task.rs, file.rs); task system clarification (workslate for solo/leader, built-in for team graph)
 
-## [6.5.1] - 2026-04-07
+## 6.5.1 - 2026-04-07
 
 workslate_edit targeting modes — match_index (Nth occurrence) and line_start/line_end (line range)
 
-## [6.5] - 2026-04-07
+## 6.5 - 2026-04-07
 
 workslate_edit position modes (after/before/append), refined staging criteria, task sessions docs
 
-## [6.0-6.4] - 2026-04-07
+## 6.0-6.4 - 2026-04-07
 
 Code Staging workflow, workslate_edit, workslate_write diff, named task sessions
 
-## [5.0-5.2.5] - 2026-04-01–06
+## 5.0-5.2.5 - 2026-04-01–06
 
 System prompt overrides, verification rules, Agent Teams communication, chain-of-thought ban
 
-## [4.0-4.2.2] - 2026-03-30
+## 4.0-4.2.2 - 2026-03-30
 
 Agent Teams rewrite, self-claim model, leader intervention
 
-## [1.0-3.0] - 2026-01–02
+## 1.0-3.0 - 2026-01–02
 
 Initial versions through major restructure
