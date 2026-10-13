@@ -30,6 +30,9 @@ Records
 -------
 
 :Amends: none | until <YYYY-MM-DD>
+:Acceptance: who-and-time | who
 
 <Which relations a record uses and how supersession is written; Amends is a
-relation of older records and stops on the date above.>
+relation of older records and stops on the date above. Acceptance is optional:
+who-and-time makes an Accepted value without the time an error, who accepts
+the person alone, and without the field such a value is a warning.>

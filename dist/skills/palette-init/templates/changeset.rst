@@ -1,8 +1,8 @@
 Changeset: <RFC-NNNN | ADR-NNNN>
 ================================
 
-<maintained document path, e.g. spec/example.rst>
--------------------------------------------------
+<target: design/<topic>.rst, spec/<topic>.rst, principles.rst, glossary.rst, contributing.rst, or another .rst's project-relative path>
+---------------------------------------------------------------------------------------------------------------------------------------
 
 Replace: <section title, prefixed by parent titles and " / " when not unique>
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -11,7 +11,17 @@ Replace: <section title, prefixed by parent titles and " / " when not unique>
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 <Text as the maintained document will read: no record numbers, links relative
-to the target document.>
+to the target document. Replace: replaces the section with its subsections;
+subsections that stay are written here again.>
+
+Replace body: <section title>
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+<Section title as the maintained document will read>
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<Text up to the first subsection, with no heading of its own; the section's
+subsections stay as they are.>
 
 Insert after: <section title>
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
