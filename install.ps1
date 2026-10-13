@@ -45,7 +45,7 @@ Options are passed to slate-setup. The common ones:
   --binaries MODE       prebuilt (default), build, or skip
   --slate-dir DIR       slate checkout to build from (with --binaries build)
   --roots PATHS         workspace roots for dispatch and palette (separated by ;)
-  --set KEY=VALUE       set a prefs value, for example aside.level=auto
+  --set KEY=VALUE       set a prefs value, for example consult.level=auto
   --custom-rules DIR    folder of your own *.md rule files
   --payload DIR         install from this dist folder
   --yes                 ask nothing; take current or default values

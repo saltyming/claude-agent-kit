@@ -1,6 +1,6 @@
 # Claude Agent Kit
 
-An operating manual and rule set for Claude Code (`CLAUDE.md` plus rule files), the palette document system with its skills, and three shared MCP servers: `aside` (second opinions from another model family), `dispatch` (asynchronous execution by a codex, opencode or claude backend) and `palette` (reads, checks and writes palette documents). One installer, `slate-setup`, installs all of it, writes your preferences and sets Claude Code's subagent default model.
+An operating manual and rule set for Claude Code (`CLAUDE.md` plus rule files), the palette document system with its skills, and two shared MCP servers: `dispatch` (asynchronous execution by a coding agent, and second opinions from another model family) and `palette` (reads, checks and writes palette documents). One installer, `slate-setup`, installs all of it, writes your preferences and sets Claude Code's subagent default model.
 
 This is claude-agent-kit 26.10.0 (contract 1). Its rules, skills, templates and prefs templates are rendered from [`slate-agent-kit`](https://github.com/saltyming/slate-agent-kit), which also builds the servers and the installer; its release v26.10.0 provides the binaries. The three kits and the slate release share one version, `YY.MM.N`; the contract number alone says whether an installed kit stays compatible.
 
@@ -26,14 +26,14 @@ The rule files, in `~/.claude/rules/`:
 - `claude-agent-kit--delegation.md`: subagents and the other ways work leaves the session, with the Claude Code delegation surfaces.
 - `claude-agent-kit--models.md`: which model and effort a delegate, a dispatch step or a consultation runs on, with the Claude Code models.
 - `claude-agent-kit--palette.md`: the palette document system.
-- `claude-agent-kit--aside.md` and `claude-agent-kit--dispatch.md`: when consultation and dispatch are worth using.
+- `claude-agent-kit--consult.md` and `claude-agent-kit--dispatch.md`: when consultation and dispatch are worth using, and how a run is waited on.
 - `claude-agent-kit--git-workflow.md`: how your git preferences are read, asked for and recorded, and destructive git.
 
 `CLAUDE.md` opens with a preamble stating the intent the articles derive from; it guides interpretation where the rules leave a choice and overrides no article. It is your standing instruction: where Claude Code's defaults leave a choice to you (memory, how much to add unasked, output styles, when to delegate), the surface rule records the choice; it changes nothing the harness reserves to itself. `CLAUDE.md`, the rule files and the prefs files load every session and come to about 35 KB; skills load only when used.
 
 ### Action levels
 
-Consultation (aside), dispatch and subagents spend your models, quota and time, so each has one level in its prefs file. Without a prefs file the level is `suggest`.
+Consultation, dispatch and subagents spend your models, quota and time, so each has one level in its prefs file. Without a prefs file the level is `suggest`.
 
 | Level | The agent |
 |---|---|
@@ -41,7 +41,7 @@ Consultation (aside), dispatch and subagents spend your models, quota and time, 
 | `suggest` (default) | Proposes it in one line (what, where, how many, which model) and waits. |
 | `auto` | Judges the value, uses it, and states in one line how many, which model and why. |
 
-At every level the agent applies the same test first: could the result change a decision that is not yet made, is the user already doing that job, and is the cost in models, count, quota and time proportionate to what it can change. A current-turn instruction ("use dispatch", "no aside") outranks the level. A default model in the prefs applies unless you name another for the turn.
+At every level the agent applies the same test first: could the result change a decision that is not yet made, is the user already doing that job, and is the cost in models, count, quota and time proportionate to what it can change. A current-turn instruction ("use dispatch", "no consultation") outranks the level. A default model in the prefs applies unless you name another for the turn.
 
 ### palette
 
@@ -85,26 +85,27 @@ The `memory-triage` skill reviews `~/.claude/projects/<project>/memory/` and pro
 
 `Agent` with `Explore`, `Plan` or `claude-code-guide` is read-only; every other type, including `general-purpose` and `fork`, is write-capable. `Workflow` runs only on your opt-in for the current turn. A subagent runs on the default model set in the subagent prefs (`CLAUDE_CODE_SUBAGENT_MODEL`), or on the session's model when none is set; the agent passes `model` when the default does not fit the job. The subagent level in the prefs decides whether the agent starts them on its own, proposes them, or waits for you.
 
-### aside: consultation
+### Consultation
 
-Asks another model family for a read-only opinion through a locally installed CLI: `aside_codex` (OpenAI) and `aside_claude` (a separate local Claude CLI pass); `aside_list` reports which are installed. It complements the built-in `advisor()` (a stronger Claude that receives the full transcript) and does not replace it. The two never run at the same time; when both are used in one turn, the agent calls aside first, so `advisor()` also sees the exchange.
+Asks another model family for a read-only opinion through the `dispatch` server: `dispatch_consult` runs OpenAI's codex CLI (default) or a separate local Claude CLI pass, returns an id at once, and the reply is read with `dispatch_status`; `dispatch_backends` reports which CLIs are installed. It complements the built-in `advisor()` (a stronger Claude that receives the full transcript) and does not replace it. The two never run at the same time; when both are used in one turn, the agent consults first, so `advisor()` also sees the exchange.
 
-- **Transcript auto-forwarded, redacted.** `text` passes through verbatim; `tool_use`, `tool_result` and `thinking` become placeholders. 100 KB cap; `include_transcript=false` for decontextualised questions.
-- **Read-only, non-interactive.** Each backend can read files and grep the workspace itself but cannot edit files or run shells.
-- **Level and settings.** `claude-agent-kit--aside-prefs.md` holds the level, the backend, and the model, reasoning effort and model fallback chain for that backend. A transient failure retries the same question on the next model in the chain, as one logical call. A current-turn instruction that names a surface ("ask codex", "only `advisor()`", "no aside") outranks the level.
+- **Transcript auto-forwarded, redacted.** `text` passes through verbatim; `tool_use`, `tool_result` and `thinking` become placeholders, read from the harness's own session log when the consultation is submitted. 100 KB cap; `include_transcript=false` for decontextualised questions.
+- **Read-only, non-interactive.** Each backend can read files and grep the workspace itself but cannot edit files or run shells, and sees no MCP server of its own.
+- **Asynchronous.** The response carries a `wait` command line (`dispatch wait <id> --db <store>`) that exits when the run is terminal. In Claude Code the agent runs it with `Bash` in the background, which brings the session back when the command exits. `dispatch_cancel` is the only way to stop a consultation.
+- **Level and settings.** `claude-agent-kit--consult-prefs.md` holds the level, the backend, and the model, reasoning effort and model fallback chain for that backend. A transient failure retries the same question on the next model in the chain, as one logical call. A current-turn instruction that names a surface ("ask codex", "only `advisor()`", "no consultation") outranks the level.
 - **When it pays.** A decision that is still open: an architecture or public-contract choice other code will build on, concurrency or invariants, security-sensitive code, a diagnosis the evidence does not settle. Not while you are reviewing with the agent and waiting for its own answer, when the decision is made, or for a routine question. Every call spends third-party quota, so it is one focused question per call.
 
 ### dispatch: external execution
 
-Hands a self-contained, write-capable execution step to a coding agent (codex, opencode or claude) that runs headless in the background. Where aside asks for an opinion, dispatch entrusts work.
+Hands a self-contained, write-capable execution step to a coding agent (codex, opencode or claude) that runs headless in the background. Where a consultation asks for an opinion, an execution entrusts work; both are runs of the same server.
 
-- **Async submit, poll, cancel.** `dispatch_submit` returns a task id immediately and runs the backend detached (`codex exec`, or a short-lived local `opencode serve`); `dispatch_status` and `dispatch_list` track it; `dispatch_cancel` stops a run, or a whole `plan_id`, by killing its process group; `dispatch_backends` reports which backends are installed.
+- **Async submit, wait, cancel.** `dispatch_submit` returns a task id and a `wait` command line immediately and runs the backend detached (`codex exec`, or a short-lived local `opencode serve`); `dispatch_status` and `dispatch_list` track it; `dispatch_cancel` stops a run, or a whole `plan_id`, by killing its process group; `dispatch_backends` reports which backends are installed.
 - **Watch and steer.** `dispatch_logs` shows a curated live timeline (codex rollout logs or dispatch-owned OpenCode event JSONL, noise filtered, paged by line range). `dispatch_steer` interrupts a run and resumes the same backend session with a new instruction, keeping its context and the files it already wrote, as a linked follow-up task.
 - **Structured task spec.** Objective, target files, constraints and acceptance, plus free context, rendered deterministically into the backend prompt and stored for audit.
 - **Persistent state.** A SQLite `dispatch.db`; statuses `queued`, `running`, `succeeded`, `failed`, `cancelled`, `interrupted`. At start, tasks stranded by a dead server are marked `interrupted` without touching a peer session's live runs.
 - **Server-enforced guards.** The working directory must resolve inside the project root or a root you gave with `--roots`; the `danger-full-access` sandbox is blocked unless the server is started with `DISPATCH_ALLOW_DANGER=1`; one active run per directory unless `allow_concurrent`. Codex uses its CLI sandbox; OpenCode uses its permission rules plus dispatch's directory guard, not an OS sandbox. Rejections return a structured `{error:{code,message}}`.
 - **Level and settings.** `claude-agent-kit--dispatch-prefs.md` holds the level, backend, model, reasoning effort and model fallback chain. Dispatch fits isolated mechanical edits, long verify-and-fix loops, large well-scoped sweeps and independent plan steps with clear target files and acceptance criteria. It does not fit an open product question, edits that overlap your own uncommitted changes, work that needs close interactive judgment, or anything that cannot be written as one self-contained spec.
-- **No completion notification.** The agent checks a run later in the turn. When a turn ends with a run unfinished, it arms `ScheduleWakeup` under `/loop` and otherwise tells you the run is still going.
+- **Waiting.** No notification arrives from the server: the agent runs the returned `wait` command with the harness's background means and comes back when it exits. In Claude Code the agent runs it with `Bash` in the background, which brings the session back when the command exits. An execution is done only when `dispatch_status` shows `succeeded` and the result is reviewed.
 
 ### palette server
 
@@ -124,7 +125,7 @@ Five user-owned files in `~/.claude/rules/`, loaded with the other rules:
 
 | File | Sets | Installed default |
 |---|---|---|
-| `claude-agent-kit--aside-prefs.md` | Level; backend (`codex` or `claude`); model, reasoning effort and model fallback for the chosen backend | `suggest`, `codex` |
+| `claude-agent-kit--consult-prefs.md` | Level; backend (`codex` or `claude`); model, reasoning effort and model fallback for the chosen backend | `suggest`, `codex` |
 | `claude-agent-kit--dispatch-prefs.md` | Level; backend (`codex`, `opencode`, `claude`); model; reasoning effort; model fallback | `suggest`, `codex` |
 | `claude-agent-kit--subagent-prefs.md` | Level; default model | `suggest`, harness default |
 | `claude-agent-kit--git-prefs.md` | Commit signing, model attribution, commit message format, PR body format, branch naming | `unset`: the agent asks at first need and records the answer |
@@ -166,10 +167,10 @@ The entry point downloads the prebuilt `slate-setup` for your platform from slat
 
 | Option | Meaning |
 |---|---|
-| `--binaries prebuilt\|build\|skip` | `prebuilt` (default) downloads `aside`, `dispatch` and `palette`, and on Linux and macOS `agent-guard`, from the slate release, checked against `checksums.txt` (if release v26.10.0 does not exist it uses the latest and says so). `build` runs `cargo build --release` in `--slate-dir` and needs Rust. `skip` installs no binaries and registers no servers. `--skip-mcp` still works. |
+| `--binaries prebuilt\|build\|skip` | `prebuilt` (default) downloads `dispatch` and `palette`, and on Linux and macOS `agent-guard`, from the slate release, checked against `checksums.txt` (if release v26.10.1 does not exist it uses the latest and says so). `build` runs `cargo build --release` in `--slate-dir` and needs Rust. `skip` installs no binaries and registers no servers. `--skip-mcp` still works. |
 | `--slate-dir <dir>` | The slate checkout to build from. |
 | `--roots <paths>` | Workspace roots dispatch and palette may work in, as an OS path list. When it is not given, the `DISPATCH_ROOTS` environment variable is used. |
-| `--set <key>=<value>` | Pre-answers a prefs question; repeatable. Keys are `<file>.<key>`, for example `aside.level=auto` or `git.signing=no-gpg-sign`. |
+| `--set <key>=<value>` | Pre-answers a prefs question; repeatable. Keys are `<file>.<key>`, for example `consult.level=auto` or `git.signing=no-gpg-sign`. |
 | `--custom-rules <dir\|none>` | A folder of your own `*.md` rule files to install (or `none`). |
 | `--yes` | Takes the current or default value for every question. |
 | `--dry-run` | Prints the summary and exits. |
@@ -187,19 +188,20 @@ Every run has the same shape: detect, ask, summarize and confirm, apply, report.
 4. **Apply**: cleanup of leftovers from earlier installers (see Upgrading), binaries, `CLAUDE.md`, rules and skills, prefs files and custom rules, server registration (`claude mcp add ... -s user`), and the `settings.json` edits.
 5. **Report** the installed paths and that Claude Code needs a restart.
 
-What it writes: `CLAUDE.md`, `rules/` and `skills/` in the Claude home; `aside`, `dispatch` and `palette` in the binary folder (with `agent-guard`, the executable the servers start their backends through, beside them on Linux and macOS); `settings.json` (the subagent model, and the palette read-tool permissions); and a manifest, `.claude-agent-kit-manifest.toml`, listing every file, backup, configuration key with its previous value, and registration. Kit-managed Markdown files start with `<!-- slate-agent-kit:common -->` or `<!-- claude-agent-kit -->`. An existing `CLAUDE.md` that is not kit-managed is copied to `CLAUDE.md.bak-<UTC timestamp>` first. Each `*.md` in a custom rules folder is copied into `rules/` as `claude-agent-kit--<name>.md` and signed as yours; a file that would replace a kit-managed one is refused.
+What it writes: `CLAUDE.md`, `rules/` and `skills/` in the Claude home; `dispatch` and `palette` in the binary folder (with `agent-guard`, the executable dispatch starts its backends through, beside them on Linux and macOS); `settings.json` (the subagent model, and the permissions for the palette read tools, `dispatch_consult` and the dispatch read tools); and a manifest, `.claude-agent-kit-manifest.toml`, listing every file, backup, configuration key with its previous value, and registration. Kit-managed Markdown files start with `<!-- slate-agent-kit:common -->` or `<!-- claude-agent-kit -->`. An existing `CLAUDE.md` that is not kit-managed is copied to `CLAUDE.md.bak-<UTC timestamp>` first. Each `*.md` in a custom rules folder is copied into `rules/` as `claude-agent-kit--<name>.md` and signed as yours; a file that would replace a kit-managed one is refused.
 
 ### Upgrading
 
 Run the same install command over an earlier release (12.x). Beyond the files:
 
+- **The aside server is retired** (releases before 26.10.1): its registration is removed, its binary deleted unless another kit still lists it, and the configuration keys written for it restored; `claude-agent-kit--aside-prefs.md` is renamed to `claude-agent-kit--consult-prefs.md` after you confirm, with its values and notes kept.
 - **Prefs are migrated** after you confirm each file (without a terminal they are migrated). The old file is copied to `<file>.bak-<UTC timestamp>`; the new file starts from the current template, takes every value that has a new setting, and keeps your `Notes` and `Repository overrides` sections as they were.
 
   | Earlier value | Now |
   |---|---|
-  | aside `Auto-call policy`: `conservative`, `preference-only` | Level `on-request` |
-  | aside `Auto-call policy`: `proactive` | Level `auto` |
-  | aside `Preferred third-party advisor` | Backend (`none` becomes `codex` with level `on-request`) |
+  | consult (then aside) `Auto-call policy`: `conservative`, `preference-only` | Level `on-request` |
+  | consult (then aside) `Auto-call policy`: `proactive` | Level `auto` |
+  | consult (then aside) `Preferred third-party advisor` | Backend (`none` becomes `codex` with level `on-request`) |
   | dispatch policy `conservative`, `preference-only` | Level `on-request` |
   | dispatch `proactive` with approval mode `ask` | Level `suggest` |
   | dispatch `proactive` with approval mode `auto` | Level `auto` |
@@ -231,7 +233,7 @@ make install ARGS="--binaries build --slate-dir ../slate-agent-kit"   # options 
 
 - Linux, macOS or Windows. Rust is needed only for `--binaries build`.
 - The `claude` command, which the installer uses to register the servers.
-- The backend CLIs, installed separately (the servers only wrap them): [codex](https://github.com/openai/codex) (`npm i -g @openai/codex`), [Claude Code](https://claude.com/claude-code) (`npm i -g @anthropic-ai/claude-code`), and [OpenCode](https://opencode.ai/docs/cli/) for dispatch. `aside_list` and `dispatch_backends` report which are present; a missing one is reported as unavailable, not as an error.
+- The backend CLIs, installed separately (the servers only wrap them): [codex](https://github.com/openai/codex) (`npm i -g @openai/codex`), [Claude Code](https://claude.com/claude-code) (`npm i -g @anthropic-ai/claude-code`), and [OpenCode](https://opencode.ai/docs/cli/) for dispatch. `dispatch_backends` reports which are present; a missing one is reported as unavailable, not as an error.
 
 ## Kit Layout
 
