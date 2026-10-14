@@ -13,7 +13,7 @@
 
 **codex**
 
-`codex` | `opencode` | `claude`
+`codex` | `opencode` | `claude` | `agy`
 
 ## Model
 

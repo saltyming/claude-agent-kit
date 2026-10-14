@@ -97,7 +97,7 @@ Asks another model family for a read-only opinion through the `dispatch` server:
 
 ### dispatch: external execution
 
-Hands a self-contained, write-capable execution step to a coding agent (codex, opencode or claude) that runs headless in the background. Where a consultation asks for an opinion, an execution entrusts work; both are runs of the same server.
+Hands a self-contained, write-capable execution step to a coding agent (codex, opencode, claude or agy) that runs headless in the background. Where a consultation asks for an opinion, an execution entrusts work; both are runs of the same server.
 
 - **Async submit, wait, cancel.** `dispatch_submit` returns a task id and a `wait` command line immediately and runs the backend detached (`codex exec`, or a short-lived local `opencode serve`); `dispatch_status` and `dispatch_list` track it; `dispatch_cancel` stops a run, or a whole `plan_id`, by killing its process group; `dispatch_backends` reports which backends are installed.
 - **Watch and steer.** `dispatch_logs` shows a curated live timeline (codex rollout logs or dispatch-owned OpenCode event JSONL, noise filtered, paged by line range). `dispatch_steer` interrupts a run and resumes the same backend session with a new instruction, keeping its context and the files it already wrote, as a linked follow-up task.
@@ -126,7 +126,7 @@ Five user-owned files in `~/.claude/rules/`, loaded with the other rules:
 | File | Sets | Installed default |
 |---|---|---|
 | `claude-agent-kit--consult-prefs.md` | Level; backend (`codex` or `claude`); model, reasoning effort and model fallback for the chosen backend | `suggest`, `codex` |
-| `claude-agent-kit--dispatch-prefs.md` | Level; backend (`codex`, `opencode`, `claude`); model; reasoning effort; model fallback | `suggest`, `codex` |
+| `claude-agent-kit--dispatch-prefs.md` | Level; backend (`codex`, `opencode`, `claude`, `agy`); model; reasoning effort; model fallback | `suggest`, `codex` |
 | `claude-agent-kit--subagent-prefs.md` | Level; default model | `suggest`, harness default |
 | `claude-agent-kit--git-prefs.md` | Commit signing, model attribution, commit message format, PR body format, branch naming | `unset`: the agent asks at first need and records the answer |
 | `claude-agent-kit--comment-prefs.md` | File headers, comment language, doc comments | `repository`: the repository's own convention decides |
