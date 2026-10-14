@@ -2,7 +2,7 @@
 
 An operating manual and rule set for Claude Code (`CLAUDE.md` plus rule files), the palette document system with its skills, and two shared MCP servers: `dispatch` (asynchronous execution by a coding agent, and second opinions from another model family) and `palette` (reads, checks and writes palette documents). One installer, `slate-setup`, installs all of it, writes your preferences and sets Claude Code's subagent default model.
 
-This is claude-agent-kit 26.10.0 (contract 1). Its rules, skills, templates and prefs templates are rendered from [`slate-agent-kit`](https://github.com/saltyming/slate-agent-kit), which also builds the servers and the installer; its release v26.10.0 provides the binaries. The three kits and the slate release share one version, `YY.MM.N`; the contract number alone says whether an installed kit stays compatible.
+This is claude-agent-kit 26.10.1 (contract 1). Its rules, skills, templates and prefs templates are rendered from [`slate-agent-kit`](https://github.com/saltyming/slate-agent-kit), which also builds the servers and the installer; its release v26.10.1 provides the binaries. The four kits and the slate release share one version, `YY.MM.N`; the contract number alone says whether an installed kit stays compatible.
 
 ## What's Inside
 
@@ -157,7 +157,7 @@ irm https://raw.githubusercontent.com/saltyming/claude-agent-kit/main/install.ps
 
 The PowerShell script also accepts the earlier installers' switches: `-Uninstall`, `-SkipMcp` and `-DispatchRoots <paths>`.
 
-The entry point downloads the prebuilt `slate-setup` for your platform from slate release v26.10.0, verifies its checksum, and runs it on the kit's payload. `slate-setup` performs every step, with the same code on Linux, macOS and Windows.
+The entry point downloads the prebuilt `slate-setup` for your platform from slate release v26.10.1, verifies its checksum, and runs it on the kit's payload. `slate-setup` performs every step, with the same code on Linux, macOS and Windows.
 
 | Command | Does |
 |---|---|
