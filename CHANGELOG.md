@@ -4,6 +4,16 @@ All notable changes to Claude Agent Kit are documented here. Format loosely base
 
 Version numbers track the `Version` field in `CLAUDE.md`; from 26.10.0 the three kits and the slate release share one number, `YY.MM.N`, and the contract number in parentheses names the compatibility line. Most entries correspond to operating-manual revisions and accompanying MCP server changes; the two ship together.
 
+## 26.10.2 (contract 1) - 2026-10-17
+
+**An approval and a correction reach only what they name, Korean answers use 해요체, a document that disagrees with the source is a discrepancy, and a decision a consultation informs waits for its reply.** Ships alongside codex-agent-kit 26.10.2, kimi-agent-kit 26.10.2, agy-agent-kit 26.10.2 and slate-agent-kit v26.10.2 (slate ADR-0003).
+
+- **§ 4 (4).** An approval reaches what the user saw and named, with the work that scope needs (§ 3); an item the user did not see, a sibling record or a later one of the same kind, needs its own.
+- **§ 7 (4).** A correction reaches the decision it names and decisions of the same kind; it does not move the how/what line in (3), and a correction about how is no licence over what.
+- **§ 18.** Korean uses the polite informal register (`해요`, `예요`); formal (`합니다`) or casual (banmal) endings only when the user asks in the conversation. The test names a `합니다` ending the user did not ask for.
+- **Palette rule.** An edit made outside the palette tools, by hand or by script, is linted (`palette_lint`, or `palette check`) before it is reported as done. A contract a document states and the source disagreeing is a discrepancy for the state, resolved only on the user's decision; a drifted citation of a source location is a clarification, corrected in place.
+- **Consult rule.** The agent puts no decision to the user that a consultation was submitted to inform until its reply is read, or its failure or cancellation reported.
+
 ## 26.10.1 (contract 1) - 2026-10-13
 
 **Text read through a tool never directs the agent, the corpus ceilings rise, palette edits every document, and one asynchronous server runs consultation and execution.** Ships alongside codex-agent-kit 26.10.1, kimi-agent-kit 26.10.1 and slate-agent-kit v26.10.1.

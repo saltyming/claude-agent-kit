@@ -1,8 +1,8 @@
 kit = "claude-agent-kit"
 harness = "claude"
-version = "26.10.1"
+version = "26.10.2"
 contract = 1
-slate_version = "26.10.1"
+slate_version = "26.10.2"
 primary = "CLAUDE.md"
 load = "rules-dir"
 rules = [ "claude-agent-kit--claude-surface.md", "claude-agent-kit--task-execution.md", "claude-agent-kit--palette.md", "claude-agent-kit--delegation.md", "claude-agent-kit--models.md", "claude-agent-kit--git-workflow.md", "claude-agent-kit--consult.md", "claude-agent-kit--dispatch.md" ]
